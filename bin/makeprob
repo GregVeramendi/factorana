@@ -1,0 +1,12 @@
+#!/bin/sh -ex 
+export FACTOR_LIB=/home/grve/factorana_v3c
+rm -f prob prob.o prob_mpi
+mpicxx -O2 -Wall -fPIC -pthread -m64 -I$ROOTSYS/include -I$FACTOR_LIB/include -c -o prob.o prob.cc
+mpicxx -O2 -m64 prob.o  /home/gveramen/Projects/factorana_v3/libraries/probmain.o  /home/gveramen/Projects/factorana_v3/libraries/TMinLkhdCint.o $KNITROPATH/lib/libknitro.so -L/usr/local/lib/root -lCore -lCint -lRIO -lNet -lHist -lGraf -lGraf3d -lGpad -lRint -lPostscript -lMatrix -lPhysics -lz -pthread -lm -ldl -rdynamic  -lMathCore -lMinuit -lgomp -o prob
+set +x
+echo "********prob has been compiled and linked...\n"
+set -x
+mpicxx -O2 -m64 prob.o  /home/gveramen/Projects/factorana_v3/libraries/probmain_mpi.o  /home/gveramen/Projects/factorana_v3/libraries/TMinLkhdCint.o $KNITROPATH/lib/libknitro.so -L/usr/local/lib/root -lCore -lCint -lRIO -lNet -lHist -lGraf -lGraf3d -lGpad -lRint -lPostscript -lMatrix -lPhysics -lz -pthread -lm -ldl -rdynamic -lMathCore -lMinuit -lgomp -o prob_mpi
+set +x
+echo "********prob_mpi has been compiled and linked... \n"
+set -x
