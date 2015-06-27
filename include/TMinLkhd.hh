@@ -219,8 +219,8 @@ public:
 
   void PrintParam(Int_t imod = -1);
   void PrintParamTab(int pmod = 0);
-  void SetData(Int_t nvar, char * filename, char * var_table);
-  void AddModel(const char *name, const char *title, TString modeltype, std::vector<TString> & moddata,Double_t * normfac = NULL, UInt_t nchoice = 1);
+  void SetData(char * filename, char * var_table);
+  void AddModel(const char *name, const char *title, TString modeltype, std::vector<TString> & moddata,Double_t * normfac = NULL, UInt_t nchoice = 0);
   void LastModel_Splitsim(TString splitvar);
 
   void ConstrainFactorCorrelations();

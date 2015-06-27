@@ -33,7 +33,6 @@
 
 #include "IpIpoptApplication.hpp"
 #include "minlkhd_nlp.hh"
-#include "hs071_nlp.hpp"
 
 // ClassImp(TMinLkhd)
 
@@ -330,7 +329,7 @@ void TMinLkhd::BootStrap(UInt_t nsamples, UInt_t gensample) {
 }
 
 
-void TMinLkhd::SetData(Int_t thisnvar, char * filename, char * vart_file) {
+void TMinLkhd::SetData(char * filename, char * vart_file) {
 
   if (nobs!=0) {
     cout << "Error: Data has already been loaded!!" << endl;
@@ -338,14 +337,18 @@ void TMinLkhd::SetData(Int_t thisnvar, char * filename, char * vart_file) {
     ClearDataMembers();
   }
 
-  nvar = thisnvar;
-
-  var_table.resize(nvar); // = new TString[nvar];
-  //  var_table = new TString[nvar];
-
-  if (GetMPRank()==0) cout << "Reading in Variable Table:" << vart_file << endl;
+  if (GetMPRank()==0) cout << "Reading in Variable Table: " << vart_file << endl;
   ifstream in1;
   in1.open(vart_file);
+  in1 >> nvar;
+  if (!in1.good()||(nvar<=0)) {
+    cout << "Problem reading nvar in Variable Table" << endl;
+    assert(0);
+  }
+
+  if (GetMPRank()==0) printf("There are %d variables.\n",nvar);
+
+  var_table.resize(nvar);
   for (UInt_t i = 0 ; i < nvar ; i++) {
     in1 >> var_table.at(i);
     if (!in1.good()) {
@@ -440,7 +443,7 @@ void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, 
   }
 
   if (nobs==0) {
-    cout << "***Error in TMinLkhd::AddModel*** You must add the data file before you can add a model" << endl;
+    cout << "***Error in TMinLkhd::AddModel(" << name << ")*** You must add the data file before you can add a model" << endl;
     assert(0);
   }
 
@@ -449,14 +452,14 @@ void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, 
 
   if (models.size()>0) {
     if ((models.back().GetGroup()>current_estimationgroup) || (models.back().GetGroup()+1<current_estimationgroup)) {
-      cout << "***Error in TMinLkhd::AddModel*** Please add models so groups are in order" << endl;
+      cout << "***Error in TMinLkhd::AddModel(" << name << ")*** Please add models so groups are in order" << endl;
       cout << name << " Group=" << current_estimationgroup
 	   << ", lastgroup=" << models.back().GetGroup() << "\n";
       assert(0);
     }
   }
   else if (current_estimationgroup!=0) {
-    cout << "***Error in TMinLkhd::AddModel*** Please add measurement system first!" << endl;
+    cout << "***Error in TMinLkhd::AddModel(" << name << ")*** Please add measurement system first!" << endl;
     assert(0);
   }
 
@@ -468,14 +471,19 @@ void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, 
   if (!modeltype.CompareTo("logit") || !modeltype.CompareTo("Logit")) type = 3;
   if (!modeltype.CompareTo("orderedprobit") || !modeltype.CompareTo("OrderedProbit")) type = 4;
   if (type==-1) {
-    cout << "***Error in TMinLkhd::AddModel*** Could not find model type " 
+    cout << "***Error in TMinLkhd::AddModel(" << name << ")*** Could not find model type " 
 	 << modeltype.Data() << " in the list of models. Maybe a typo??" 
 	 << endl;
     assert(0);
   }
 
-  if ((type==4)&&(nchoice<2)) {
-    cout << "***Error in TMinLkhd::AddModel*** Trying to add ordered probit with less than two categories!!\n";
+  if ( ((type==3)||(type==4))&&(nchoice<2)) {
+    cout << "***Error in TMinLkhd::AddModel(" << name << ")*** Trying to add discrete choice model with less than two categories!!\n";
+    assert(0);
+  }
+
+  if ((normfac)&&(type==3)) {
+    cout << "***Error in TMinLkhd::AddModel(" << name << ")*** Normalizing loadings in logit model is not supported.\n";
     assert(0);
   }
 
@@ -491,7 +499,7 @@ void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, 
       }
     }
     if (intdata[i]==-9999) {
-      cout << "***Error in TMinLkhd::AddModel*** Could not find the variable " 
+      cout << "***Error in TMinLkhd::AddModel(" << name << ")*** Could not find the variable " 
 	   << moddata[i].Data()  << " in the list of variables. Maybe a typo??"
 	   << endl;
       assert(0);
@@ -512,6 +520,9 @@ void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, 
 
   // variance of error term
   if (type==1) nparam_thismodel++;
+
+  // need to multiply parameters by the number of choices for logit model
+  if (type==3) nparam_thismodel = (nchoice-1)*nparam_thismodel;
 
   // Choice thresholds for ordered probit model
   if (type==4) nparam_thismodel += nchoice - 1;
@@ -662,7 +673,7 @@ void TMinLkhd::ResetFitInfo() {
 	  if (fabs(data.at(iobs*nvar + regs.at(ireg))+9999)<0.1) {
 	    cout << "ERROR (TMinLkhd::ResetFitInfo): Found bad regressor in data!"
 		 << " In model " <<  models[imod].GetTitle() << "\n"
-		 << "Looking at outcome #" << regs.at(ireg) 
+		 << "Looking at variable #" << regs.at(ireg) 
 		 << ", obs#:" << iobs
 		 << ", Value=" << data.at(iobs*nvar + regs.at(ireg)) << endl;
 	    assert(0);
@@ -675,7 +686,7 @@ void TMinLkhd::ResetFitInfo() {
 	if (fabs(data.at(iobs*nvar + models[imod].GetOutcome())+9999)<0.1) {
 	  cout << "ERROR (TMinLkhd::ResetFitInfo): Found bad outcome in data!"
 	       << " In model " <<  models[imod].GetTitle() << "\n"
-	       << "Looking at outcome #" << models[imod].GetOutcome() 
+	       << "Looking at outcome: " <<  var_table.at(models[imod].GetOutcome())
 	       << ", Missing (" << models[imod].GetMissing() << ")=" << data.at(iobs*nvar+models[imod].GetMissing())
 	       << ", obs#:" << iobs
 	       << ", Value=" << data.at(iobs*nvar + models[imod].GetOutcome()) << endl;
@@ -687,10 +698,27 @@ void TMinLkhd::ResetFitInfo() {
 	      &&( int(data.at(iobs*nvar + models[imod].GetOutcome()))!=0)) {
 	    cout << "ERROR (TMinLkhd::ResetFitInfo): Found non-binary number for probit outcome!"
 		 << " In model " <<  models[imod].GetTitle() << "\n"
-		 << "Looking at outcome #" << models[imod].GetOutcome() 
+		 << "Looking at outcome: " <<  var_table.at(models[imod].GetOutcome())
 		 << ", Missing (" << models[imod].GetMissing() << ")=" << data.at(iobs*nvar+models[imod].GetMissing())
 		 << ", obs#:" << iobs
 		 << ", Value=" << data.at(iobs*nvar + models[imod].GetOutcome()) << endl;
+	    assert(0);
+	  }
+	}
+
+	if ((models[imod].GetType()==3)||(models[imod].GetType()==4)) {
+	  int validvalue = 0;
+	  for (int ichoice = 1 ; ichoice <= models[imod].GetNchoice() ; ichoice++) {
+	    if (int(data.at(iobs*nvar + models[imod].GetOutcome())) == ichoice) validvalue = 1;
+	  }
+	  if (validvalue==0) {
+	    cout << "ERROR (TMinLkhd::ResetFitInfo): Found value that is not allows for multinomial outcome!"
+		 << " In model " <<  models[imod].GetTitle() << "\n"
+		 << "Looking at outcome: " <<  var_table.at(models[imod].GetOutcome())
+		 << ", Missing (" << models[imod].GetMissing() << ")=" << data.at(iobs*nvar+models[imod].GetMissing())
+		 << ", obs#:" << iobs
+		 << ", Value=" << data.at(iobs*nvar + models[imod].GetOutcome()) 
+		 << ", but nchoices=" << models[imod].GetNchoice() << endl;
 	    assert(0);
 	  }
 	}
@@ -700,7 +728,7 @@ void TMinLkhd::ResetFitInfo() {
 	  if (fabs(data.at(iobs*nvar + regs.at(ireg))+9999)<0.1) {
 	    cout << "ERROR (TMinLkhd::ResetFitInfo): Found bad regressor in data!"
 		 << " In model " <<  models[imod].GetTitle() << "\n"
-		 << "Looking at outcome #" << regs.at(ireg) 
+		 << "Looking at regressor: " << var_table.at(regs.at(ireg))
 		 << ", Missing (" << models[imod].GetMissing() << ")=" << data.at(iobs*nvar+models[imod].GetMissing())
 		 << ", obs#:" << iobs
 		 << ", Value=" << data.at(iobs*nvar + regs.at(ireg)) << endl;
@@ -788,6 +816,7 @@ void TMinLkhd::ResetFitInfo() {
     }
   }
   //  printf("\n\n");
+
 
   // Initialize parameters of models:
   for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
@@ -1610,6 +1639,7 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
   
   if (first_outmodel==-1) first_outmodel = models.size();
 
+
 //Make factor loading list (for all models?)
   vector<Bool_t> factorloadinglist(num_param,0);
   for (Int_t imod = 0 ; imod < first_outmodel ; imod++) {
@@ -2195,28 +2225,28 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
   //  pFile = fopen ("/local/johneric/veram_code_sims/simulation_data.dict","w");
 
   if ((nsubsamples==0)&&(nbootsamples==0)) {
-    filename = TString("simulation_data.dict");
+    filename = TString("simulation_data.csv");
   }
   else {
     std::stringstream out;
     out << GetCurrentSample();
-    filename = TString("simulation_data_").Append(out.str()).Append(".dict");
+    filename = TString("simulation_data_").Append(out.str()).Append(".csv");
   }
 
   filename.Prepend(workingdir);
   pFile = fopen ( ((char *)filename.Data()),"w");
 
   //Write dictionary part here
-  fprintf(pFile,"dictionary{\n");
+  //  fprintf(pFile,"dictionary{\n");
 
   if (indexvar==-1) {
-    fprintf(pFile,"xid\t");
+    fprintf(pFile,"xid");
   }
   else {
-    fprintf(pFile,"%s\t",(var_table.at(indexvar)).Data());
+    fprintf(pFile,"%s",(var_table.at(indexvar)).Data());
   }
   for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
-    fprintf(pFile,"sim_fac%d\t",ifac);
+    fprintf(pFile,", sim_fac%d",ifac);
   }
 
   vector<Int_t> varuse;
@@ -2224,34 +2254,34 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
   Int_t nsimvar = nfac;
   for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
     // simulation gives: missing, I_obs, I_factor, shock/prob, outcome
-    fprintf(pFile,"%s\t",(TString("sim_").Append(TString(models[imod].GetName()).Append("_miss"))).Data());
+    fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_miss"))).Data());
 
     if (models[imod].GetDetailSim()) {
-      fprintf(pFile,"%s\t",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vobs"))).Data());
+      fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vobs"))).Data());
       nsimvar +=1;
       
       for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
-	fprintf(pFile,"%s%d\t",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vfac"))).Data(),ifac);
+	fprintf(pFile,", %s%d",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vfac"))).Data(),ifac);
 	nsimvar +=1;
       }
     }
 
     if ((models[imod].GetType()==2)||(models[imod].GetDetailSim())) {
-      fprintf(pFile,"%s\t",(TString("sim_").Append(TString(models[imod].GetName()).Append("_shprob"))).Data());
+      fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_shprob"))).Data());
       nsimvar += 1;
     }
 
-    fprintf(pFile,"%s\t",(TString("sim_").Append(TString(models[imod].GetName()))).Data());
+    fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()))).Data());
     nsimvar += 2;
 
     if (models[imod].GetSplitSim()) {
-      fprintf(pFile,"%s\t",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_miss"))).Data());
+      fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_miss"))).Data());
       if (models[imod].GetDetailSim()) {
-	fprintf(pFile,"%s\t",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_Vobs"))).Data());
+	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_Vobs"))).Data());
 	nsimvar +=1;
 
 	for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
-	  fprintf(pFile,"%s%d\t",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_Vfac"))).Data(),ifac);
+	  fprintf(pFile,", %s%d",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_Vfac"))).Data(),ifac);
 	  nsimvar +=1;
 	}
 
@@ -2260,11 +2290,11 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
       }
 
       if ((models[imod].GetType()==2)||(models[imod].GetDetailSim())) {
-	fprintf(pFile,"%s\t",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_shprob"))).Data());
+	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_shprob"))).Data());
 	nsimvar++;
       }
 
-      fprintf(pFile,"%s\t",(TString("sim_").Append(TString(models[imod].GetName()).Append("1"))).Data());
+      fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1"))).Data());
       nsimvar +=2;
     }
     
@@ -2279,12 +2309,13 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
   if (simIncData) {
     for (UInt_t ivar = 0 ; ivar < nvar ; ivar++) {
       if (varuse.at(ivar) ==1) {
-	fprintf(pFile,"%s\t",(TString("dt_").Append(var_table[ivar])).Data());
+	fprintf(pFile,", %s",(TString("dt_").Append(var_table[ivar])).Data());
 	nvarused++;
       }
     }
   }
-  fprintf(pFile,"sim_flag }\n");
+  //  fprintf(pFile,"sim_flag }\n");
+  fprintf(pFile,", sim_flag\n");
   //Finished writing dictionary
   
   cout << "Starting simulation file will have " << (1+nvarused+nsimvar+1) << " variables.\n";
@@ -2325,34 +2356,34 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 
 
     if (indexvar==-1) {
-      fprintf(pFile,"%10d ",obs_drw+1);
+      fprintf(pFile,"%10d",obs_drw+1);
     }
     else {
-      fprintf(pFile,"%10d ", Int_t(data[obs_drw*nvar+indexvar]));
+      fprintf(pFile,"%10d", Int_t(data[obs_drw*nvar+indexvar]));
     }
 
-    for (UInt_t ifac = 0 ; ifac < nfac; ifac++) fprintf(pFile,"%10.5f ",fac_val.at(ifac));
+    for (UInt_t ifac = 0 ; ifac < nfac; ifac++) fprintf(pFile,", %10.5f",fac_val.at(ifac));
 
     // Now simulate the models:
     for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
       // simulation gives: missing, I_obs, I_factor, shock/prob, outcome
       models[imod].Sim(obs_drw*nvar,data,param,fparam_models[imod],fac_val, pFile);
     }
-     if (simIncData) for (int ivar = 0 ; ivar < nvarused ; ivar++) fprintf(pFile,"%10.5f ",-9999.0);
-    fprintf(pFile,"%10d \n",1);
+     if (simIncData) for (int ivar = 0 ; ivar < nvarused ; ivar++) fprintf(pFile,", %10.5f",-9999.0);
+    fprintf(pFile,", %10d \n",1);
   }
 
   // Now append data to file
   if (simIncData) {
     for (UInt_t iobs = 0 ; iobs < nobs ; iobs++) {
       //fill in -9999 for sim variables
-      fprintf(pFile,"%10d ",iobs+1);
-      for (Int_t isimvar = 0 ; isimvar < nsimvar ; isimvar++) fprintf(pFile,"%10.5f ",-9999.0);
+      fprintf(pFile,", %10d",iobs+1);
+      for (Int_t isimvar = 0 ; isimvar < nsimvar ; isimvar++) fprintf(pFile,", %10.5f",-9999.0);
       // Now data
       for (UInt_t ivar = 0 ; ivar < nvar ; ivar++) {
-	if (varuse.at(ivar) ==1) fprintf(pFile,"%10.5f ",data[iobs*nvar+ivar]);
+	if (varuse.at(ivar) ==1) fprintf(pFile,", %10.5f",data[iobs*nvar+ivar]);
       }
-      fprintf(pFile,"%10d \n",0);
+      fprintf(pFile,", %10d\n",0);
     }
   }
 
@@ -3346,13 +3377,13 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 
   SmartPtr<IpoptApplication> app = new IpoptApplication();
 
-  //  app->Options()->SetNumericValue("tol", 1e-7);
+  app->Options()->SetNumericValue("tol", 1e-5);
   //  app->Options()->SetIntegerValue("print_level", printlevel+1);
   app->Options()->SetStringValue("mu_strategy", "adaptive");
   app->Options()->SetStringValue("nlp_scaling_method","none");
   app->Options()->SetNumericValue("obj_scaling_factor",1.0);
   //Check gradient:
-  //  app->Options()->SetStringValue("derivative_test","second-order");
+  app->Options()->SetStringValue("derivative_test","second-order");
   app->Options()->SetStringValue("linear_solver", "ma57");
 
   //  app->Options()->SetStringValue("hessian_approximation", "limited-memory"); //default is exact

@@ -749,13 +749,13 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, const s
     }
     
 
-    fprintf(pFile,"%10d ",this_missing);
+    fprintf(pFile,", %10d",this_missing);
     
     if (this_missing >1) {
-      if (detailsim) for (int i = 0; i < 4; i++)   fprintf(pFile,"%10d ",-9999);
+      if (detailsim) for (int i = 0; i < 4; i++)   fprintf(pFile,", %10d",-9999);
       else {
-	fprintf(pFile,"%10d ",-9999);
-	if (modtype==2) fprintf(pFile,"%10d ",-9999);
+	fprintf(pFile,", %10d",-9999);
+	if (modtype==2) fprintf(pFile,", %10d",-9999);
       }
     }
     else {
@@ -766,7 +766,7 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, const s
 	}
 	else expres += param[i+firstpar]*isplit;
       }
-      if (detailsim) fprintf(pFile,"%10.5f ",expres);
+      if (detailsim) fprintf(pFile,", %10.5f",expres);
       
       
       UInt_t ifreefac = 0;
@@ -774,38 +774,38 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, const s
       for (int i = 0 ; i < numfac ; i++) {
 	if (facnorm.size()==0) {
 	  fac_comp += param[ifreefac+firstpar+nregressors]*fac.at(i);
-	  if (detailsim) fprintf(pFile,"%10.5f ",param[ifreefac+firstpar+nregressors]*fac.at(i));
+	  if (detailsim) fprintf(pFile,", %10.5f",param[ifreefac+firstpar+nregressors]*fac.at(i));
 
 	  ifreefac++;
 	}
 	else {
 	  if (facnorm[i]>-9998) {
 	    fac_comp += facnorm[i]*fac.at(i);
-	    if (detailsim) fprintf(pFile,"%10.5f ",facnorm[i]*fac.at(i));
+	    if (detailsim) fprintf(pFile,", %10.5f",facnorm[i]*fac.at(i));
 	  }
 	  else {
 	    fac_comp += param[ifreefac+firstpar+nregressors]*fac.at(i);
-	    if (detailsim) fprintf(pFile,"%10.5f ",param[ifreefac+firstpar+nregressors]*fac.at(i));
+	    if (detailsim) fprintf(pFile,", %10.5f",param[ifreefac+firstpar+nregressors]*fac.at(i));
 	    ifreefac++;
 	  }
 	}
       }
-      //      if (detailsim) fprintf(pFile,"%10.5f ",fac_comp);
+      //      if (detailsim) fprintf(pFile,", %10.5f",fac_comp);
       expres += fac_comp;
     
       if (modtype==1) {
 	Double_t sigma = fabs(param[firstpar+nregressors+ifreefac]);
 	Double_t eps = gRandom->Gaus(0.0,sigma);
-	if (detailsim) fprintf(pFile,"%10.5f ",eps);
-	fprintf(pFile,"%10.5f ",expres+eps);
+	if (detailsim) fprintf(pFile,", %10.5f",eps);
+	fprintf(pFile,", %10.5f",expres+eps);
       }
       else if (modtype==2) {
 	Double_t eps = gRandom->Gaus(0.0,1.0);
 	Double_t prb = ROOT::Math::normal_cdf(expres);
-	//	if (detailsim) fprintf(pFile,"%10.5f ",prb);
-	fprintf(pFile,"%10.5f ",prb);
-	if ((expres+eps)>0) fprintf(pFile,"%10d ",1);
-	else fprintf(pFile,"%10d ",0);
+	//	if (detailsim) fprintf(pFile,", %10.5f",prb);
+	fprintf(pFile,", %10.5f",prb);
+	if ((expres+eps)>0) fprintf(pFile,", %10d",1);
+	else fprintf(pFile,", %10d",0);
       }
       else if (modtype==3) {
 	cout << "ERROR (TModel::Sim): Simulation of Logit not supported yet!!\n";
@@ -813,8 +813,8 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, const s
       }
       else if (modtype==4) {
 	Double_t eps = gRandom->Gaus(0.0,1.0);
-	//	if (detailsim) fprintf(pFile,"%10.5f ",prb);
-	fprintf(pFile,"%10.5f ",eps);
+	//	if (detailsim) fprintf(pFile,", %10.5f",prb);
+	fprintf(pFile,", %10.5f",eps);
 	Int_t choice = 1;
 	Double_t threshold = param[firstpar+nregressors+ifreefac];
 	for (int icat = 2 ; icat < numchoice ; icat++) { 
@@ -825,7 +825,7 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, const s
 	}
 	if (expres+eps > threshold) choice = numchoice;
 
-	fprintf(pFile,"%10d ",choice);
+	fprintf(pFile,", %10d",choice);
       }
       else {
 	cout << "ERROR (TModel::Eval): Non-supported model!!"
