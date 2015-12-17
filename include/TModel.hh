@@ -27,7 +27,7 @@ private:
 
   public:
   TModel() {};
-  TModel(const char *name, const char *title, Int_t modeltype, Int_t modelgroup, Int_t prntgroup, std::vector<Int_t> & moddata, Int_t nfac, Double_t * thisnormfac = NULL, UInt_t nchoice = 1);
+  TModel(const char *name, const char *title, Int_t modeltype, Int_t modelgroup, Int_t prntgroup, std::vector<Int_t> & moddata, Int_t nfac, Double_t * thisnormfac = NULL, UInt_t nchoice = 2);
   virtual ~TModel();
 
   void SetIgnore(Bool_t ig) {ignore=ig;}

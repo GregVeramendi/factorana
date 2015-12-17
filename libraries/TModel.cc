@@ -75,7 +75,7 @@ void TModel::PrintModel(std::vector<TString> vartab)
   cout << "****";
   if (modtype==1) cout << "Linear";
   else if (modtype==2) cout << "Probit";
-  else if (modtype==3) cout << "Logit";
+  else if (modtype==3) cout << "Logit (nchoice=" << numchoice << ") ";
   else if (modtype==4) cout << "Ordered Probit (nchoice=" << numchoice << ") ";
 
   cout << " model for " << this->GetTitle() << "\n";
@@ -123,7 +123,8 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 
     //Model specific parameters:
     if (modtype==1) ngrad += 1; // variance of error term
-    if (modtype==4) ngrad += numchoice-1; // ordered probit intercepts
+    if ((modtype==3)&&(numchoice>2)) ngrad += (numchoice-2)*(2*numfac+nregressors); // multinomial logit
+    if (modtype==4) ngrad += (numchoice-1); // ordered probit intercepts
     modEval.resize(ngrad);
     for (int i = 1 ; i < ngrad ; i++) modEval[i] = 0.0;
     if (flag==3) hess.clear();
@@ -137,37 +138,43 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
   }
   if (ignore) return;
 
-  Double_t expres = 0.0;
-  for (int i = 0; i < nregressors  ; i++) {
-    expres += param[i+firstpar]*data[iobs_offset+regressors[i]];
-  }
-  
-  UInt_t ifreefac = 0;
-  for (int i = 0 ; i < numfac ; i++) {
-    if (facnorm.size()==0) {
-      expres += param[ifreefac+firstpar+nregressors]*fac[i];
-      ifreefac++;
+  vector<double> Z(1,0.0);
+  if ((modtype==3)&&(numchoice>2)) Z.resize(numchoice-1,0.0);
+
+  for (int ichoice = 0; ichoice < numchoice-1; ichoice++) {
+    for (int i = 0; i < nregressors  ; i++) {
+      Z[ichoice] += param[i+firstpar]*data[iobs_offset+regressors[i]];
     }
-    else {
-      if (facnorm[i]>-9998) expres += facnorm[i]*fac[i];
-      else {
-	expres += param[ifreefac+firstpar+nregressors]*fac[i];
+    
+    UInt_t ifreefac = 0;
+    for (int i = 0 ; i < numfac ; i++) {
+      if (facnorm.size()==0) {
+	Z[ichoice] += param[ifreefac+firstpar+nregressors]*fac[i];
 	ifreefac++;
       }
+      else {
+	if (facnorm[i]>-9998) Z[ichoice] += facnorm[i]*fac[i];
+	else {
+	  Z[ichoice] += param[ifreefac+firstpar+nregressors]*fac[i];
+	  ifreefac++;
+	}
+      }
     }
-  }
+  } // loop over choices
 
   // nparameters: d/dtheta, d/dbeta, d/dalpha
   Int_t npar = numfac+nregressors+ifreefac;
 
+  if ((modtype==3)&&(numchoice>2)) npar *= (numchoice-2);
+
 
   if (modtype==1) {
-    Double_t Z = data[iobs_offset+outcome]-expres;
+    Double_t Z = data[iobs_offset+outcome]-Z[0];
     Double_t sigma = fabs(param[firstpar+nregressors+ifreefac]);
 
     //Now find the density:
     modEval[0] =ROOT::Math::normal_pdf(Z,sigma);
-    //    return ROOT::Math::normal_pdf(data[iobs_offset+outcome]-expres,fabs(param[firstpar+nregressors+ifreefac]));
+    //    return ROOT::Math::normal_pdf(data[iobs_offset+outcome]-Z[0],fabs(param[firstpar+nregressors+ifreefac]));
     //Now find the derivatives:
     if (flag>=2) {
       //      Int_t npar = numfac+ifreefac+nregressors+1;
@@ -281,7 +288,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 
 
     return;
-    //    return ROOT::Math::normal_pdf(data[iobs_offset+outcome]-expres,fabs(param[firstpar+nregressors+ifreefac]));
+    //    return ROOT::Math::normal_pdf(data[iobs_offset+outcome]-Z[0],fabs(param[firstpar+nregressors+ifreefac]));
   }
   // Probit model
   else if (modtype==2) {
@@ -295,27 +302,27 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 //       assert(0);
 //     }
 
-//     if ( int(data[iobs_offset+outcome])==1) modEval[0] = ROOT::Math::normal_cdf(expres);
-//     else if ( int(data[iobs_offset+outcome])==0) modEval[0] = ROOT::Math::normal_cdf(-expres);
+//     if ( int(data[iobs_offset+outcome])==1) modEval[0] = ROOT::Math::normal_cdf(Z[0]);
+//     else if ( int(data[iobs_offset+outcome])==0) modEval[0] = ROOT::Math::normal_cdf(-Z[0]);
 
     // Was state observed?
     Double_t obsSign = 1.0;
     if ( int(data[iobs_offset+outcome])==0) obsSign = -1.0;
 
     //Now find the density:
-    modEval[0] = ROOT::Math::normal_cdf(obsSign*expres);
-//     if ((obsSign*expres<-35.0)&&(flag!=2)) {
-//       modEval[0] = 1.0e-50/fabs(expres);
-//       //      cout << "TModel: express too small, artificially fixing it\n";
+    modEval[0] = ROOT::Math::normal_cdf(obsSign*Z[0]);
+//     if ((obsSign*Z[0]<-35.0)&&(flag!=2)) {
+//       modEval[0] = 1.0e-50/fabs(Z[0]);
+//       //      cout << "TModel: Z[0]s too small, artificially fixing it\n";
 //     }
     
     // Now find the derivatives: 
     if (flag>=2) {
-      Double_t Z = obsSign*expres;
-      Double_t pdf = ROOT::Math::normal_pdf(obsSign*expres);   //(obsSign here is not necessary)
-      //      if (fabs(expres)>35.0) pdf = 1.0e-30/fabs(expres);
+      Double_t Z = obsSign*Z[0];
+      Double_t pdf = ROOT::Math::normal_pdf(obsSign*Z[0]);   //(obsSign here is not necessary)
+      //      if (fabs(Z[0])>35.0) pdf = 1.0e-30/fabs(Z[0]);
       Double_t cdf = modEval[0];
-      if (obsSign*expres<-35.0) cdf = 1.0e-50;
+      if (obsSign*Z[0]<-35.0) cdf = 1.0e-50;
 
       if (flag==3) {
 	hess.resize(npar*npar,0.0);
@@ -334,7 +341,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	  modEval[i+1] = pdf*obsSign*param[ifreefac+firstpar+nregressors]/cdf; 
 	  //gradient of factor loading (alpha)
 	  modEval[1+numfac+nregressors+ifreefac] =  pdf*(obsSign*fac[i])/cdf;
-// 	  if (obsSign*expres<-35.0) modEval[1+numfac+nregressors+ifreefac] = -0.1*param[ifreefac+firstpar+nregressors]*param[ifreefac+firstpar+nregressors]/fabs(param[ifreefac+firstpar+nregressors]);
+// 	  if (obsSign*Z[0]<-35.0) modEval[1+numfac+nregressors+ifreefac] = -0.1*param[ifreefac+firstpar+nregressors]*param[ifreefac+firstpar+nregressors]/fabs(param[ifreefac+firstpar+nregressors]);
 
 	  if (flag==3) {
 	    // lambda^L(theta) - lambda^Prob(theta) (row)  
@@ -371,7 +378,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	    modEval[i+1] = pdf*obsSign*param[ifreefac+firstpar+nregressors]/cdf; 
 	  //gradient of factor loading (alpha)
 	    modEval[1+numfac+nregressors+ifreefac] = pdf*(obsSign*fac[i])/cdf;
-// 	    if (obsSign*expres<-35.0) modEval[1+numfac+nregressors+ifreefac] = -0.1*param[ifreefac+firstpar+nregressors]*param[ifreefac+firstpar+nregressors]/fabs(param[ifreefac+firstpar+nregressors]);
+// 	    if (obsSign*Z[0]<-35.0) modEval[1+numfac+nregressors+ifreefac] = -0.1*param[ifreefac+firstpar+nregressors]*param[ifreefac+firstpar+nregressors]/fabs(param[ifreefac+firstpar+nregressors]);
 
 	    if (flag==3) {
 	      // lambda^L(theta) - lambda^Prob(theta) (row)  
@@ -431,12 +438,12 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
     //    cout << "Returning hessian size=" << hess.size() << "\n";
     // check for NaN
 //     for (UInt_t i = 0; i <  modEval.size() ; i++) 
-//       if ( std::isnan( modEval[i])) cout << "Found the NaN!! model type 2, element " << i << " modEval[0] = " << modEval[0] << " expess=" << expres << "\n";
+//       if ( std::isnan( modEval[i])) cout << "Found the NaN!! model type 2, element " << i << " modEval[0] = " << modEval[0] << " expess=" << Z[0] << "\n";
 
     return;
     
-    //     if ( int(data[iobs_offset+outcome])==1) return ROOT::Math::normal_cdf(expres);
-    //     else if ( int(data[iobs_offset+outcome])==0) return ROOT::Math::normal_cdf(-expres);
+    //     if ( int(data[iobs_offset+outcome])==1) return ROOT::Math::normal_cdf(Z[0]);
+    //     else if ( int(data[iobs_offset+outcome])==0) return ROOT::Math::normal_cdf(-Z[0]);
   }
 
   // Ordered probit model:
@@ -470,10 +477,10 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 
     double CDF[2] = {0.0, 1.0};
     if (obsCat>1) {
-      CDF[0] = ROOT::Math::normal_cdf(threshold[0] - expres);
+      CDF[0] = ROOT::Math::normal_cdf(threshold[0] - Z[0]);
     }
     if (obsCat<numchoice) {
-      CDF[1] = ROOT::Math::normal_cdf(threshold[1] - expres);
+      CDF[1] = ROOT::Math::normal_cdf(threshold[1] - Z[0]);
     }
 
     //Now find the density:
@@ -493,12 +500,12 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
       Double_t PDF[2] = {0.0, 0.0};
 
       if (obsCat>1) {
-	Z[0] = threshold[0] - expres;
-	PDF[0] = ROOT::Math::normal_pdf(threshold[0] - expres);
+	Z[0] = threshold[0] - Z[0];
+	PDF[0] = ROOT::Math::normal_pdf(threshold[0] - Z[0]);
       }
       if (obsCat<numchoice) {
-	Z[1] = threshold[1] - expres;
-	PDF[1] = ROOT::Math::normal_pdf(threshold[1] - expres);
+	Z[1] = threshold[1] - Z[0];
+	PDF[1] = ROOT::Math::normal_pdf(threshold[1] - Z[0]);
       }
 
 
@@ -701,19 +708,19 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
     //    cout << "Returning hessian size=" << hess.size() << "\n";
     // check for NaN
 //     for (UInt_t i = 0; i <  modEval.size() ; i++) 
-//       if ( std::isnan( modEval[i])) cout << "Found the NaN!! model type 2, element " << i << " modEval[0] = " << modEval[0] << " expess=" << expres << "\n";
+//       if ( std::isnan( modEval[i])) cout << "Found the NaN!! model type 2, element " << i << " modEval[0] = " << modEval[0] << " expess=" << Z[0] << "\n";
 
     return;
     
-    //     if ( int(data[iobs_offset+outcome])==1) return ROOT::Math::normal_cdf(expres);
-    //     else if ( int(data[iobs_offset+outcome])==0) return ROOT::Math::normal_cdf(-expres);
+    //     if ( int(data[iobs_offset+outcome])==1) return ROOT::Math::normal_cdf(Z[0]);
+    //     else if ( int(data[iobs_offset+outcome])==0) return ROOT::Math::normal_cdf(-Z[0]);
   }
   else if (modtype==3) {
     if ( int(data[iobs_offset+outcome])==1) {
-      modEval[0] =  exp(expres)/(1.0+exp(expres));
+      modEval[0] =  exp(Z[0])/(1.0+exp(Z[0]));
     }
     else if ( int(data[iobs_offset+outcome])==0) {
-      modEval[0] =  1.0/(1.0+exp(expres));
+      modEval[0] =  1.0/(1.0+exp(Z[0]));
     }
     cout << "ERROR (TModel::Eval): Found non-binary number for logit outcome!"
 	 << " In model, " <<  this->GetTitle() << "\n"
@@ -759,14 +766,14 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, const s
       }
     }
     else {
-      Double_t expres = 0.0;
+      Double_t Z[0] = 0.0;
       for (int i = 0; i < nregressors  ; i++) {
 	if (regressors[i]!=splitsim) {
-	  expres += param[i+firstpar]*data[iobs_offset+regressors[i]];
+	  Z[0] += param[i+firstpar]*data[iobs_offset+regressors[i]];
 	}
-	else expres += param[i+firstpar]*isplit;
+	else Z[0] += param[i+firstpar]*isplit;
       }
-      if (detailsim) fprintf(pFile,", %10.5f",expres);
+      if (detailsim) fprintf(pFile,", %10.5f",Z[0]);
       
       
       UInt_t ifreefac = 0;
@@ -791,20 +798,20 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, const s
 	}
       }
       //      if (detailsim) fprintf(pFile,", %10.5f",fac_comp);
-      expres += fac_comp;
+      Z[0] += fac_comp;
     
       if (modtype==1) {
 	Double_t sigma = fabs(param[firstpar+nregressors+ifreefac]);
 	Double_t eps = gRandom->Gaus(0.0,sigma);
 	if (detailsim) fprintf(pFile,", %10.5f",eps);
-	fprintf(pFile,", %10.5f",expres+eps);
+	fprintf(pFile,", %10.5f",Z[0]+eps);
       }
       else if (modtype==2) {
 	Double_t eps = gRandom->Gaus(0.0,1.0);
-	Double_t prb = ROOT::Math::normal_cdf(expres);
+	Double_t prb = ROOT::Math::normal_cdf(Z[0]);
 	//	if (detailsim) fprintf(pFile,", %10.5f",prb);
 	fprintf(pFile,", %10.5f",prb);
-	if ((expres+eps)>0) fprintf(pFile,", %10d",1);
+	if ((Z[0]+eps)>0) fprintf(pFile,", %10d",1);
 	else fprintf(pFile,", %10d",0);
       }
       else if (modtype==3) {
@@ -818,12 +825,12 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, const s
 	Int_t choice = 1;
 	Double_t threshold = param[firstpar+nregressors+ifreefac];
 	for (int icat = 2 ; icat < numchoice ; icat++) { 
-	  if ( (expres+eps > threshold) && (expres+eps < threshold + abs(param[firstpar+nregressors+ifreefac+icat-1])) ){ 
+	  if ( (Z[0]+eps > threshold) && (Z[0]+eps < threshold + abs(param[firstpar+nregressors+ifreefac+icat-1])) ){ 
 	    choice = icat;
 	  }
 	  threshold += abs(param[firstpar+nregressors+ifreefac+icat-1]);
 	}
-	if (expres+eps > threshold) choice = numchoice;
+	if (Z[0]+eps > threshold) choice = numchoice;
 
 	fprintf(pFile,", %10d",choice);
       }
