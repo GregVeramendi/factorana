@@ -36,6 +36,8 @@
 
 // ClassImp(TMinLkhd)
 
+using namespace std;
+
 int fexist(const char *filename );
 int dexist(const char *dirname );
 
