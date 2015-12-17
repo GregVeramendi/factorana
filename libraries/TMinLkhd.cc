@@ -36,6 +36,8 @@
 
 // ClassImp(TMinLkhd)
 
+using namespace std;
+
 int fexist(const char *filename );
 int dexist(const char *dirname );
 
@@ -3383,7 +3385,7 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
   app->Options()->SetStringValue("nlp_scaling_method","none");
   app->Options()->SetNumericValue("obj_scaling_factor",1.0);
   //Check gradient:
-  app->Options()->SetStringValue("derivative_test","second-order");
+  //  app->Options()->SetStringValue("derivative_test","second-order");
   app->Options()->SetStringValue("linear_solver", "ma57");
 
   //  app->Options()->SetStringValue("hessian_approximation", "limited-memory"); //default is exact

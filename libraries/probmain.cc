@@ -5,7 +5,7 @@
 #include "TROOT.h"
 #include "TFile.h"
 
-#include "nlopt.h"
+//#include "nlopt.h"
 
 #include "TMinLkhd.hh"
 
@@ -19,6 +19,8 @@
 
 
 //using namespace ROOT::Math; 
+using namespace std;
+
 
 #endif
 

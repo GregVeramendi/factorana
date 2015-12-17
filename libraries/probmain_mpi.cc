@@ -19,6 +19,8 @@
 #include "mpi.h"
 
 using namespace ROOT::Math; 
+using namespace std;
+
 
 #endif
 

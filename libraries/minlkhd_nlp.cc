@@ -11,6 +11,7 @@ void LkhdFcn(Int_t &npar, Double_t *gin, Double_t &f,
 
 
 using namespace Ipopt;
+using namespace std;
 
 // constructor
 MINLKHD_NLP::MINLKHD_NLP()

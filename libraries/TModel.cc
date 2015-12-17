@@ -21,6 +21,8 @@
 #include <iostream>
 #include <assert.h>
 
+using namespace std;
+
 //ClassImp(TModel)
 
 TModel::TModel(const char *name, const char *title, Int_t modeltype, Int_t modelgroup, Int_t prntgroup, std::vector<Int_t> & moddata, Int_t nfac, Double_t * thisnormfac, UInt_t nchoice)

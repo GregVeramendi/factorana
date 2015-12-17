@@ -21,6 +21,9 @@ The algorithm was designed by using information from the QUADRULE library.
 //#include <iostream.h>
 #include <cmath>
 
+using namespace std;
+
+
 void calcgausshermitequadrature(int n,
      double * x,
      double * w)
