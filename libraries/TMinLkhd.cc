@@ -69,6 +69,7 @@ TMinLkhd::TMinLkhd()
   predicting = 0;
   predictobs = 0;
   indexvar = -1;
+  weightvar = -1;
   nsubsamples = 0;
   subsample_percent = 1.0;
   nbootsamples = 0;
@@ -105,6 +106,7 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
   predicting = 0;
   predictobs = 0;
   indexvar = -1;
+  weightvar = -1;
   nsubsamples = 0;
   subsample_percent = 1.0;
   nbootsamples = 0;
@@ -434,6 +436,31 @@ void TMinLkhd::SetObsIndex(const TString index) {
     assert(0);
   }
 }
+
+
+void TMinLkhd::UseWeights(const TString weight) {
+
+  if (nobs==0) {
+    cout << "***Error in TMinLkhd::UseWeights*** You must add the data file before you can specify the weight variable" << endl;
+    assert(0);
+  }
+  
+  weightvar = -1;
+  for (UInt_t j = 0 ; j < nvar ; j++) {
+    if (!weight.CompareTo(var_table.at(j))) {
+      weightvar = j;
+      break;
+    }
+  }
+  if (weightvar==-1) {
+    cout << "***Error in TMinLkhd::UseWeights*** Could not find the variable " 
+	 << weight.Data()  << " in the list of variables. Maybe a typo??"
+	 << endl;
+    assert(0);
+  }
+  else printf("**OK, Using weight variable %s for likelihood.\n",weight.Data());
+}
+
 
 
 void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, vector<TString> & moddata,Double_t * normfac, UInt_t nchoice)
@@ -4755,6 +4782,8 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
     //    if (i==1) cout << "Obs " << i <<": "<< totalprob << endl;
     Double_t repeatobs = 1.0;
     if (bootstrapobs[i]>1) repeatobs *= bootstrapobs[i];
+    if (weightvar>-1) repeatobs *= data[i*nvar+weightvar];
+
 
     logLkhd += -log(totalprob)*repeatobs;
 

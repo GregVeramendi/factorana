@@ -79,6 +79,7 @@ private:
 //   Double_t * data;
 //   TString * var_table;
   Int_t indexvar;
+  Int_t weightvar;
 
   UInt_t nparam;
   UInt_t nfreeparam;
@@ -239,6 +240,7 @@ public:
   void SetSimNobs(UInt_t nobs) {sim_nobs = nobs;}
 
   void SetObsIndex(const TString index);
+  void UseWeights(const TString weight);
 
   Int_t Minimize(Int_t printlevel = 1);
   Int_t Est_measurementsys(Int_t printlevel = 1);
