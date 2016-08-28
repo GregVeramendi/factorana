@@ -62,6 +62,7 @@ TMinLkhd::TMinLkhd()
   stage = 0;
   cpurank = 0;
   printlvl = 1;
+  printmargeffect = 0;
   current_printgroup = 0;
   current_estimationgroup = 0;
   nprintgroup = 0;
@@ -75,6 +76,7 @@ TMinLkhd::TMinLkhd()
   nbootsamples = 0;
   bootstrapstart = 0;
   HessStdErr = 1;
+  sampleposterior = 0;
   simIncData = 0;
   sim_nobs = 100000;
   newflag = 0;
@@ -112,6 +114,7 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
   nbootsamples = 0;
   bootstrapstart = 0;
   HessStdErr = 1;
+  sampleposterior = 0;
   simIncData = 0;
   sim_nobs = 100000;
   newflag = 0;
@@ -119,6 +122,7 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
   current_sample = -1;
   cpurank = 0;
   printlvl = 1;
+  printmargeffect = 0;
   current_printgroup = 0;
   current_estimationgroup = 0;
   initBetaOLS = 0;
@@ -605,6 +609,31 @@ void TMinLkhd::ConstrainLastFactorLoadingToModel(const UInt_t targetmod, UInt_t 
   parconstrained.at(ipar[1]) = ipar[0];
 }
 
+
+void TMinLkhd::LastModel_SetEndogenousReg(UInt_t modelN) {
+  //Find model pointer
+//    TModel * endogModel = NULL;
+//  if (modelN<models.size()) {
+//    endogModel = &(models[modelN]);
+//  }
+//  else {
+//    cout << "***Error in TMinLkhd::LastModel_SetEndogenousReg*** Model number is bigger than the size of the model array!" << endl;
+//    assert(0);
+//  }
+//
+  //  if (cpurank==0) cout << "Model "<< endogModel->GetTitle() 
+  //		       << " being set as endogenous covariate in model " 
+  //		       << models.back().GetTitle() << endl;
+
+  if (modelN<models.size()) {
+    models.back().SetEndogenousReg(modelN,models);  
+  }
+  else {
+    cout << "***Error in TMinLkhd::LastModel_SetEndogenousReg*** Model number is bigger than the size of the model array!" << endl;
+    assert(0);
+  }
+
+}
 
 void TMinLkhd::LastModel_Splitsim(TString splitvar) {
 
@@ -2338,12 +2367,18 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vobs"))).Data());
 	if ((models[imod].GetType()==3) && (nchoice>2)) fprintf(pFile,"_C%1d",ichoice);
 	nsimvar +=1;
+
+	if (models[imod].GetEndogenousReg()!=-9999) {
+	  fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vend"))).Data());
+	  nsimvar +=1;
+	}
 	
 	for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
 	  fprintf(pFile,", %s%d",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vfac"))).Data(),ifac);
 	  if ((models[imod].GetType()==3) && (nchoice>2)) fprintf(pFile,"_C%1d",ichoice);
 	  nsimvar +=1;
 	}
+
       }
       // generate probabilities for choices in multinomial models
       if ((models[imod].GetType()==2) || (models[imod].GetType()==3) || (models[imod].GetType()==4) || (models[imod].GetDetailSim())) {
@@ -2363,6 +2398,11 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_Vobs"))).Data());
 	nsimvar +=1;
 	
+	if (models[imod].GetEndogenousReg()!=-9999) {
+	  fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_Vend"))).Data());
+	  nsimvar +=1;
+	}
+
 	for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
 	  fprintf(pFile,", %s%d",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_Vfac"))).Data(),ifac);
 	  nsimvar +=1;
@@ -2403,40 +2443,165 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
   
   cout << "Starting simulation file will have " << (1+nvarused+nsimvar+1) << " variables.\n";
 
+  vector<Double_t> maxlkhd(nobs,0.0);
+  Double_t fvalue = 0;
+  Double_t * thisparam = new Double_t[nfac];
+  Double_t * grad = new Double_t[nfac];
+  Double_t * hess = new Double_t[(nfac*(nfac+1))/2];
+  Int_t npar_min = nfac;
+
+
+  // Get maxlkhd of measurement system for each observation
+  if (sampleposterior==1) {
+    // setup calculation of posterior
+    Int_t first_outmodel=-1;
+    for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
+      if ((models[imod].GetGroup()==1)&&(first_outmodel==-1)) first_outmodel = imod;
+    }
+    
+    //Ignore all outcome models when predicting
+    if (first_outmodel!=-1) {
+      for (UInt_t imod = first_outmodel ; imod < models.size() ; imod++) SetIgnoreMod(imod);
+    }
+    if (first_outmodel==-1) first_outmodel = models.size();
+    
+    // Fix all parameters of models
+    for (UInt_t i = 0 ; i < nparam ; i++) FixPar(i);
+    
+    predicting = 1;
+    predictobs = 0;
+
+    // clear file of predicted factor scores
+    if ((nsubsamples==0)&&(nbootsamples==0)) {
+      FILE * pFile;
+      filename = TString("factor_predictions.txt");
+      filename.Prepend(workingdir);
+      pFile = fopen (filename.Data(),"w");
+      fclose (pFile);
+    }
+
+    Int_t ierflg = 0;
+    // get posterior density at mode
+    for (UInt_t iobs = 0 ; iobs < nobs ; iobs++) {
+      if(iobs%100==0) printf("Predicting factors for observation #%d\n",iobs);
+      predictobs = iobs;
+      ierflg = Min_Ipopt(0);
+
+      for (UInt_t ifac = 0; ifac <  nfac; ifac++) {
+	thisparam[ifac] = facprediction.at(ifac);
+      }
+      LkhdFcn(npar_min,grad,fvalue,thisparam,1,hess);
+      maxlkhd.at(iobs) = fvalue;
+      printf("*** maxlkhd(obs=%d)=%5.3f\n\n",iobs,fvalue);
+
+      if (ierflg!=0) {
+	printf("PREDICT_FACTOR: Failed to minimize factor for observation #%d\n",iobs);
+        assert(0);
+      }
+    }
+  }
+
+  
+  // Get maxweight
+  Double_t maxweight = -1.0;
+  if (weightvar!=-1) {
+    for (UInt_t iobs = 0 ; iobs < nobs ; iobs++) {
+      if (data[iobs*nvar+weightvar]>maxweight) maxweight = data[iobs*nvar+weightvar];
+    }
+  }
 
   for (UInt_t igen = 0 ; igen < sim_nobs ; igen++) {
     if (igen%10000==0) printf("Simulating %5d\n",igen);
     
+
+    // First draw observation:
+    UInt_t obs_drw = -1;
+    int acceptdraw = 0;
+    UInt_t ndraws = 0;
+    while (acceptdraw==0) {
+      ndraws++;
+
+      obs_drw = UInt_t(r3->Rndm()*(nobs));
+      if (obs_drw==nobs) obs_drw--;
+
+      if (weightvar==-1) acceptdraw=1;
+      else if (r3->Uniform() < data[obs_drw*nvar+weightvar]/maxweight) acceptdraw=1;
+    }
+
+    //    if (igen%1000==0)&&(weightvar!=-1) printf("Drawing Xs, after %d draws, weighratio=%5.3f.\n",ndraws,data[obs_drw*nvar+weightvar]/maxweight);
+
     vector<Double_t> fac_val;
 
     if (nfac>0) {
-      // First draw factors for this simulated observation:
-      vector<Double_t> f_draw;
-      for (UInt_t i = 0 ; i < nfac; i++) f_draw.push_back(r3->Gaus(0.0,1.0));
-      
-      //Select mixture
-      UInt_t imix = 0;
-      if (fac_nmix>1) {
-	Double_t draw = r3->Uniform();
-	if (draw<w_mix.at(0)) imix = 0;
-	else if (draw < w_mix.at(0) + w_mix.at(1)) imix=1;
-	else imix=2;
-      }
-      
 
-      if ((nfac==2)&&(fac_corr!=0)) {
-	fac_val.push_back(fac_mean.at(imix*nfac) + Getfvar(imix,0)*f_draw.at(0));
-	fac_val.push_back(fac_mean.at(imix*nfac+1) + Getfvar(imix,1)*(f_draw.at(0)*Getfvar(imix,2) + f_draw.at(1)*sqrt(1-Getfvar(imix,2)*Getfvar(imix,2)))); 
-      }
-      else {
-	for (UInt_t ifac = 0 ; ifac < nfac; ifac++) fac_val.push_back(fac_mean.at(imix*nfac+ifac) + Getfvar(imix,ifac)*f_draw.at(ifac));
-      }
+      acceptdraw = 0;
+      ndraws = 0;
+      while (acceptdraw==0) {
+	ndraws++;
+	// First draw factors from unconditional factor distribution
+	vector<Double_t> f_draw;
+
+	// Draw from Normal distribution
+	for (UInt_t i = 0 ; i < nfac; i++) f_draw.push_back(r3->Gaus(0.0,1.0));
+	
+	//Select mixture
+	UInt_t imix = 0;
+	if (fac_nmix>1) {
+	  Double_t draw = r3->Uniform();
+	  if (draw<w_mix.at(0)) imix = 0;
+	  else if (draw < w_mix.at(0) + w_mix.at(1)) imix=1;
+	  else imix=2;
+	}
+	
+	//Calculate factors 
+	if ((nfac==2)&&(fac_corr!=0)) {
+	  fac_val.push_back(fac_mean.at(imix*nfac) + Getfvar(imix,0)*f_draw.at(0));
+	  fac_val.push_back(fac_mean.at(imix*nfac+1) + Getfvar(imix,1)*(f_draw.at(0)*Getfvar(imix,2) + f_draw.at(1)*sqrt(1-Getfvar(imix,2)*Getfvar(imix,2)))); 
+	}
+	else {
+	  for (UInt_t ifac = 0 ; ifac < nfac; ifac++) fac_val.push_back(fac_mean.at(imix*nfac+ifac) + Getfvar(imix,ifac)*f_draw.at(ifac));
+	}
+
+	// check if we are sampling from posterior or just factor distribution
+	if (sampleposterior==0) acceptdraw=1;
+	else {
+	  predictobs = obs_drw;
+
+	  // get posterior density 
+
+	  for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) thisparam[ifac] = fac_val.at(ifac);
+
+	  LkhdFcn(npar_min,grad,fvalue,thisparam,1,hess);
+
+	  Double_t postdensity = exp(maxlkhd.at(obs_drw)-fvalue);
+	  Double_t draw = r3->Uniform();
+
+	  //	  printf("%8d ",obs_drw);
+	  //	  for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) printf("%7.3f ",fac_val.at(ifac));
+	  //	  printf("lkhd=%5.3f maxlkhd=%5.3f prob=%5.4f draw=%5.4f\n", fvalue, maxlkhd.at(obs_drw), postdensity, draw);
+
+	  if (draw<postdensity) acceptdraw=1;
+	  else {
+	    // reject draw
+	    fac_val.clear();
+	    //	    if (ndraws>1000000) {
+	    if (0) {
+	      Int_t ierflg = 0;
+	      ierflg = Min_Ipopt(0);
+
+	      printf("***Simulating: Couldn't find factors that pass acceptance sampling! Using factors that maximize the likelihood for observation %d, ",obs_drw);
+	      for (UInt_t ifac = 0; ifac <  nfac; ifac++) {
+		fac_val.at(ifac) = facprediction.at(ifac);
+		printf("fac%d = %8.3f,  ", ifac, fac_val.at(ifac));
+	      }
+	      printf("\n");
+	      acceptdraw=1;
+	    }
+	  }
+	}
+      } // while (!acceptdraw)
+      //      if (igen%1000==0) printf("Drew Theta(%d), after %d draws.\n",obs_drw,ndraws);
     }
-
-    // Second draw observations:
-    UInt_t obs_drw = UInt_t(r3->Rndm()*(nobs));
-    if (obs_drw==nobs) obs_drw--;
-
 
     if (indexvar==-1) {
       fprintf(pFile,"%10d",obs_drw+1);
@@ -2450,7 +2615,7 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
     // Now simulate the models:
     for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
       // simulation gives: missing, I_obs, I_factor, shock/prob, outcome
-      models[imod].Sim(obs_drw*nvar,data,param,fparam_models[imod],fac_val, pFile);
+      models[imod].Sim(obs_drw*nvar,data,models,param,fparam_models[imod],fac_val, pFile);
     }
      if (simIncData) for (int ivar = 0 ; ivar < nvarused ; ivar++) fprintf(pFile,", %10.5f",-9999.0);
     fprintf(pFile,", %10d \n",1);
@@ -2471,6 +2636,11 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
   }
 
   fclose (pFile);
+
+
+  delete [] thisparam;
+  delete [] grad;
+  delete [] hess;
   
   return 0;
 }
@@ -3628,34 +3798,40 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 	  }
 	} // Predicting==0
 	else {
+	  // Save factor predictions
+	  facprediction.clear();
+	  for (UInt_t ifac = 0; ifac < nfac ; ifac++) facprediction.push_back(thisparam[ifac]);
 
-	  // append factor predictions for this observation
-	  FILE * pFile;
-	  TString filename;
-	  filename = TString("factor_predictions.txt");
-	  filename.Prepend(workingdir);
-	  pFile = fopen(filename.Data(),"a");
-
-	  if (simIncData==0) {
-	    if (indexvar==-1) {
-	      fprintf(pFile,"%10d ", predictobs);
+	  // print factor predictions for this observation if not bootstrap
+	  if ((nsubsamples==0)&&(nbootsamples==0)) {
+	    FILE * pFile;
+	    TString filename;
+	    filename = TString("factor_predictions.txt");
+	    filename.Prepend(workingdir);
+	    pFile = fopen(filename.Data(),"a");
+	    if (simIncData==0) {
+	      if (indexvar==-1) {
+		fprintf(pFile,"%10d ", predictobs);
+	      }
+	      else {
+		fprintf(pFile,"%10d ", Int_t(data[predictobs*nvar+indexvar]));
+	      }
+	      // append the factor predictions
+	      for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
+		fprintf(pFile,"%10.5f ",thisparam[ifac]);
+		//	    for (UInt_t ifac = 0; ifac < nfac ; ifac++) fprintf(pFile,"%10.5f %10.5f ",thisparam[ifac],sqrt(invhess(ifac,ifac)));
+	      }
 	    }
 	    else {
-	      fprintf(pFile,"%10d ", Int_t(data[predictobs*nvar+indexvar]));
+	      for (UInt_t ivar = 0 ; ivar < nvar ; ivar++) {
+		fprintf(pFile,"%10.5f ",data[predictobs*nvar+ivar]);
+	      }
+	      for (UInt_t ifac = 0; ifac < nfac ; ifac++) fprintf(pFile,"%10.5f ",thisparam[ifac]);
 	    }
-	    // append the factor predictions
-	    for (UInt_t ifac = 0; ifac < nfac ; ifac++) fprintf(pFile,"%10.5f ",thisparam[ifac]);
-	    //	    for (UInt_t ifac = 0; ifac < nfac ; ifac++) fprintf(pFile,"%10.5f %10.5f ",thisparam[ifac],sqrt(invhess(ifac,ifac)));
-	  }
-	  else {
-	    for (UInt_t ivar = 0 ; ivar < nvar ; ivar++) {
-	      fprintf(pFile,"%10.5f ",data[predictobs*nvar+ivar]);
-	    }
-	    for (UInt_t ifac = 0; ifac < nfac ; ifac++) fprintf(pFile,"%10.5f ",thisparam[ifac]);
-	  }
 
-	  fprintf(pFile,"\n");
-	  fclose (pFile);
+	    fprintf(pFile,"\n");
+	    fclose (pFile);
+	  }
 	}
       }
     }
@@ -4994,6 +5170,39 @@ void TMinLkhd::PrintParamTab(int pmod) {
       else done=1;
     }
 
+    vector<Double_t> margeffmult(lastmod-firstmod, 1.0);
+    
+    //Calculate marginal effects
+    if (printmargeffect==1) {
+      for (UInt_t imod = firstmod ; imod < lastmod ; imod++) {
+	if (models[imod].GetType()==2) {
+	  Double_t count = 0.0;
+	  //	  Double_t aveprob = 0.0;
+	  margeffmult.at(imod-firstmod) = 0.0;
+	  printf("***calculating probabilities\n");
+	  for (UInt_t iobs = 0; iobs < nobs; iobs++) {
+	    vector<Double_t> fac_val(nfac,0.0);
+	    
+	    Double_t prob = models[imod].GetPdf(iobs*nvar,data,param,fparam_models[imod],fac_val);
+	    // prob is -1 if this model's indicator is zero
+	    if (prob>0.0) {
+	      Double_t weight = 1.0;
+	      if (weightvar>-1) weight = data[iobs*nvar+weightvar];
+	    
+	      //	      aveprob += weight*prob;
+	      //	      margeffmult.at(imod) += weight*prob*(1.0-prob);
+	      margeffmult.at(imod-firstmod) += weight*prob;
+	      count += weight;
+	    }
+	  }
+	  // Get ave marginal effect
+	  margeffmult.at(imod-firstmod) = margeffmult.at(imod-firstmod)/count;
+	  // aveprob = aveprob/count;
+	  // printf("Average prob = %f\n\n",aveprob);
+	}
+      }
+    }
+
     printf("\\begin{tabular}{l");
     for (UInt_t imod = firstmod ; imod < lastmod ; imod++) {
       int nchoice = 2;
@@ -5058,8 +5267,8 @@ void TMinLkhd::PrintParamTab(int pmod) {
 	  for (UInt_t ireg = 0 ; ireg < regs.size(); ireg++) {	
 	    if (varuse.at(ivar)==regs.at(ireg)) {
 	      int iparam = fparam_models[imod] + ireg + ichoice*(models[imod].GetNreg()+nfac);
-	      printf("& %8.3f & %8.3f ",param[iparam],param_err[iparam]);
-	      fprintf(pFile,"& %8.3f & %8.3f ",param[iparam],param_err[iparam]);
+	      printf("& %8.3f & %8.3f ",param[iparam]*margeffmult.at(imod-firstmod),param_err[iparam]*margeffmult.at(imod-firstmod));
+	      fprintf(pFile,"& %8.3f & %8.3f ",param[iparam]*margeffmult.at(imod-firstmod),param_err[iparam]*margeffmult.at(imod-firstmod));
 	      varused=1;
 	    }
 	  }
@@ -5087,19 +5296,19 @@ void TMinLkhd::PrintParamTab(int pmod) {
 	  if (fnorm.size()==0) {
 	    nfacparam.at(imod-firstmod) +=1;
 	    Int_t iparam = fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac) + models[imod].GetNreg() + ifac;
-	    printf("& %8.3f & %8.3f ",param[iparam],param_err[iparam]);
-	    fprintf(pFile,"& %8.3f & %8.3f ",param[iparam],param_err[iparam]);
+	    printf("& %8.3f & %8.3f ",param[iparam]*margeffmult.at(imod-firstmod),param_err[iparam]*margeffmult.at(imod-firstmod));
+	    fprintf(pFile,"& %8.3f & %8.3f ",param[iparam]*margeffmult.at(imod-firstmod),param_err[iparam]*margeffmult.at(imod-firstmod));
 	  }
 	  else {
 	    if (fnorm[ifac]>-9998) {
-	      printf("& %8.3f & %8s ",fnorm[ifac],"");
-	      fprintf(pFile,"& %8.3f & %8s ",fnorm[ifac],"");
+	      printf("& %8.3f & %8s ",fnorm[ifac]*margeffmult.at(imod-firstmod),"");
+	      fprintf(pFile,"& %8.3f & %8s ",fnorm[ifac]*margeffmult.at(imod-firstmod),"");
 	    }
 	    else {
 	      nfacparam.at(imod-firstmod) +=1;
 	      Int_t iparam = fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac) + models[imod].GetNreg() + ifac;
-	      printf("& %8.3f & %8.3f ",param[iparam],param_err[iparam]);
-	      fprintf(pFile,"& %8.3f & %8.3f ",param[iparam],param_err[iparam]);
+	      printf("& %8.3f & %8.3f ",param[iparam]*margeffmult.at(imod-firstmod),param_err[iparam]*margeffmult.at(imod-firstmod));
+	      fprintf(pFile,"& %8.3f & %8.3f ",param[iparam]*margeffmult.at(imod-firstmod),param_err[iparam]*margeffmult.at(imod-firstmod));
 	    }
 	  }
 	} // loop through choices

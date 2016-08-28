@@ -41,6 +41,11 @@ TModel::TModel(const char *name, const char *title, Int_t modeltype, Int_t model
   regressors.reserve(nregressors);
   for (int i = 0 ; i < nregressors ; i++) regressors.push_back(moddata[i+2]);
 
+  simresult = -9999.0;
+  endogReg = -9999;
+  endogModel = 0;
+
+
 //  printf("Regressors: ");
 //  for (int i = 0 ; i < nregressors ; i++) {
 //    if (i!=0) cout << ", "; 
@@ -67,6 +72,34 @@ TModel::~TModel() {
 
 void TModel::SplitSim(UInt_t ivar) {
   splitsim = (Int_t)ivar;
+}
+
+void TModel::SetEndogenousReg(UInt_t endModel, std::vector<TModel> & models) {
+
+  if (endogReg!=-9999) {
+    cout << "ERROR (TModel::SetEndogenousReg): This model already has an endogenous regressor defined!"
+	 << endl;
+    assert(0);
+  }
+  
+  Int_t foundreg = 0;
+  for (int i = 0 ; i < nregressors ; i++) {
+    if (models.at(endModel).GetOutcome()==regressors[i]) foundreg=1;
+  }
+  if (foundreg==1) {
+    endogReg = models.at(endModel).GetOutcome();
+    endogModel = endModel; 
+
+    cout << "Model "<< models.at(endogModel).GetName() 
+	 << " being set as endogenous covariate (" 
+	 << endogReg << ") in model " 
+	 << GetName() << endl;
+  }
+  else {
+    cout << "ERROR (TModel::SetEndogenousReg): Endogenous regressor is not in list of covariates!"
+	 << endl;
+    assert(0);
+  }
 }
 
 
@@ -739,7 +772,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 
 }
 
-void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, const std::vector<Double_t> & param, UInt_t firstpar, const std::vector <Double_t> & fac, FILE * pFile)
+void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::vector<TModel> & models, const std::vector<Double_t> & param, UInt_t firstpar, const std::vector <Double_t> & fac, FILE * pFile)
 //std::vector<Double_t> TModel::Eval(UInt_t iobs_offset, Double_t * data, std::vector<Double_t> param, UInt_t firstpar, std::vector<Double_t> fac)
 {
 
@@ -756,7 +789,10 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, const s
     }
 
     for (int i = 0; i < nregressors  ; i++) {
-      if (data[iobs_offset+regressors[i]]<-9998) this_missing = 2;
+      if (regressors[i] != endogReg) {
+	if (data[iobs_offset+regressors[i]]<-9998) this_missing = 2;
+      }
+      else if (models.at(endogModel).GetSimResult()<-9998) this_missing = 2;
     }
     
 
@@ -767,22 +803,41 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, const s
       else {
 	fprintf(pFile,", %10d",-9999);
 	if (modtype==2) fprintf(pFile,", %10d",-9999);
+
+	simresult = -9999.0;
       }
     }
     else {
       vector<double> expres(1,0.0);
+      double vendog = 0.0;
       if ((modtype==3)&&(numchoice>2)) expres.resize(numchoice-1,0.0);
 
       //      Double_t expres[0] = 0.0;
       for (int i = 0; i < nregressors  ; i++) {
 	if (regressors[i]!=splitsim) {
-	  expres[0] += param[i+firstpar]*data[iobs_offset+regressors[i]];
+
+	   if (regressors[i] != endogReg) {
+	     expres[0] += param[i+firstpar]*data[iobs_offset+regressors[i]];
+	   }
+	   else {
+	     expres[0] += param[i+firstpar]*models.at(endogModel).GetSimResult();
+	     vendog = param[i+firstpar]*models.at(endogModel).GetSimResult();
+	     //	     vendog = param[i+firstpar];
+
+	     //	     printf("Model %25s using %25s: obs=%6d reg=%4d beta=%8.3f endog=%8.3f vend=%8.3f\n",GetName(),models.at(endogModel).GetName(),iobs_offset,regressors[i],param[i+firstpar],models.at(endogModel).GetSimResult(),vendog);
+	   }
 	}
 	else expres[0] += param[i+firstpar]*isplit;
       }
-      if (detailsim) fprintf(pFile,", %10.5f",expres[0]);
-      
-      
+      if (detailsim) {
+	if (endogReg==-9999) {
+	  fprintf(pFile,", %10.5f",expres[0]);
+	}
+      	else {
+	  fprintf(pFile,", %10.5f",expres[0]-vendog);
+	  fprintf(pFile,", %10.5f",vendog);
+	}
+      }      
       UInt_t ifreefac = 0;
       Double_t fac_comp = 0.0;
       for (int i = 0 ; i < numfac ; i++) {
@@ -812,14 +867,21 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, const s
 	Double_t eps = gRandom->Gaus(0.0,sigma);
 	if (detailsim) fprintf(pFile,", %10.5f",eps);
 	fprintf(pFile,", %10.5f",expres[0]+eps);
+	simresult = expres[0]+eps;
       }
       else if (modtype==2) {
 	Double_t eps = gRandom->Gaus(0.0,1.0);
 	Double_t prb = ROOT::Math::normal_cdf(expres[0]);
 	//	if (detailsim) fprintf(pFile,", %10.5f",prb);
 	fprintf(pFile,", %10.5f",prb);
-	if ((expres[0]+eps)>0) fprintf(pFile,", %10d",1);
-	else fprintf(pFile,", %10d",0);
+	if ((expres[0]+eps)>0) { 
+	  fprintf(pFile,", %10d",1);
+	  simresult = 1.0;
+	}
+	else {
+	  fprintf(pFile,", %10d",0);
+	  simresult = 0.0;
+	}
       }
       else if (modtype==3) {
 	cout << "ERROR (TModel::Sim): Simulation of Logit not supported yet!!\n";
@@ -840,6 +902,7 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, const s
 	if (expres[0]+eps > threshold) choice = numchoice;
 
 	fprintf(pFile,", %10d",choice);
+	simresult = Double_t(choice);
       }
       else {
 	cout << "ERROR (TModel::Eval): Non-supported model!!"
@@ -848,5 +911,67 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, const s
       }
     }
   }
-
 }
+
+
+Double_t TModel::GetPdf(UInt_t iobs_offset, const std::vector<Double_t> & data, const std::vector<Double_t> & param, UInt_t firstpar, const std::vector <Double_t> & fac)
+{
+
+  if (modtype!=2) {
+    cout << "ERROR (TModel::GetProb): No need to estimate Marginal Effect for model other than probit!!\n";
+    assert(0);
+  }
+  else {
+    // for now just check if regressors are not -9999:
+    Int_t this_missing = 0;
+    
+    if (missing>-1) {
+      if (data[iobs_offset+missing]==0) this_missing = 1;
+    }
+    
+    if (this_missing==0) {
+      for (int i = 0; i < nregressors  ; i++) {
+	if (data[iobs_offset+regressors[i]]<-9998) this_missing = 2;
+      }
+    }
+    if (this_missing == 1) {
+      return -1.0;
+    }
+    else if (this_missing==2) {
+      cout << "ERROR (TModel::GetProb): Estimating marginal effect with missing covariate!!\n";
+      assert(0);
+    }
+    else {
+      double expres = 0.0;
+      
+      for (int i = 0; i < nregressors  ; i++) {
+	expres += param[i+firstpar]*data[iobs_offset+regressors[i]];
+      }
+      
+      UInt_t ifreefac = 0;
+      Double_t fac_comp = 0.0;
+      for (int i = 0 ; i < numfac ; i++) {
+	if (facnorm.size()==0) {
+	  fac_comp += param[ifreefac+firstpar+nregressors]*fac.at(i);	  
+	  ifreefac++;
+	}
+	else {
+	  if (facnorm[i]>-9998) {
+	    fac_comp += facnorm[i]*fac.at(i);
+	  }
+	  else {
+	    fac_comp += param[ifreefac+firstpar+nregressors]*fac.at(i);
+	    ifreefac++;
+	  }
+	}
+      }
+      expres += fac_comp;
+
+      Double_t prb = ROOT::Math::normal_pdf(expres);
+      return prb;
+
+    } //not missing
+
+  } //Not probit type model
+
+} 

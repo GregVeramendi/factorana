@@ -25,6 +25,10 @@ private:
   Int_t numchoice; // for multivariate models
   Bool_t ignore;
 
+  Double_t simresult;
+  Int_t endogReg;
+  UInt_t endogModel;
+
   public:
   TModel() {};
   TModel(const char *name, const char *title, Int_t modeltype, Int_t modelgroup, Int_t prntgroup, std::vector<Int_t> & moddata, Int_t nfac, Double_t * thisnormfac = NULL, UInt_t nchoice = 2);
@@ -47,12 +51,17 @@ private:
 
   void DetailSim(UInt_t ivar) {detailsim = ivar;}
   UInt_t GetDetailSim() {return detailsim;}
+  Double_t GetSimResult() {return simresult;}
 
+
+  void SetEndogenousReg(UInt_t endModel, std::vector<TModel> & models);
+  Int_t GetEndogenousReg() {return endogReg;}
   void SplitSim(UInt_t ivar);
   void PrintModel(std::vector<TString> vartab);
   void Eval(UInt_t iobs_offset, const std::vector<Double_t> & data, const std::vector<Double_t> & param, UInt_t firstpar, const std::vector <Double_t> & fac, std::vector<Double_t> & modeval, std::vector<Double_t> & hess, Int_t gradflag);
 
-  void Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, const std::vector<Double_t> & param, UInt_t firstpar, const std::vector <Double_t> & fac, FILE * pfile);
+  void Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::vector<TModel> & models, const std::vector<Double_t> & param, UInt_t firstpar, const std::vector <Double_t> & fac, FILE * pfile);
+  Double_t GetPdf(UInt_t iobs_offset, const std::vector<Double_t> & data, const std::vector<Double_t> & param, UInt_t firstpar, const std::vector <Double_t> & fac);
 
 //   std::vector<Double_t> Eval(UInt_t iobs_offset, Double_t * data, std::vector<Double_t> param, UInt_t firstpar, std::vector <Double_t> fac);
 //  void Print(TString * vartab);

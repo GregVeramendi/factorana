@@ -18,6 +18,7 @@ class TMinLkhd : public TNamed {
 private:
  
   Int_t printlvl;
+  Int_t printmargeffect;
   Int_t cpurank;
   Int_t counter;
   Bool_t initializing;
@@ -46,6 +47,7 @@ private:
   std::vector <UInt_t> bootstrapobs;
 
   UInt_t predictobs;
+  std::vector<Double_t> facprediction;
 
   //Settings for initial parameters
   Bool_t initBetaOLS;
@@ -71,6 +73,7 @@ private:
 
   UInt_t simIncData;
   UInt_t sim_nobs;
+  UInt_t sampleposterior;
 
   UInt_t nobs;
   UInt_t nvar;
@@ -235,12 +238,15 @@ public:
   void SetNewFlag(UInt_t nflag) {newflag = nflag;}
 
   void LastModel_Detailsim() {models.back().DetailSim(1);}
+  void LastModel_SetEndogenousReg(UInt_t modelN);
   void AllModel_Detailsim() {for (UInt_t imod = 0 ; imod < models.size() ; imod++) models[imod].DetailSim(1);}
   void SimIncludeData() {simIncData = 1;}
+  void SimSamplePosterior() {sampleposterior = 1;}
   void SetSimNobs(UInt_t nobs) {sim_nobs = nobs;}
 
   void SetObsIndex(const TString index);
   void UseWeights(const TString weight);
+  void PrintMargEffect() {printmargeffect=1;}
 
   Int_t Minimize(Int_t printlevel = 1);
   Int_t Est_measurementsys(Int_t printlevel = 1);
