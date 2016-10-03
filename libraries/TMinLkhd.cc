@@ -543,7 +543,7 @@ void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, 
 
   //Count up number of parameters for this model:
   // number of regressors:
-  nparam_thismodel += arraysize -2;
+  nparam_thismodel += arraysize - 2;
   // number of unnormalized factors:
   if ((normfac) && (nfac>0)) {
     for (UInt_t i = 0; i < nfac ; i++) {
@@ -772,7 +772,7 @@ void TMinLkhd::ResetFitInfo() {
 	    if (int(data.at(iobs*nvar + models[imod].GetOutcome())) == ichoice) validvalue = 1;
 	  }
 	  if (validvalue==0) {
-	    cout << "ERROR (TMinLkhd::ResetFitInfo): Found value that is not allows for multinomial outcome!"
+	    cout << "ERROR (TMinLkhd::ResetFitInfo): Found value that is not allowed for multinomial outcome!"
 		 << " In model " <<  models[imod].GetTitle() << "\n"
 		 << "Looking at outcome: " <<  var_table.at(models[imod].GetOutcome())
 		 << ", Missing (" << models[imod].GetMissing() << ")=" << data.at(iobs*nvar+models[imod].GetMissing())
@@ -2356,30 +2356,38 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
     fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_miss"))).Data());
     nsimvar++;
 
+    int nlogitchoice = 2;
+    if (models[imod].GetType()==3) nlogitchoice = models[imod].GetNchoice();
+
     // If it is a multinomial logit model we need to produce nchoice-1 * V and shprob variables
-    // If it is any multinomial model we need to produce nchoice-1 shprob variables
-    int nchoice = 2;
-    if ((models[imod].GetType()==3) || (models[imod].GetType()==4)) nchoice = models[imod].GetNchoice();
-    for (int ichoice = 2 ; ichoice <= nchoice ; ichoice++) {
+    for (int ichoice = 2 ; ichoice <= nlogitchoice ; ichoice++) {
       
       // Only want this more than once if it is a multinomial logit model
       if ( ( (models[imod].GetType()==3) || (ichoice==2) ) && (models[imod].GetDetailSim())) {
 	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vobs"))).Data());
-	if ((models[imod].GetType()==3) && (nchoice>2)) fprintf(pFile,"_C%1d",ichoice);
+	if ((models[imod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
 	nsimvar +=1;
 
 	if (models[imod].GetEndogenousReg()!=-9999) {
 	  fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vend"))).Data());
+	  if ((models[imod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
 	  nsimvar +=1;
 	}
 	
 	for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
 	  fprintf(pFile,", %s%d",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vfac"))).Data(),ifac);
-	  if ((models[imod].GetType()==3) && (nchoice>2)) fprintf(pFile,"_C%1d",ichoice);
+	  if ((models[imod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
 	  nsimvar +=1;
 	}
 
       }
+    }
+
+    // If it is any multinomial model we need to produce nchoice-1 shprob variables
+    int nchoice = 2;
+    if ((models[imod].GetType()==3) || (models[imod].GetType()==4)) nchoice = models[imod].GetNchoice();
+
+    for (int ichoice = 2 ; ichoice <= nchoice ; ichoice++) {
       // generate probabilities for choices in multinomial models
       if ((models[imod].GetType()==2) || (models[imod].GetType()==3) || (models[imod].GetType()==4) || (models[imod].GetDetailSim())) {
 	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_shprob"))).Data());

@@ -25,6 +25,10 @@ using namespace std;
 
 //ClassImp(TModel)
 
+// CAN't ALWAYS RESET THE SEED HERE!!
+mt19937_64 mt(7);
+
+
 TModel::TModel(const char *name, const char *title, Int_t modeltype, Int_t modelgroup, Int_t prntgroup, std::vector<Int_t> & moddata, Int_t nfac, Double_t * thisnormfac, UInt_t nchoice)
   : TNamed(name,title)
 {
@@ -97,6 +101,8 @@ void TModel::SetEndogenousReg(UInt_t endModel, std::vector<TModel> & models) {
   }
   else {
     cout << "ERROR (TModel::SetEndogenousReg): Endogenous regressor is not in list of covariates!"
+         << "\n\t We were looking for var#" << models.at(endModel).GetOutcome()
+	 << " in model " << models.back().GetName()
 	 << endl;
     assert(0);
   }
@@ -158,7 +164,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 
     //Model specific parameters:
     if (modtype==1) ngrad += 1; // variance of error term
-    if ((modtype==3)&&(numchoice>2)) ngrad += (numchoice-2)*(2*numfac+nregressors); // multinomial logit
+    if ((modtype==3)&&(numchoice>2)) ngrad = 1 + numfac + (numchoice-1)*(numfac+nregressors); // multinomial logit
     if (modtype==4) ngrad += (numchoice-1); // ordered probit intercepts
     modEval.resize(ngrad);
     for (int i = 1 ; i < ngrad ; i++) modEval[i] = 0.0;
@@ -173,26 +179,33 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
   }
   if (ignore) return;
 
+  Int_t numlogitchoice = 2;
   vector<double> expres(1,0.0);
-  if ((modtype==3)&&(numchoice>2)) expres.resize(numchoice-1,0.0);
 
+  if ((modtype==3)&&(numchoice>2)) {
+    expres.resize(numchoice-1,0.0);
+    numlogitchoice = numchoice;
+  }
 
   UInt_t ifreefac = 0;
 
-  for (int ichoice = 0; ichoice < numchoice-1; ichoice++) {
+  for (int ichoice = 0; ichoice < numlogitchoice-1; ichoice++) {
+    ifreefac = 0;
+    UInt_t nparamchoice = nregressors + numfac;
+
     for (int i = 0; i < nregressors  ; i++) {
-      expres[ichoice] += param[i+firstpar]*data[iobs_offset+regressors[i]];
+      expres[ichoice] += param[i+firstpar+ichoice*nparamchoice]*data[iobs_offset+regressors[i]];
     }
     
     for (int i = 0 ; i < numfac ; i++) {
       if (facnorm.size()==0) {
-	expres[ichoice] += param[ifreefac+firstpar+nregressors]*fac[i];
+	expres[ichoice] += param[ifreefac+firstpar+ichoice*nparamchoice+nregressors]*fac[i];
 	ifreefac++;
       }
       else {
 	if (facnorm[i]>-9998) expres[ichoice] += facnorm[i]*fac[i];
 	else {
-	  expres[ichoice] += param[ifreefac+firstpar+nregressors]*fac[i];
+	  expres[ichoice] += param[ifreefac+firstpar+ichoice*nparamchoice+nregressors]*fac[i];
 	  ifreefac++;
 	}
       }
@@ -201,8 +214,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 
   // nparameters: d/dtheta, d/dbeta, d/dalpha
   Int_t npar = numfac+nregressors+ifreefac;
-
-  if ((modtype==3)&&(numchoice>2)) npar *= (numchoice-2);
+  if ((modtype==3)&&(numchoice>2)) npar = numfac + (numchoice-1)*(nregressors+numfac);
 
 
   if (modtype==1) {
@@ -228,10 +240,10 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
       ifreefac = 0;
       for (int i = 0 ; i < numfac ; i++) {
 	if (facnorm.size()==0) {
-	  // gradient of factor-specific parameters (variance, mean, weights)
+	  // gradient of factor-specific parameters (variance, mean, weights) d/dtheta
 	  //	  modEval[i+1] = Z*(fac[i]*param[ifreefac+firstpar+nregressors]/param[i])/(sigma*sigma);
 	  modEval[i+1] = Z*(param[ifreefac+firstpar+nregressors])/(sigma*sigma);
-	  //gradient of factor loading (alpha)
+	  //gradient of factor loading (d/dalpha)
 	  modEval[1+numfac+nregressors+ifreefac] = Z*fac[i]/(sigma*sigma);
 
 	  if (flag==3) {
@@ -753,22 +765,231 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
     //     else if ( int(data[iobs_offset+outcome])==0) return ROOT::Math::normal_cdf(-expres[0]);
   }
   else if (modtype==3) {
-    if ( int(data[iobs_offset+outcome])==1) {
-      modEval[0] =  exp(expres[0])/(1.0+exp(expres[0]));
-    }
-    else if ( int(data[iobs_offset+outcome])==0) {
-      modEval[0] =  1.0/(1.0+exp(expres[0]));
-    }
-    cout << "ERROR (TModel::Eval): Found non-binary number for logit outcome!"
-	 << " In model, " <<  this->GetTitle() << "\n"
- 	 << "Looking at outcome #" << outcome 
- 	 << ", Value=" << data[iobs_offset+outcome] << endl;
-    assert(0);
-  }
 
-  cout << "ERROR (TModel::Eval): Non-supported model!!"
-       << "Looking at model #" << modtype << endl;
-  assert(0);
+    // Was state observed? (1,2,...,numchoice)
+    // We'll use (0,1,...,numchoice-1) for the variable obsCat
+    Int_t obsCat = -1;
+    for (int icat = 1 ; icat <= numchoice ; icat++) if (icat == int(data[iobs_offset+outcome])) obsCat = icat-1;
+    
+    if (obsCat==-1) {
+      cout << "ERROR (TModel::Eval): Found invalid number for logit outcome!"
+ 	   << " In model " <<  this->GetTitle() << "\n"
+ 	   << "Looking at outcome #" << outcome 
+ 	   << ", Missing (" << missing << ")=" << data[iobs_offset+missing]
+ 	   << ", obs#:" << iobs_offset/379.0
+ 	   << ", Value=" << data[iobs_offset+outcome] << endl;
+      
+      assert(0);
+    }
+
+    UInt_t nparamchoice = nregressors + numfac;
+
+    double logitdenom = 1.0;
+    for (int icat = 1 ; icat < numchoice; icat++) {
+      logitdenom += exp(expres[icat-1]);
+    }
+
+    modEval[0] = 1.0/logitdenom;
+
+    if (obsCat>0) {
+      modEval[0] *=  exp(expres[obsCat-1]);
+    }
+
+    // Now find the derivatives: 
+    if (flag>=2) {
+      vector<double> pdf(numchoice,1.0/logitdenom);
+      for (int icat = 1 ; icat < numchoice ; icat++) {
+	pdf[icat] *= exp(expres[icat-1]);
+      }
+
+      vector<double> logitgrad;
+      if (flag==3) {
+	logitgrad.resize(numchoice*npar,0.0);
+      }
+
+      // gradient of factor parameters
+      for (int ifac = 0 ; ifac < numfac ; ifac++) {
+
+	//***************
+	// gradient of factor-specific parameters (variance, mean, weights, etc)
+	//obsCat term:
+	if (obsCat>0) modEval[1+ifac] += param[firstpar+(obsCat-1)*nparamchoice+nregressors+ifac];
+ 	if (flag==3) {
+	  for (int jcat = 1 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + ifac] += param[firstpar+(jcat-1)*nparamchoice+nregressors+ifac];
+	}
+
+	//no parameters for choice=0 (i.e. Z(icat=0) = 0)
+	for (int icat = 1 ; icat < numchoice ; icat++) {
+	  modEval[1+ifac] += -pdf[icat]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
+	  if (flag==3) {
+	    for (int jcat = 0 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + ifac] += -pdf[icat]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
+	  }
+	}
+
+	//****************
+	//gradient of factor loading (alpha) 
+	//obsCat term:
+	if (obsCat>0) modEval[1+numfac+(obsCat-1)*nparamchoice+nregressors+ifac] += fac[ifac];
+	if (flag==3) {
+	  for (int jcat = 1 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + numfac + (jcat-1)*nparamchoice + nregressors + ifac] +=  fac[ifac];
+	}
+
+
+	//no parameters for choice=0 (i.e. Z(icat=0) = 0)
+	for (int icat = 1 ; icat < numchoice ; icat++) {
+	  modEval[1+numfac+(icat-1)*nparamchoice+nregressors+ifac] += -pdf[icat]*fac[ifac];
+	  if (flag==3) {
+	    for (int jcat = 0 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + numfac + (icat-1)*nparamchoice + nregressors + ifac] += -pdf[icat]*fac[ifac];
+	  }
+	}
+      }
+
+      //****************
+      //gradient of betas
+      for (int ireg = 0; ireg < nregressors  ; ireg++) {
+
+	//obsCat term:
+	if (obsCat>0) modEval[1+numfac+(obsCat-1)*nparamchoice+ireg] += data[iobs_offset+regressors[ireg]];
+	if (flag==3) {
+	  for (int jcat = 1 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + numfac + (jcat-1)*nparamchoice + ireg] +=  data[iobs_offset+regressors[ireg]];
+	}
+
+	//no parameters for choice=0 (i.e. Z(icat=0) = 0)
+	for (int icat = 1 ; icat < numchoice ; icat++) {
+	  modEval[1+numfac+(icat-1)*nparamchoice+ireg] += -pdf[icat]*data[iobs_offset+regressors[ireg]];
+	  if (flag==3) {
+	    for (int jcat = 0 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + numfac + (icat-1)*nparamchoice + ireg] += -pdf[icat]*data[iobs_offset+regressors[ireg]];
+	  }
+	}
+      }
+
+      // Now Calculate Hessian
+
+      if (flag==3) {
+	
+
+	hess.resize(npar*npar,0.0);
+//	for (int i = 0; i < npar ; i++) {
+//	  for (int j = i ; j < npar ; j++) {
+//	    hess[i*npar+j] = 1.0;
+//	  }
+//	}
+
+
+
+	// First do second order derivatives (for now only dZ/dalpha dtheta terms are non-zero)
+		//Need to add dZ/dtheta dalpha
+	if (obsCat>0) {
+	  for (int ifac = 0 ; ifac < numfac ; ifac++) {
+	    Int_t index = numfac+(obsCat-1)*nparamchoice+nregressors+ifac;
+	    hess[ifac*npar+index] += 1.0;
+	  }
+	}
+	
+	//second, second-order derivative term 
+	for (int icat = 1 ; icat < numchoice ; icat++) {
+	  for (int ifac = 0 ; ifac < numfac ; ifac++) {
+	    Int_t index = numfac+(icat-1)*nparamchoice+nregressors+ifac;
+	    hess[ifac*npar+index] += -pdf[icat]*1.0;
+	  }
+	}
+
+	//Now the first-order derivative Hessian terms
+	// dtheta d....
+	for (int ifac = 0 ; ifac < numfac ; ifac++) {
+
+	  // loop over g categories (see notes)
+	  for (int icat = 1 ; icat < numchoice ; icat++) {
+
+	      // dtheta dtheta
+	      for (int jfac = ifac ; jfac < numfac ; jfac++) {
+		hess[ifac*npar+jfac] += -pdf[icat]*logitgrad[icat*npar + jfac]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
+	      }
+
+	      // loop over parameters in each category
+	      for (int jcat = 1 ; jcat < numchoice ; jcat++) {
+
+		//dtheta dalpha
+		for (int jfac = 0 ; jfac < numfac ; jfac++) {
+		  Int_t index = numfac+(jcat-1)*nparamchoice+nregressors+jfac;
+		  hess[ifac*npar+index] += -pdf[icat]*logitgrad[icat*npar + index]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
+		}
+
+		//dtheta dbeta
+		for (int ireg = 0; ireg < nregressors  ; ireg++) {
+		  Int_t index = numfac+(jcat-1)*nparamchoice+ireg;
+		  hess[ifac*npar+index] += -pdf[icat]*logitgrad[icat*npar + index]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
+		}
+	      }
+	  }
+	}
+	
+	// loop over row categories (see notes)
+	for (int icat = 1 ; icat < numchoice ; icat++) {
+	  // loop over parameters in each category
+	  for (int jcat = icat ; jcat < numchoice ; jcat++) {
+	    
+	    //dbeta dbeta
+	    for (int ireg = 0; ireg < nregressors  ; ireg++) {
+	      for (int jreg = 0; jreg < nregressors  ; jreg++) {
+		if ( (jcat>icat) || (jreg>=ireg) ) {
+		  Int_t index1 = numfac+(icat-1)*nparamchoice+ireg;	      
+		  Int_t index2 = numfac+(jcat-1)*nparamchoice+jreg;	      
+		  hess[index1*npar+index2] += -pdf[icat]*logitgrad[icat*npar + index2]*data[iobs_offset+regressors[ireg]];
+		}
+	      }
+	    }
+	    //dbeta dalpha
+	    for (int ireg = 0; ireg < nregressors  ; ireg++) {
+	      for (int jfac = 0 ; jfac < numfac ; jfac++) {
+		Int_t index1 = numfac+(icat-1)*nparamchoice+ireg;	      
+		Int_t index2 = numfac+(jcat-1)*nparamchoice+nregressors+jfac;	      
+		hess[index1*npar+index2] += -pdf[icat]*logitgrad[icat*npar + index2]*data[iobs_offset+regressors[ireg]];
+	      }
+	    }
+	    
+	    //dalpha dbeta
+	    if (jcat>icat) {
+	      for (int ifac = 0 ; ifac < numfac ; ifac++) {
+		for (int jreg = 0; jreg < nregressors  ; jreg++) {
+		  Int_t index1 = numfac+(icat-1)*nparamchoice+nregressors+ifac;	      
+		  Int_t index2 = numfac+(jcat-1)*nparamchoice+jreg;	      
+		  hess[index1*npar+index2] += -pdf[icat]*logitgrad[icat*npar + index2]*fac[ifac];
+		}
+	      }
+	    }
+	    
+	    //dalpha dalpha
+	    for (int ifac = 0 ; ifac < numfac ; ifac++) {
+	      for (int jfac = 0; jfac < numfac  ; jfac++) {
+		if ( (jcat>icat) || (jfac>=ifac) ) {
+		  Int_t index1 = numfac+(icat-1)*nparamchoice+nregressors+ifac;	      
+		  Int_t index2 = numfac+(jcat-1)*nparamchoice+nregressors+jfac;	      
+		  hess[index1*npar+index2] += -pdf[icat]*logitgrad[icat*npar + index2]*fac[ifac];
+		}
+	      }
+	    }
+	    
+	  } //jcat
+	} //icat
+      } // flag==3
+    } //flag>=2
+  } //modtype==3
+
+    //    cout << "Returning hessian size=" << hess.size() << "\n";
+    // check for NaN
+//     for (UInt_t i = 0; i <  modEval.size() ; i++) 
+//       if ( std::isnan( modEval[i])) cout << "Found the NaN!! model type 2, element " << i << " modEval[0] = " << modEval[0] << " expess=" << expres[0] << "\n";
+
+    return;
+    
+    //     if ( int(data[iobs_offset+outcome])==1) return ROOT::Math::normal_cdf(expres[0]);
+    //     else if ( int(data[iobs_offset+outcome])==0) return ROOT::Math::normal_cdf(-expres[0]);
+
+
+//  cout << "ERROR (TModel::Eval): Non-supported model!!"
+//       << "Looking at model #" << modtype << endl;
+//  assert(0);
 
 }
 
@@ -798,70 +1019,97 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
 
     fprintf(pFile,", %10d",this_missing);
     
-    if (this_missing >1) {
-      if (detailsim) for (int i = 0; i < 4; i++)   fprintf(pFile,", %10d",-9999);
-      else {
-	fprintf(pFile,", %10d",-9999);
-	if (modtype==2) fprintf(pFile,", %10d",-9999);
+    Int_t numlogitchoice = 2;
 
-	simresult = -9999.0;
+    if ((modtype==3)&&(numchoice>2)) {
+      numlogitchoice = numchoice;
+    }
+
+
+    if (this_missing >1) {
+
+      //print out detailed variables (Vobs, Vend, Vfac0..VfacN) and shprob for linear models
+      if (detailsim) {
+	int ndetailvar = 1 + numfac;
+	if (endogReg!=-9999) ndetailvar++;
+	if (modtype==1) ndetailvar++;
+	for (int ichoice = 2 ; ichoice <=numlogitchoice; ichoice++) {
+	  for (int i = 0; i < 4; i++)  fprintf(pFile,", %10d",-9999);
+	}
       }
+
+      //print out shprob for each choice
+      if (modtype==2)  fprintf(pFile,", %10d",-9999);
+      if ((modtype==3)||(modtype==4)) {
+	for (int ichoice = 2 ; ichoice <=numchoice; ichoice++) fprintf(pFile,", %10d",-9999);
+      }
+
+      //print out predicted value
+      fprintf(pFile,", %10d",-9999);
+      simresult = -9999.0;
     }
     else {
-      vector<double> expres(1,0.0);
+
+      vector<double> expres(numlogitchoice-1,0.0);
+
       double vendog = 0.0;
-      if ((modtype==3)&&(numchoice>2)) expres.resize(numchoice-1,0.0);
 
-      //      Double_t expres[0] = 0.0;
-      for (int i = 0; i < nregressors  ; i++) {
-	if (regressors[i]!=splitsim) {
-
-	   if (regressors[i] != endogReg) {
-	     expres[0] += param[i+firstpar]*data[iobs_offset+regressors[i]];
-	   }
-	   else {
-	     expres[0] += param[i+firstpar]*models.at(endogModel).GetSimResult();
-	     vendog = param[i+firstpar]*models.at(endogModel).GetSimResult();
-	     //	     vendog = param[i+firstpar];
-
-	     //	     printf("Model %25s using %25s: obs=%6d reg=%4d beta=%8.3f endog=%8.3f vend=%8.3f\n",GetName(),models.at(endogModel).GetName(),iobs_offset,regressors[i],param[i+firstpar],models.at(endogModel).GetSimResult(),vendog);
-	   }
-	}
-	else expres[0] += param[i+firstpar]*isplit;
-      }
-      if (detailsim) {
-	if (endogReg==-9999) {
-	  fprintf(pFile,", %10.5f",expres[0]);
-	}
-      	else {
-	  fprintf(pFile,", %10.5f",expres[0]-vendog);
-	  fprintf(pFile,", %10.5f",vendog);
-	}
-      }      
       UInt_t ifreefac = 0;
-      Double_t fac_comp = 0.0;
-      for (int i = 0 ; i < numfac ; i++) {
-	if (facnorm.size()==0) {
-	  fac_comp += param[ifreefac+firstpar+nregressors]*fac.at(i);
-	  if (detailsim) fprintf(pFile,", %10.5f",param[ifreefac+firstpar+nregressors]*fac.at(i));
 
-	  ifreefac++;
+      for (int ichoice = 0; ichoice < numlogitchoice-1; ichoice++) {
+	
+	ifreefac = 0;
+	UInt_t nparamchoice = nregressors + numfac;
+	
+	for (int i = 0; i < nregressors  ; i++) {
+	  if (regressors[i]!=splitsim) {
+	    
+	    if (regressors[i] != endogReg) {
+	      expres[ichoice] += param[i+firstpar+ichoice*nparamchoice]*data[iobs_offset+regressors[i]];
+	    }
+	    else {
+	      expres[ichoice] += param[i+firstpar+ichoice*nparamchoice]*models.at(endogModel).GetSimResult();
+	      vendog = param[i+firstpar+ichoice*nparamchoice]*models.at(endogModel).GetSimResult();
+	      //	     vendog = param[i+firstpar];
+	      
+	      //	     printf("Model %25s using %25s: obs=%6d reg=%4d beta=%8.3f endog=%8.3f vend=%8.3f\n",GetName(),models.at(endogModel).GetName(),iobs_offset,regressors[i],param[i+firstpar],models.at(endogModel).GetSimResult(),vendog);
+	    }
+	  }
+	  else expres[ichoice] += param[i+firstpar+ichoice*nparamchoice]*isplit;
 	}
-	else {
-	  if (facnorm[i]>-9998) {
-	    fac_comp += facnorm[i]*fac.at(i);
-	    if (detailsim) fprintf(pFile,", %10.5f",facnorm[i]*fac.at(i));
+	if (detailsim) {
+	  if (endogReg==-9999) {
+	    fprintf(pFile,", %10.5f",expres[ichoice]);
 	  }
 	  else {
-	    fac_comp += param[ifreefac+firstpar+nregressors]*fac.at(i);
-	    if (detailsim) fprintf(pFile,", %10.5f",param[ifreefac+firstpar+nregressors]*fac.at(i));
+	    fprintf(pFile,", %10.5f",expres[ichoice]-vendog);
+	    fprintf(pFile,", %10.5f",vendog);
+	  }
+	}      
+	Double_t fac_comp = 0.0;
+	for (int i = 0 ; i < numfac ; i++) {
+	  if (facnorm.size()==0) {
+	    fac_comp += param[ifreefac+firstpar+ichoice*nparamchoice+nregressors]*fac.at(i);
+	    if (detailsim) fprintf(pFile,", %10.5f",param[ifreefac+firstpar+ichoice*nparamchoice+nregressors]*fac.at(i));
+	    
 	    ifreefac++;
 	  }
+	  else {
+	    if (facnorm[i]>-9998) {
+	      fac_comp += facnorm[i]*fac.at(i);
+	      if (detailsim) fprintf(pFile,", %10.5f",facnorm[i]*fac.at(i));
+	    }
+	    else {
+	      fac_comp += param[ifreefac+firstpar+ichoice*nparamchoice+nregressors]*fac.at(i);
+	      if (detailsim) fprintf(pFile,", %10.5f",param[ifreefac+firstpar+ichoice*nparamchoice+nregressors]*fac.at(i));
+	      ifreefac++;
+	    }
+	  }
 	}
+	//      if (detailsim) fprintf(pFile,", %10.5f",fac_comp);
+	expres[ichoice] += fac_comp;
       }
-      //      if (detailsim) fprintf(pFile,", %10.5f",fac_comp);
-      expres[0] += fac_comp;
-    
+
       if (modtype==1) {
 	Double_t sigma = fabs(param[firstpar+nregressors+ifreefac]);
 	Double_t eps = gRandom->Gaus(0.0,sigma);
@@ -884,22 +1132,70 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
 	}
       }
       else if (modtype==3) {
-	cout << "ERROR (TModel::Sim): Simulation of Logit not supported yet!!\n";
-	assert(0);
+
+	//print out probabilities of choices 2...
+	
+	double logitdenom = 1.0;
+	for (int icat = 1 ; icat < numchoice; icat++) {
+	  logitdenom += exp(expres[icat-1]);
+	}
+	for (int icat = 1 ; icat < numchoice; icat++) fprintf(pFile,", %10.5f",exp(expres[icat-1])/logitdenom);
+
+	std::extreme_value_distribution<double> EV1Dist(0,1.0);
+
+	int thischoice = 1;
+
+	// Draw extreme error value for choice 1
+        double maxval = EV1Dist(mt);
+
+	// See if any of the other choices are larger
+	for (int icat = 1 ; icat < numchoice; icat++) {
+	  double thisval = expres[icat-1] + EV1Dist(mt);
+	  if (thisval > maxval ) {
+	    maxval = thisval;
+	    thischoice = icat+1;	    
+	  }
+	}
+
+	fprintf(pFile,", %10d",thischoice);
+	simresult = Double_t(thischoice);
       }
       else if (modtype==4) {
-	Double_t eps = gRandom->Gaus(0.0,1.0);
+	//	Double_t eps = gRandom->Gaus(0.0,1.0);
 	//	if (detailsim) fprintf(pFile,", %10.5f",prb);
-	fprintf(pFile,", %10.5f",eps);
+
+	double threshold[2];
+	for (int ichoice = 1 ; ichoice < numchoice; ichoice++) {
+	  
+	  threshold[0] = param[firstpar+nregressors+ifreefac];
+	  threshold[1] = param[firstpar+nregressors+ifreefac];
+	  for (int icat = 2 ; icat <= ichoice ; icat++) {
+	    if (icat<ichoice) threshold[0] += abs(param[firstpar+nregressors+ifreefac+icat-1]);
+	    if (icat<numchoice) threshold[1] += abs(param[firstpar+nregressors+ifreefac+icat-1]);
+	  }
+	  double CDF[2] = {0.0, 1.0};
+
+	  if (ichoice>1) {
+	    CDF[0] = ROOT::Math::normal_cdf(threshold[0] - expres[0]);
+	  }
+	  if (ichoice<numchoice) {
+	    CDF[1] = ROOT::Math::normal_cdf(threshold[1] - expres[0]);
+	  }
+
+	  //Print out probability of this choice
+	  fprintf(pFile,", %10.5f",CDF[1] - CDF[0]);
+	}
+
+	Double_t eps = gRandom->Gaus(0.0,1.0);
 	Int_t choice = 1;
-	Double_t threshold = param[firstpar+nregressors+ifreefac];
+	Double_t thisthreshold = param[firstpar+nregressors+ifreefac];
 	for (int icat = 2 ; icat < numchoice ; icat++) { 
-	  if ( (expres[0]+eps > threshold) && (expres[0]+eps < threshold + abs(param[firstpar+nregressors+ifreefac+icat-1])) ){ 
+	  if ( (expres[0]+eps > thisthreshold) && (expres[0]+eps < thisthreshold + abs(param[firstpar+nregressors+ifreefac+icat-1])) ){ 
 	    choice = icat;
 	  }
-	  threshold += abs(param[firstpar+nregressors+ifreefac+icat-1]);
+	  thisthreshold += abs(param[firstpar+nregressors+ifreefac+icat-1]);
 	}
-	if (expres[0]+eps > threshold) choice = numchoice;
+	if (expres[0]+eps > thisthreshold) choice = numchoice;
 
 	fprintf(pFile,", %10d",choice);
 	simresult = Double_t(choice);
