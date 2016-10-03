@@ -5244,6 +5244,7 @@ void TMinLkhd::PrintParamTab(int pmod) {
   // make vector of parameters used in any of the models
     vector<Int_t> varuse;
     UInt_t linmodel = 0;
+    int oprob_nchoice = 0;
     // print models
     //    printf("%18s: ","Models");
     for (UInt_t imod = firstmod ; imod < lastmod ; imod++) {
@@ -5257,6 +5258,11 @@ void TMinLkhd::PrintParamTab(int pmod) {
 	if (varincluded==0) varuse.push_back(regs.at(ireg));
       }
       if (models[imod].GetType()==1) linmodel = 1;
+      if (models[imod].GetType()==4) {
+	if (oprob_nchoice < models[imod].GetNchoice()) {
+	  oprob_nchoice = models[imod].GetNchoice();
+	}
+      }
     }
     //    printf("\\\\ \n");
     //Print regressors
@@ -5325,6 +5331,33 @@ void TMinLkhd::PrintParamTab(int pmod) {
       fprintf(pFile,"\\\\ \n");
     }
 
+    //Print ordered probit thresholds
+    if (oprob_nchoice>0) {
+      for (int ithresh = 1 ; ithresh < oprob_nchoice ; ithresh++) {
+	printf("Threshold %2d       ",ithresh);
+	fprintf(pFile,"Threshold %2d       ",ithresh);
+
+	for (UInt_t imod = firstmod ; imod < lastmod ; imod++) {
+	  
+	  int nchoice = 1;
+	  if (models[imod].GetType()==3) nchoice = models[imod].GetNchoice()-1;
+	  for (int ichoice = 0 ; ichoice < nchoice ; ichoice++) {
+	    if ((models[imod].GetType()==4)&& (models[imod].GetNchoice()>ithresh) ) {
+	      Int_t parnum = fparam_models[imod]+models[imod].GetReg().size() + nfacparam.at(imod-firstmod)+ithresh-1;
+	      printf("& %8.3f & %8.3f ",param[parnum],param_err[parnum]);
+	      fprintf(pFile,"& %8.3f & %8.3f ",param[parnum],param_err[parnum]);
+	    }
+	    else {
+	      printf("& %8s & %8s ","","");
+	      fprintf(pFile,"& %8s & %8s ","","");
+	    }
+	  }
+	}
+	printf("\\\\ \n");
+	fprintf(pFile,"\\\\ \n");
+      }
+    }
+
     //Print precision
     if (linmodel==1) {
       printf("%18s ","1/Precision");
@@ -5340,8 +5373,8 @@ void TMinLkhd::PrintParamTab(int pmod) {
 	    fprintf(pFile,"& %8.3f & %8.3f ",param[parnum],param_err[parnum]);
 	  }
 	  else {
-	    printf("%8s  %8s  ","","");
-	    fprintf(pFile,"%8s  %8s  ","","");
+	    printf("& %8s & %8s ","","");
+	    fprintf(pFile,"& %8s & %8s ","","");
 	  }
 	}
       }
