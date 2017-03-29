@@ -333,3 +333,8 @@ void MINLKHD_NLP::finalize_solution(SolverReturn status,
 void MINLKHD_NLP::getparam(double * thisparam) { 
   for (UInt_t ipar = 0; ipar < finalparam.size() ; ipar++) thisparam[ipar] = finalparam[ipar];
 }
+
+
+void MINLKHD_NLP::restart(double nudge) { 
+  for (UInt_t ipar = 0; ipar < finalparam.size() ; ipar++) Xinit[ipar] = finalparam[ipar]*nudge;
+}

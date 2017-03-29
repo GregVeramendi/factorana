@@ -1,10 +1,10 @@
 #!/bin/sh -ex
 make distclean
 
-mpicxx -O2 -Wall -fPIC -pthread -m64 -I$ROOTSYS/include -I../include -c -o probmain.o probmain.cc
-mpicxx -O2 -Wall -fPIC -pthread -m64 -I$ROOTSYS/include -I../include -c -o probmain_mpi.o probmain_mpi.cc
-mpicxx -O2 -Wall -fPIC -pthread -m64 -I$IPOPTDIR/include/coin -I../include -I$ROOTSYS/include -c -o TMinLkhd.o TMinLkhd.cc
-mpicxx -O2 -Wall -fPIC -pthread -m64 -I$IPOPTDIR/include/coin -I../include -I$ROOTSYS/include -c -o minlkhd_nlp.o minlkhd_nlp.cc
-mpicxx -O2 -Wall -fPIC -pthread -m64 -I../include -I$ROOTSYS/include -c -o TModel.o TModel.cc
-mpicxx -O2 -Wall -fPIC -pthread -m64 -c -o gaushermite.o gaushermite.C
-mpicxx -O2 -Wall -fPIC -pthread -m64 -I$ROOTSYS/include -c -o BitFunc.o BitFunc.cc
+mpicxx -std=c++11 -O2 -Wall -fPIC -pthread -m64 -I$ROOTSYS/include -I../include -c -o probmain.o probmain.cc
+mpicxx -std=c++11 -O2 -Wall -fPIC -pthread -m64 -I$ROOTSYS/include -I../include -c -o probmain_mpi.o probmain_mpi.cc
+mpicxx -std=c++11 -O2 -Wall -fPIC -pthread -m64 -I$IPOPTDIR/include/coin -I../include -I$ROOTSYS/include -c -o TMinLkhd.o TMinLkhd.cc
+mpicxx -std=c++11 -O2 -Wall -fPIC -pthread -m64 -I$IPOPTDIR/include/coin -I../include -I$ROOTSYS/include -c -o minlkhd_nlp.o minlkhd_nlp.cc
+mpicxx -std=c++11 -O2 -Wall -fPIC -pthread -m64 -I../include -I$ROOTSYS/include -c -o TModel.o TModel.cc
+mpicxx -std=c++11 -O2 -Wall -fPIC -pthread -m64 -c -o gaushermite.o gaushermite.C
+mpicxx -std=c++11 -O2 -Wall -fPIC -pthread -m64 -I$ROOTSYS/include -c -o BitFunc.o BitFunc.cc

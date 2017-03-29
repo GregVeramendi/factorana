@@ -6,6 +6,7 @@
 #include "TString.h"
 #include <vector>
 #include <iostream>
+#include <random>
 
 class TModel : public TNamed {
    
@@ -26,8 +27,11 @@ private:
   Bool_t ignore;
 
   Double_t simresult;
-  Int_t endogReg;
-  UInt_t endogModel;
+  std::vector<Int_t> endogRegList;
+  std::vector<Int_t> endogModelList;
+  std::vector<Int_t> endogChoiceList;
+
+  //static std::mt19937 mt{std::random_device{}()};
 
   public:
   TModel() {};
@@ -53,9 +57,9 @@ private:
   UInt_t GetDetailSim() {return detailsim;}
   Double_t GetSimResult() {return simresult;}
 
-
-  void SetEndogenousReg(UInt_t endModel, std::vector<TModel> & models);
-  Int_t GetEndogenousReg() {return endogReg;}
+  void SetEndogenousReg(UInt_t endModel, std::vector<TModel> & models,std::vector<TString> & vartab);
+  //  void SetEndogenousMajor(UInt_t endModel, std::vector<TModel> & models, std::vector<TString> & vartab);
+  std::vector<Int_t> GetEndogenousReg() {return endogRegList;}
   void SplitSim(UInt_t ivar);
   void PrintModel(std::vector<TString> vartab);
   void Eval(UInt_t iobs_offset, const std::vector<Double_t> & data, const std::vector<Double_t> & param, UInt_t firstpar, const std::vector <Double_t> & fac, std::vector<Double_t> & modeval, std::vector<Double_t> & hess, Int_t gradflag);

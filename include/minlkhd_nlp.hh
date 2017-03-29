@@ -97,6 +97,7 @@ public:
   //@}
 
   void getparam(double * thisparam);
+  void restart(double nudge);
 
 
   // Parameters of model:

@@ -203,6 +203,7 @@ void TMinLkhd::ClearDataMembers() {
   models.clear();
   param.clear();
   param_err.clear();
+  param_fixval.clear();
   parfixed.clear();
   parconstrained.clear();
   skipobs.clear();
@@ -572,6 +573,7 @@ void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, 
 
   nparam += nparam_thismodel;
   parconstrained.resize(nparam,-1);
+  param_fixval.resize(nparam,-9999.0);  
 }
 
 void TMinLkhd::ConstrainFactorCorrelations() { 
@@ -611,22 +613,9 @@ void TMinLkhd::ConstrainLastFactorLoadingToModel(const UInt_t targetmod, UInt_t 
 
 
 void TMinLkhd::LastModel_SetEndogenousReg(UInt_t modelN) {
-  //Find model pointer
-//    TModel * endogModel = NULL;
-//  if (modelN<models.size()) {
-//    endogModel = &(models[modelN]);
-//  }
-//  else {
-//    cout << "***Error in TMinLkhd::LastModel_SetEndogenousReg*** Model number is bigger than the size of the model array!" << endl;
-//    assert(0);
-//  }
-//
-  //  if (cpurank==0) cout << "Model "<< endogModel->GetTitle() 
-  //		       << " being set as endogenous covariate in model " 
-  //		       << models.back().GetTitle() << endl;
 
   if (modelN<models.size()) {
-    models.back().SetEndogenousReg(modelN,models);  
+    models.back().SetEndogenousReg(modelN,models,var_table);  
   }
   else {
     cout << "***Error in TMinLkhd::LastModel_SetEndogenousReg*** Model number is bigger than the size of the model array!" << endl;
@@ -634,6 +623,78 @@ void TMinLkhd::LastModel_SetEndogenousReg(UInt_t modelN) {
   }
 
 }
+
+void TMinLkhd::LastModel_FixParamValue(TString fixvar, double value, int choice) {
+
+  if (models.size()==0) {
+    cout << "***Error in TMinLkhd::LastModel_FixParamValue*** Add Models first!" << endl;
+    assert(0);
+  }
+  int thismodel = models.size() - 1;
+
+
+  // Check that choice is not greater than nchoice
+  int choice_offset = 0; // Only need to change if multinomial logit
+
+  if ( (models[thismodel].GetType()==3) && (models.back().GetNchoice()>2) ) {
+    if ( (choice>1) && (choice <= models[thismodel].GetNchoice()) ) choice_offset = choice-2;
+    else {
+      cout << "***Error in TMinLkhd::LastModel_FixParamValue(" << models[thismodel].GetName() << ")*** choice "
+	   << choice  << " is larger than nchoice=" << models[thismodel].GetNchoice()
+	   << ". Maybe a typo??"
+	   << endl;
+      assert(0);
+    }
+  }
+
+
+  // Get var number:
+  int fixvarnum = -9999;
+  for (UInt_t ivar = 0 ; ivar < nvar ; ivar++) {
+    if (!fixvar.CompareTo(var_table.at(ivar))) {
+      fixvarnum = ivar;
+      break;
+    }
+  }
+  if (fixvarnum==-9999) {
+    cout << "***Error in TMinLkhd::LastModel_FixParamValue(" << models[thismodel].GetName() << ")*** Could not find the variable " 
+	 << fixvar.Data()  << " in the list of variables. Maybe a typo??"
+	 << endl;
+    assert(0);
+  }
+
+  //Find modparoffset
+  int modparoffset = -9999;
+  vector <Int_t> regs = models[thismodel].GetReg();
+  for (Int_t ireg =  0; ireg <  models[thismodel].GetNreg() ; ireg++) {
+    if (regs.at(ireg) == fixvarnum) {
+      modparoffset = ireg;
+      break;
+    }
+  }
+  if (modparoffset==-9999) {
+    cout << "***Error in TMinLkhd::LastModel_FixParamValue(" << models[thismodel].GetName() << ")*** Could not find the variable " 
+	 << fixvar.Data()  << " in the list of regressors. Maybe a typo??"
+	 << endl;
+    assert(0);
+  }
+
+  int fixparam = fparam_models[thismodel] + choice_offset*(models[thismodel].GetNreg()+nfac) + modparoffset;
+  FixParamValue(fixparam,value);
+
+}
+
+//void TMinLkhd::LastModel_SetEndogenousMajor(UInt_t modelN) {
+//
+//  if (modelN<models.size()) {
+//    models.back().SetEndogenousMajor(modelN,models,var_table);  
+//  }
+//  else {
+//    cout << "***Error in TMinLkhd::LastModel_SetEndogenousReg*** Model number is bigger than the size of the model array!" << endl;
+//    assert(0);
+//  }
+//}
+
 
 void TMinLkhd::LastModel_Splitsim(TString splitvar) {
 
@@ -671,10 +732,19 @@ void TMinLkhd::ResetFitInfo() {
     parfixed.resize(nparam,0);
   }
 
-  //  printf("***TMinLkhd::ResetFitInfo() with %d parameters \n",param.size());
+  // Set parameters that are permanently fixed
+  for (UInt_t ipar = 0 ; ipar < nparam ; ipar++) {
+    if (param_fixval.at(ipar)>-9998.0) {
+      param.at(ipar) = param_fixval.at(ipar);
+      param_err.at(ipar) = -9999.0;
+      parfixed.at(ipar) = 2;
+      nfreeparam--;
+    }
+  }
+  //  printf("***TMinLkhd::ResetFitInfo() with %d parameters and %d free.\n",param.size(),nfreeparam);
 
 
-  //Remove chains of constraints from parfixed
+  //Remove chains of constraints from parconstrained
   for (UInt_t i = 0 ; i < nparam ; i++) {
     if (parconstrained.at(i)>-1) {
       Int_t target = parconstrained.at(i);
@@ -813,26 +883,28 @@ void TMinLkhd::ResetFitInfo() {
       Int_t offset = imix*(f_nvariance + nfac + 1);
       //variances
       for (UInt_t ivar = 0; ivar < f_nvariance ; ivar++) {
-	if (ivar < nfac) {
- 	  param[offset + ivar] = 1.0;
-	  param_err[offset+ivar] = 0.5;
+
+	// Set param only if it isn't fixed
+	  if (ivar < nfac) {
+	    Setparam(offset + ivar,1.0);
+	    Setparam_err(offset+ivar, 0.5);
+	  }
+	  else {
+	    Setparam(offset + ivar, 0.2);
+	    Setparam_err(offset + ivar, 0.1);
+	  }
 	}
-	else {
-	  param[offset + ivar] = 0.2;
-	  param_err[offset + ivar] = 0.1;
- 	}
-      }
 
       if (imix < fac_nmix-1) {
 	// means
 	for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {
-	  param[offset + f_nvariance + ifac] = 0.5;
-	  param_err[offset + f_nvariance + ifac] = 0.1;
+	  Setparam(offset + f_nvariance + ifac,  0.5);
+	  Setparam_err(offset + f_nvariance + ifac,  0.1);
 	}
 	
 	// weights: =0.0 means all equally weighted
-	param[offset + f_nvariance + nfac] = 0.0;
-	param_err[offset + f_nvariance + nfac] = 0.1;
+	  Setparam(offset + f_nvariance + nfac, 0.0);
+	  Setparam_err(offset + f_nvariance + nfac, 0.1);
       }
     }
   }
@@ -849,7 +921,24 @@ void TMinLkhd::ResetFitInfo() {
   for (UInt_t ifac =0; ifac < nfac; ifac++) {
     if (norm_models.at(ifac) == -1) {
       cout << "Factor #" << ifac << "is not normalized!\n";
-      assert(0);
+
+      if (fac_nmix>1) {
+	printf("Not able to use mixtures without normalizing a loading\n");
+	assert(0);
+      }
+      else {
+	// If using normal distribution fix variance to 1.0:
+	printf("Fixing variance to 1.0 for factor #%d\n",ifac);
+	param_fixval.at(ifac) = 1.0;
+	param.at(ifac) = 1.0;
+	param_err.at(ifac) = -9999.0;
+	parfixed.at(ifac) = 2;
+	nfreeparam--;
+
+	fnorm.at(ifac) = 1.0;
+	normout_mn.at(ifac) = 0.0;
+      }
+      //      assert(0);
     }
     else {
       fnorm.at(ifac) = (models.at(norm_models.at(ifac)).GetNorm()).at(ifac);
@@ -909,7 +998,7 @@ void TMinLkhd::ResetFitInfo() {
 	}
 	else {
 	  if (data.at(iobs*nvar + models[imod].GetMissing())==1) {
-	    double outcome = data.at(iobs*nvar + models[imod].GetOutcome());
+	    outcome = data.at(iobs*nvar + models[imod].GetOutcome());
 	    if ((nchoice>2)&&(models[imod].GetType()==3)) outcome = (outcome==ichoice);
 	    sumdt += outcome;
 	    sumdtsq += outcome*outcome;
@@ -920,14 +1009,16 @@ void TMinLkhd::ResetFitInfo() {
 	// Get covariances between normalized model(s) and outcome
 	if (ncount>lastcount) {
 	  for (UInt_t ifac = 0 ; ifac < nfac; ifac++) {
-	    if (models.at(norm_models.at(ifac)).GetMissing()==-1) {
-	      sumnormout.at(ifac) += outcome*data.at(iobs*nvar + models[norm_models.at(ifac)].GetOutcome());
-	      normoutcount.at(ifac)++;
-	    }
-	    else {
-	      if (data.at(iobs*nvar + models.at(norm_models.at(ifac)).GetMissing())==1) {
+	    if (norm_models.at(ifac) != -1) {
+	      if (models.at(norm_models.at(ifac)).GetMissing()==-1) {
 		sumnormout.at(ifac) += outcome*data.at(iobs*nvar + models[norm_models.at(ifac)].GetOutcome());
 		normoutcount.at(ifac)++;
+	      }
+	      else {
+		if (data.at(iobs*nvar + models.at(norm_models.at(ifac)).GetMissing())==1) {
+		  sumnormout.at(ifac) += outcome*data.at(iobs*nvar + models[norm_models.at(ifac)].GetOutcome());
+		  normoutcount.at(ifac)++;
+		}
 	      }
 	    }
 	  }
@@ -979,14 +1070,15 @@ void TMinLkhd::ResetFitInfo() {
 	Double_t covsign = (sumoutreg/ncount - reg_mn*outcome_mn < 0) ? -1.0 : 1.0;
 	
 	// Set intercept or beta0
-	if (reg_sd<0.01) {
-	  //	printf("Setting par%d=%f\n",ipar,outcome_mn/reg_mn);
-	  if (fabs(reg_mn)>0.01) param[ipar] = outcome_mn/reg_mn;
-	  else param[ipar] = 1.0;
-	}
-	else param[ipar] = covsign*outcome_sd/reg_sd/regs.size();
-	param_err[ipar] = 0.5*fabs(param[ipar]);
-	if (param_err[ipar]<0.1*outcome_sd/regs.size()) param_err[ipar]=0.1*outcome_sd/regs.size(); 
+	  if (reg_sd<0.01) {
+	    //	printf("Setting par%d=%f\n",ipar,outcome_mn/reg_mn);
+	    if (fabs(reg_mn)>0.01) Setparam(ipar, loadingMultiplier*outcome_mn/reg_mn);
+	    else Setparam(ipar, 1.0);
+	  }
+	  else Setparam(ipar, loadingMultiplier*covsign*outcome_sd/reg_sd/regs.size());
+	  Setparam_err(ipar, 0.5*fabs(param[ipar]));
+	  if (param_err[ipar]<0.1*outcome_sd/regs.size()) Setparam_err(ipar, 0.1*outcome_sd/regs.size());
+
 	ipar++;
       }
       
@@ -994,31 +1086,31 @@ void TMinLkhd::ResetFitInfo() {
       vector <Double_t> thisnorm = models[imod].GetNorm();
       for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {
 	if (thisnorm.size()==0) {
-	  param[ipar] = loadingMultiplier*facloadsign.at(ifac);
-	  param_err[ipar] = 0.01;
+	  Setparam(ipar, loadingMultiplier*facloadsign.at(ifac));
+	  Setparam_err(ipar, 0.01);
 	  ipar++;
 	}
 	else {
 	  if (thisnorm.at(ifac)<-9998) {
-	    param[ipar] = loadingMultiplier*facloadsign.at(ifac);
-	    param_err[ipar] = 0.01;
+	    Setparam(ipar, loadingMultiplier*facloadsign.at(ifac));
+	    Setparam_err(ipar, 0.01);
 	    ipar++;
 	  }
 	}
       }
       if (models[imod].GetType()==1) {
-	param[ipar] = outcome_sd;
-	param_err[ipar] = 0.5*outcome_sd;
+	Setparam(ipar, outcome_sd);
+	Setparam_err(ipar, 0.5*outcome_sd);
 	ipar++;
       }
       if (models[imod].GetType()==4) {
-	param[ipar] = -2.0 + 4.0/double(models[imod].GetNchoice());
-	param_err[ipar] = 1.0;
+	Setparam(ipar, -2.0 + 4.0/double(models[imod].GetNchoice()));
+	Setparam_err(ipar, 1.0);
 	ipar++;
 	
 	for (int ithresh = 2 ; ithresh < models[imod].GetNchoice() ; ithresh++) {
-	  param[ipar] = 4.0/double(models[imod].GetNchoice());
-	  param_err[ipar] = 1.0;
+	  Setparam(ipar, 4.0/double(models[imod].GetNchoice()));
+	  Setparam_err(ipar, 1.0);
 	  ipar++;
 	}
       }
@@ -1069,9 +1161,9 @@ Int_t TMinLkhd::TestCode(Int_t printlevel) {
 	assert(0);
       }
       printf("%4d %8.4f %8.4f\n",parnum,lastpar,lastpar_err);
-      
-      param[i] = lastpar;
-      param_err[i] = lastpar_err;
+ 
+      Setparam(i, lastpar);
+      Setparam_err(i, lastpar_err);
     }
     in1.close();
   }
@@ -1700,7 +1792,7 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
   for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
     if ((models[imod].GetGroup()==1)&&(first_outmodel==-1)) first_outmodel = imod;
   }
-
+  
   //Ignore all outcome models in first stage and fix their parameters
   if (first_outmodel!=-1) {
     for (UInt_t imod = first_outmodel ; imod < models.size() ; imod++) SetIgnoreMod(imod);
@@ -1709,10 +1801,10 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
   }
   
   if (first_outmodel==-1) first_outmodel = models.size();
-
+  
   //**** NEED TO FIX THIS ALSO
-
-//Make factor loading list (for all models?)
+  
+  //Make factor loading list (for all models?)
   vector<Bool_t> factorloadinglist(num_param,0);
   for (Int_t imod = 0 ; imod < first_outmodel ; imod++) {
     int nchoice = 1; // In this case we don't need to do anything special even if it is logit
@@ -1729,7 +1821,7 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
       }
     }
   }
-
+  
 
   // Read in initial values. If init_par.txt exists, use that.
   // If bootstrapping or subsampling get "fullmodel_par.txt"
@@ -1753,14 +1845,15 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
 	assert(0);
       }
       //      printf("%4d %8.4f %8.4f\n",parnum,lastpar,lastpar_err);
+
       
       if ((factorloadinglist.at(i)==1)&&(initFixedLoadings==0)) {
-	param[i] = lastpar*loadingMultiplier;
-	param_err[i] = lastpar_err;
+	Setparam(i, lastpar*loadingMultiplier);
+	Setparam_err(i, lastpar_err);
       }
       else if (factorloadinglist.at(i)==0) {
-	param[i] = lastpar;
-	param_err[i] = lastpar_err;
+	Setparam(i, lastpar);
+	Setparam_err(i, lastpar_err);
       }
     }
     in1.close();
@@ -1769,7 +1862,7 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
     cout << "Problem reading fullmodel parameter values\n";
     assert(0);
   }
-
+  
   //  if ( (!fexist(filename.Data())) || (initBetaOLS==1) ) {
   if (initBetaOLS==1) {
     cout << "running individual regressions for initial parameters...\n";
@@ -1782,13 +1875,13 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
     for (Int_t imod = 0 ; imod < first_outmodel ; imod++) {
       cout << "**************Minimizing Model #" << imod << "\n";
       RemoveIgnoreMod(imod);
-
+      
       for (Int_t i = 0 ; i < num_param ; i++) {
 	if ((i<firstpar) || (i>=firstpar+models[imod].GetNreg())) FixPar(i);// parfixed[i]=1;
 	else ReleasePar(i); //parfixed[i]=0;
       }
       if (models[imod].GetType()==1) ReleasePar(firstpar+nparam_models[imod]-1); 
-
+      
       if ( (models[imod].GetType()==3) && (models[imod].GetNchoice()>2) ) {
 	for (int ichoice = 1 ; ichoice < models[imod].GetNchoice()-1 ; ichoice++) {
 	  for (Int_t i =  0; i <  models[imod].GetNreg() ; i++) {
@@ -1798,8 +1891,8 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
       }
       if (models[imod].GetType()==4) {
 	for (Int_t i = 0 ; i < models[imod].GetNchoice()-1 ; i++) {
-	    ReleasePar(firstpar+nparam_models[imod]-1-i); 
-	  }
+	  ReleasePar(firstpar+nparam_models[imod]-1-i); 
+	}
       }
       //     ierflg = Min_Minuit(-1);
       if (printlvl>0) {
@@ -1818,8 +1911,8 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
     for (Int_t i = 0 ; i < num_param ; i++) ReleasePar(i); //parfixed[i] = 0;
     
   }
-
-
+  
+  
   if (printlvl>0) cout << endl << "********Initial parameter values:" << endl;
   if (printlvl>0) PrintParam(0);
   for (Int_t ipar = 0 ; ipar < num_param ;ipar++) thisparam[ipar] = param[ipar];
@@ -1830,7 +1923,7 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
   
   timer.Reset();
   timer.Start();
-
+  
   if ((EstSequentMix == 1) && (fac_nmix!=1)) {
     cout << "\n**********Estimating mixtures sequentially*********\n";
     cout << "\n ****Estimating with 1 mixture:\n";
@@ -1852,11 +1945,12 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
       finallkhds[0] = fvalue;
       
       SetEstNMix(2);
-      for (UInt_t ivar = 0 ; ivar < f_nvariance ; ivar++)
-	param[Getifvar(1,ivar)] = Getfvar(0,ivar);
-      
-      for (UInt_t ifac = 0 ; ifac < nfac ; ifac++)
-	param[Getifmean(0,ifac)] = 0.5*Getfvar(0,ifac);
+      for (UInt_t ivar = 0 ; ivar < f_nvariance ; ivar++) {
+	Setparam(Getifvar(1,ivar), Getfvar(0,ivar));
+      }
+      for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {
+	Setparam(Getifmean(0,ifac), 0.5*Getfvar(0,ifac));
+      }
       
       cout << "\n ****Estimating with 2 mixtures:\n";
       if (printlvl>0) cout << endl << "********Initial parameter values:" << endl;
@@ -1865,7 +1959,7 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
        if (fac_corr!=0) {
  	cout << "\n ****First we will fix the correlations\n";
 	//First we need to send parameters to all the nodes. Yes this is kludgy:
-	for (Int_t ipar = 0 ; ipar < num_param ;ipar++) thisparam[ipar] = param[ipar];
+	for (Int_t ipar = 0 ; ipar < num_param ;ipar++) thisparam[ipar] =  param[ipar];
 	LkhdFcn(num_param,grad,fvalue,thisparam,1);
 
  	for (UInt_t imix = 0 ; imix < 2; imix++) FixPar(Getifvar(imix,2));
@@ -1891,8 +1985,8 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
 	  
 	  SetEstNMix(3);
 	  for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {
-    param[Getifvar(2,ifac)] = (Getfvar(0,ifac) > Getfvar(1,ifac)) ? Getfvar(0,ifac) : Getfvar(1,ifac);
-	    param[Getifmean(1,ifac)] = -1.0*Getfmean(0,ifac);
+	    Setparam(Getifvar(2,ifac),  (Getfvar(0,ifac) > Getfvar(1,ifac)) ? Getfvar(0,ifac) : Getfvar(1,ifac));
+	    Setparam(Getifmean(1,ifac),  -1.0*Getfmean(0,ifac));
 	  }
 	  
 	  cout << "\n ****Estimating with 3 mixtures:\n";
@@ -2046,8 +2140,8 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
       }
       //      printf("%4d %8.4f %8.4f\n",parnum,lastpar,lastpar_err);
       
-      param[i] = lastpar;
-      param_err[i] = lastpar_err;
+      Setparam(i, lastpar);
+      Setparam_err(i, lastpar_err);
     }
     in1.close();
   }
@@ -2061,15 +2155,23 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
   Double_t * thisparam = new Double_t[nparam];
   Double_t * grad = new Double_t[nparam];
 
-  Int_t num_param = nparam;
 
   if (first_outmodel!=-1) {
     for (UInt_t imod = first_outmodel ; imod < models.size() ; imod++) SetIgnoreMod(imod);
     for (UInt_t i = fparam_models[first_outmodel] ; i < nparam ; i++) FixPar(i);
-    num_param = fparam_models[first_outmodel];
   }
-  for (Int_t ipar = 0 ; ipar < num_param ;ipar++) thisparam[ipar] = param[ipar];
-  LkhdFcn(num_param,grad,fvalue,thisparam,1);
+
+  Int_t ifreepar = 0;
+  for (UInt_t ipar = 0 ; ipar < nparam ;ipar++) {
+    if (parfixed[ipar]==0) {
+      thisparam[ifreepar] = param[ipar];
+      ifreepar++;
+    }
+  }
+
+
+  cout << "Calculating likelihood of measurement system..." << endl;
+  LkhdFcn(ifreepar,grad,fvalue,thisparam,1);
   cout << "Measurement system Likelihood=" << fvalue << endl;
 
   for (UInt_t imod = 0 ; imod < models.size() ; imod++) RemoveIgnoreMod(imod);
@@ -2151,7 +2253,7 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
       EstGroup_lkhd.push_back(-9999.0);
     }
     else {  
-      Int_t ifreepar = 0;
+      ifreepar = 0;
       for (UInt_t ipar = 0 ; ipar < nparam ;ipar++) {
 	if (parfixed[ipar]==0) {
 	  thisparam[ifreepar] = param[ipar];
@@ -2246,8 +2348,8 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
       }
       //      printf("%4d %8.4f %8.4f\n",parnum,lastpar,lastpar_err);
       
-      param[i] = lastpar;
-      param_err[i] = lastpar_err;
+      Setparam(i, lastpar);
+      Setparam_err(i, lastpar_err);
     }
     in1.close();
   }
@@ -2257,8 +2359,10 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
   }
 
   PrintParam();
-  if ((nsubsamples==0)&&(nbootsamples==0)) PrintParamTab();
-
+  if ((nsubsamples==0)&&(nbootsamples==0)) {
+    PrintParamTab();
+    PrintParam_Varlist();
+  }
   TRandom *r3 = new TRandom3();
   gRandom = r3;
   
@@ -2356,41 +2460,53 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
     fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_miss"))).Data());
     nsimvar++;
 
-    int nlogitchoice = 2;
-    if (models[imod].GetType()==3) nlogitchoice = models[imod].GetNchoice();
+    if (models[imod].GetDetailSim()) {
+      int nlogitchoice = 2;
+      if (models[imod].GetType()==3) nlogitchoice = models[imod].GetNchoice();
 
-    // If it is a multinomial logit model we need to produce nchoice-1 * V and shprob variables
-    for (int ichoice = 2 ; ichoice <= nlogitchoice ; ichoice++) {
+      // If it is a multinomial logit model we need to produce nchoice-1 * V and shprob variables
+      for (int ichoice = 2 ; ichoice <= nlogitchoice ; ichoice++) {
       
-      // Only want this more than once if it is a multinomial logit model
-      if ( ( (models[imod].GetType()==3) || (ichoice==2) ) && (models[imod].GetDetailSim())) {
-	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vobs"))).Data());
-	if ((models[imod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
-	nsimvar +=1;
-
-	if (models[imod].GetEndogenousReg()!=-9999) {
-	  fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vend"))).Data());
+	// Only want this more than once if it is a multinomial logit model
+	if ( (models[imod].GetType()==3) || (ichoice==2) ) {
+	  fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vobs"))).Data());
 	  if ((models[imod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
 	  nsimvar +=1;
-	}
+
+	  if (models[imod].GetEndogenousReg().size()>0) {
+	    fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vend"))).Data());
+	    if ((models[imod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
+	    nsimvar +=1;
+	  }
 	
-	for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
-	  fprintf(pFile,", %s%d",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vfac"))).Data(),ifac);
+	  for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
+	    fprintf(pFile,", %s%d",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vfac"))).Data(),ifac);
+	    if ((models[imod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
+	    nsimvar +=1;
+	  }
+	}
+      }
+
+      // If it is a multinomial logit model we need to produce nchoice - 1 eps variables
+      for (int ichoice = 2 ; ichoice <= nlogitchoice ; ichoice++) {
+	// Only want this more than once if it is a multinomial logit model
+	if ( (models[imod].GetType()==3) || (ichoice==2) ) {
+	  fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_eps"))).Data());
 	  if ((models[imod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
 	  nsimvar +=1;
 	}
-
       }
     }
 
-    // If it is any multinomial model we need to produce nchoice-1 shprob variables
-    int nchoice = 2;
-    if ((models[imod].GetType()==3) || (models[imod].GetType()==4)) nchoice = models[imod].GetNchoice();
+    // If it is a discrete choice model we need to produce nchoice-1 prob variables
+    if ((models[imod].GetType()==2) || (models[imod].GetType()==3) || (models[imod].GetType()==4)) {
 
-    for (int ichoice = 2 ; ichoice <= nchoice ; ichoice++) {
-      // generate probabilities for choices in multinomial models
-      if ((models[imod].GetType()==2) || (models[imod].GetType()==3) || (models[imod].GetType()==4) || (models[imod].GetDetailSim())) {
-	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_shprob"))).Data());
+      int nchoice = 2;
+      if ((models[imod].GetType()==3) || (models[imod].GetType()==4)) nchoice = models[imod].GetNchoice();
+
+      for (int ichoice = 2 ; ichoice <= nchoice ; ichoice++) {
+	// generate probabilities for choices in multinomial models
+	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_prob"))).Data());
 	if ( ((models[imod].GetType()==3) || (models[imod].GetType()==4)) && (nchoice>2) ) fprintf(pFile,"_C%1d",ichoice);
 	nsimvar += 1;
       }
@@ -2406,7 +2522,7 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_Vobs"))).Data());
 	nsimvar +=1;
 	
-	if (models[imod].GetEndogenousReg()!=-9999) {
+	if (models[imod].GetEndogenousReg().size()>0) {
 	  fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_Vend"))).Data());
 	  nsimvar +=1;
 	}
@@ -2415,13 +2531,14 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 	  fprintf(pFile,", %s%d",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_Vfac"))).Data(),ifac);
 	  nsimvar +=1;
 	}
-	
-// 	fprintf(pFile,"%s\t",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_Vfac"))).Data());
-// 	nsimvar +=2;
+
+	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_eps"))).Data());
+	nsimvar +=1;
+
       }
       
       if ((models[imod].GetType()==2)||(models[imod].GetDetailSim())) {
-	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_shprob"))).Data());
+	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_prob"))).Data());
 	nsimvar++;
       }
       
@@ -2593,18 +2710,23 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 	    // reject draw
 	    fac_val.clear();
 	    //	    if (ndraws>1000000) {
-	    if (0) {
-	      Int_t ierflg = 0;
-	      ierflg = Min_Ipopt(0);
+	    // if (0) {
+	    //   Int_t ierflg = 0;
+	    //   ierflg = Min_Ipopt(0);
 
-	      printf("***Simulating: Couldn't find factors that pass acceptance sampling! Using factors that maximize the likelihood for observation %d, ",obs_drw);
-	      for (UInt_t ifac = 0; ifac <  nfac; ifac++) {
-		fac_val.at(ifac) = facprediction.at(ifac);
-		printf("fac%d = %8.3f,  ", ifac, fac_val.at(ifac));
-	      }
-	      printf("\n");
-	      acceptdraw=1;
-	    }
+	    //   if (ierflg!=0) {
+	    // 	printf("PREDICT_FACTOR: Failed to minimize factor for observation #%d\n",iobs);
+	    // 	assert(0);
+	    //   }
+
+	    //   printf("***Simulating: Couldn't find factors that pass acceptance sampling! Using factors that maximize the likelihood for observation %d, ",obs_drw);
+	    //   for (UInt_t ifac = 0; ifac <  nfac; ifac++) {
+	    // 	fac_val.at(ifac) = facprediction.at(ifac);
+	    // 	printf("fac%d = %8.3f,  ", ifac, fac_val.at(ifac));
+	    //   }
+	    //   printf("\n");
+	    //   acceptdraw=1;
+	    //	    }
 	  }
 	}
       } // while (!acceptdraw)
@@ -2659,12 +2781,12 @@ Int_t TMinLkhd::PredictFactors(Int_t printlevel) {
 
   TString filename;
   if ((nsubsamples==0)&&(nbootsamples==0)) {
-    filename = TString("fullmodel_par.txt");
+    filename = TString("meas_par.txt");
   }
   else {
     std::stringstream out;
     out << GetCurrentSample();
-    filename = TString("fullmodel_par_").Append(out.str()).Append(".txt");
+    filename = TString("meas_par_").Append(out.str()).Append(".txt");
   }
 
   filename.Prepend(workingdir);
@@ -2688,13 +2810,13 @@ Int_t TMinLkhd::PredictFactors(Int_t printlevel) {
       }
       //      printf("%4d %8.4f %8.4f\n",parnum,lastpar,lastpar_err);
       
-      param[i] = lastpar;
-      param_err[i] = lastpar_err;
+      Setparam(i, lastpar);
+      Setparam_err(i, lastpar_err);
     }
     in1.close();
   }
   else {
-    cout << "***ABORTING: fullmodel_par.txt not found, need values of parameters to simulate!!\n";
+    cout << "***ABORTING: meas_par.txt not found, need values of parameters to simulate!!\n";
     return 1;
   }
 
@@ -2754,7 +2876,7 @@ Int_t TMinLkhd::PredictFactors(Int_t printlevel) {
 Int_t TMinLkhd::Min_Minuit(Int_t printlevel) {
 
   Int_t nfixed = 0;
-  for (UInt_t i = 0 ; i < nparam; i++) nfixed += parfixed[i];
+  for (UInt_t i = 0 ; i < nparam; i++) nfixed += (parfixed.at(i)>0);
 
   cout << "Minimizing " << (nparam-nfixed) << " parameters while fixing " << nfixed << ".\n";
   //  cout << "Super-special counter of free parameters says there are: " << nfreeparam << ".\n";
@@ -2882,35 +3004,35 @@ Int_t TMinLkhd::Min_Minuit(Int_t printlevel) {
     if (parfixed[i]==0) {    
       gMinuit->GetParameter(ipar, thisPar, thisParErr);
       if (i<nfac) {
-	param[i] = fabs(thisPar);
-	param_err[i] = thisParErr;
+	Setparam(i, fabs(thisPar));
+	Setparam_err(i, thisParErr);
       }
       else if ((fac_nmix>1)&&(i>=f_nvariance+nfac+1)&&(i<f_nvariance+nfac+1+nfac)) {
-	param[i] = fabs(thisPar);
-	param_err[i] = thisParErr;
+	Setparam(i, fabs(thisPar));
+	Setparam_err(i, thisParErr);
       }
       else if ((fac_nmix>2)&&(i>=2*(f_nvariance+nfac+1))&&(i<2*(f_nvariance+nfac+1)+nfac)) {
-	param[i] = fabs(thisPar);
-	param_err[i] = thisParErr;
+	Setparam(i, fabs(thisPar));
+	Setparam_err(i, thisParErr);
       }
       // Force sign on means:
       else if ((fac_nmix>1)&&(i>=f_nvariance)&&(i<f_nvariance+nfac)) {
-	param[i] = fabs(thisPar);
-	param_err[i] = thisParErr;
+	Setparam(i, fabs(thisPar));
+	Setparam_err(i, thisParErr);
       }
       else if ((fac_nmix>2)&&(i>=2*f_nvariance+nfac+1)&&(i<2*f_nvariance+nfac+1+nfac)) {
 	//	param[i] = -1.0*fabs(thisPar);
-	if (i==2*f_nvariance+nfac+1) param[i] = -1.0*fabs(thisPar);
-	param_err[i] = thisParErr;
+	if (i==2*f_nvariance+nfac+1) Setparam(i, -1.0*fabs(thisPar));
+	Setparam_err(i, thisParErr);
       }
       else {
-	param[i] = thisPar;
-	param_err[i] = thisParErr;
+	Setparam(i, thisPar);
+	Setparam_err(i, thisParErr);
       }
 
 
-//       param[i] = thisPar;
-//       param_err[i] = thisParErr;
+//       Setparam(i, thisPar);
+//       Setparam_err(i, thisParErr);
       ipar++;
     }
   }
@@ -2950,8 +3072,8 @@ Int_t TMinLkhd::Min_Minuit(Int_t printlevel) {
 //       //      //				  << " + " << thisParPlusErr
 //       //				  << std::endl;
       
-//       param[i] = thisPar;
-//       param_err[i] = thisParErr;
+//       Setparam(i] = thisPar;
+//       Setparam_err(i] = thisParErr;
 //     }
 //     cout << endl << "********Minimized parameter values:" << endl;
 //     PrintParam();
@@ -3186,7 +3308,7 @@ Int_t TMinLkhd::Min_Minuit(Int_t printlevel) {
     
 //     for (UInt_t i = 0 ; i < nparam ; i++) {
 //       if (parfixed[i]==0) {    
-// 	param_err[i] = 0.0;
+// 	Setparam_err(i] = 0.0;
 //       }
 //     }
 //   }
@@ -3312,7 +3434,7 @@ Int_t TMinLkhd::Min_Minuit(Int_t printlevel) {
 
 //     for (UInt_t i = 0 ; i < nparam ; i++) {
 //       if (parfixed[i]==0) {
-// 	param_err[i] = 0.0;
+// 	Setparam_err(i] = 0.0;
 //       }
 //     }
 
@@ -3350,29 +3472,29 @@ Int_t TMinLkhd::Min_Minuit(Int_t printlevel) {
 // 	    if (parfixed[i]==0) {    
 // 	      if (i<nfac) {
 // 		param[i] = fabs(thisparam[ipar]);
-// 		if (invhess(ipar,ipar)>=0) param_err[i] = sqrt(invhess(ipar,ipar));
+// 		if (invhess(ipar,ipar)>=0) Setparam_err(i] = sqrt(invhess(ipar,ipar));
 // 	      }
 // 	      else if ((fac_nmix>1)&&(i>=f_nvariance+nfac+1)&&(i<f_nvariance+nfac+1+nfac)) {
 // 		param[i] = fabs(thisparam[ipar]);
-// 		if (invhess(ipar,ipar)>=0) param_err[i] = sqrt(invhess(ipar,ipar));
+// 		if (invhess(ipar,ipar)>=0) Setparam_err(i] = sqrt(invhess(ipar,ipar));
 // 	      }
 // 	      else if ((fac_nmix>2)&&(i>=2*(f_nvariance+nfac+1))&&(i<2*(f_nvariance+nfac+1)+nfac)) {
 // 		param[i] = fabs(thisparam[ipar]);
-// 		if (invhess(ipar,ipar)>=0) param_err[i] = sqrt(invhess(ipar,ipar));
+// 		if (invhess(ipar,ipar)>=0) Setparam_err(i] = sqrt(invhess(ipar,ipar));
 // 	      }
 // 	      // Force sign on means:
 // 	      else if ((fac_nmix>1)&&(i>=f_nvariance)&&(i<f_nvariance+nfac)) {
 // 		param[i] = fabs(thisparam[ipar]);
-// 		if (invhess(ipar,ipar)>=0) param_err[i] = sqrt(invhess(ipar,ipar));
+// 		if (invhess(ipar,ipar)>=0) Setparam_err(i] = sqrt(invhess(ipar,ipar));
 // 	      }
 // 	      else if ((fac_nmix>2)&&(i>=2*f_nvariance+nfac+1)&&(i<2*f_nvariance+nfac+1+nfac)) {
 // 		param[i] = -1.0*fabs(thisparam[ipar]);
 // 		//if (i==2*f_nvariance+nfac+1) param[i] = -1.0*fabs(thisparam[ipar]);
-// 		if (invhess(ipar,ipar)>=0) param_err[i] = sqrt(invhess(ipar,ipar));
+// 		if (invhess(ipar,ipar)>=0) Setparam_err(i] = sqrt(invhess(ipar,ipar));
 // 	      }
 // 	      else {
 // 		param[i] = thisparam[ipar];
-// 		if (invhess(ipar,ipar)>=0) param_err[i] = sqrt(invhess(ipar,ipar));
+// 		if (invhess(ipar,ipar)>=0) Setparam_err(i] = sqrt(invhess(ipar,ipar));
 // 	      }
 // 	      ipar++;
 // 	    }
@@ -3438,7 +3560,7 @@ Int_t TMinLkhd::Min_Minuit(Int_t printlevel) {
 // 	  else {
 // 	    param[i] = thisparam[ipar];
 // 	  }
-// 	  param_err[i] = CalcStdErrLkhdRatio(i);
+// 	  Setparam_err(i] = CalcStdErrLkhdRatio(i);
 
 // 	  ipar++;
 // 	}
@@ -3477,11 +3599,12 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 	revfreeparlist.at(i) = ifreepar;
 	ifreepar++;
       }
-      nfixed += parfixed.at(i);
+      nfixed += (parfixed.at(i)>0);
     }
 
 
-    if (printlevel>0) printf("Minimizing %d parameters while fixing %d.\n",nparam-nfixed,nfixed);
+    printf("Minimizing %d parameters while fixing %d (nfreeparam=%d).\n",nparam-nfixed,nfixed,nfreeparam);
+    //        if (printlevel>0) printf("Minimizing %d parameters while fixing %d (nfreeparam=%d).\n",nparam-nfixed,nfixed,nfreeparam);
 
     nparam_min = nparam - nfixed;
   }
@@ -3581,7 +3704,7 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
     
     for (UInt_t i = 0 ; i < nparam ; i++) {
       if (parfixed[i]==0) {    
-	param_err[i] = 0.0;
+	Setparam_err(i,  0.0);
       }
     }
   }
@@ -3645,6 +3768,7 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
   //Check gradient:
   //  app->Options()->SetStringValue("derivative_test","second-order");
   app->Options()->SetStringValue("linear_solver", "ma57");
+  //  app->Options()->SetStringValue("linear_solver", "mumps");
 
   //  app->Options()->SetStringValue("hessian_approximation", "limited-memory"); //default is exact
 
@@ -3674,11 +3798,28 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 
   // Ask Ipopt to solve the problem
   status = app->OptimizeTNLP(mynlp);
+  Int_t badstatuscounter = 0;
+  while ((status != Solve_Succeeded)&&(badstatuscounter<6)) {
+
+    printf("IPOPT FAILED WITH STATUS %d, restart %d...\n",status,badstatuscounter);
+    Double_t nudge = 0.9;
+    if (badstatuscounter==1) nudge = 0.8;
+    else if (badstatuscounter==2) nudge = 0.7;
+    else if (badstatuscounter==3) nudge = 0.5;
+    else if (badstatuscounter==4) nudge =  0.1;
+    else if (badstatuscounter==5) nudge =  0.01;
+
+    mynlp->restart(nudge);
+    status = app->OptimizeTNLP(mynlp);
+
+    badstatuscounter++;
+  }
+
   if (status != Solve_Succeeded) {
     std::cout << std::endl << std::endl << "*** Minimization failed with code " << status << std::endl;
     return (int) status;
   }
-
+  
 
 //   status =1 ;
 //   counter = 0;
@@ -3739,7 +3880,7 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 
     for (UInt_t i = 0 ; i < nparam ; i++) {
       if (parfixed[i]==0) {
-	param_err[i] = 0.0;
+	Setparam_err(i,  0.0);
       }
     }
 
@@ -3776,30 +3917,30 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 	  for (UInt_t i = 0 ; i < nparam ; i++) {
 	    if (parfixed[i]==0) {    
 	      if (i<nfac) {
-		param[i] = fabs(thisparam[ipar]);
-		if (invhess(ipar,ipar)>=0) param_err[i] = sqrt(invhess(ipar,ipar));
+		Setparam(i, fabs(thisparam[ipar]));
+		if (invhess(ipar,ipar)>=0) Setparam_err(i, sqrt(invhess(ipar,ipar)));
 	      }
 	      else if ((fac_nmix>1)&&(i>=f_nvariance+nfac+1)&&(i<f_nvariance+nfac+1+nfac)) {
-		param[i] = fabs(thisparam[ipar]);
-		if (invhess(ipar,ipar)>=0) param_err[i] = sqrt(invhess(ipar,ipar));
+		Setparam(i, fabs(thisparam[ipar]));
+		if (invhess(ipar,ipar)>=0) Setparam_err(i, sqrt(invhess(ipar,ipar)));
 	      }
 	      else if ((fac_nmix>2)&&(i>=2*(f_nvariance+nfac+1))&&(i<2*(f_nvariance+nfac+1)+nfac)) {
-		param[i] = fabs(thisparam[ipar]);
-		if (invhess(ipar,ipar)>=0) param_err[i] = sqrt(invhess(ipar,ipar));
+		Setparam(i, fabs(thisparam[ipar]));
+		if (invhess(ipar,ipar)>=0) Setparam_err(i, sqrt(invhess(ipar,ipar)));
 	      }
 	      // Force sign on means:
 	      else if ((fac_nmix>1)&&(i>=f_nvariance)&&(i<f_nvariance+nfac)) {
-		param[i] = fabs(thisparam[ipar]);
-		if (invhess(ipar,ipar)>=0) param_err[i] = sqrt(invhess(ipar,ipar));
+		Setparam(i, fabs(thisparam[ipar]));
+		if (invhess(ipar,ipar)>=0) Setparam_err(i, sqrt(invhess(ipar,ipar)));
 	      }
 	      else if ((fac_nmix>2)&&(i>=2*f_nvariance+nfac+1)&&(i<2*f_nvariance+nfac+1+nfac)) {
-		param[i] = -1.0*fabs(thisparam[ipar]);
-		//if (i==2*f_nvariance+nfac+1) param[i] = -1.0*fabs(thisparam[ipar]);
-		if (invhess(ipar,ipar)>=0) param_err[i] = sqrt(invhess(ipar,ipar));
+		Setparam(i, -1.0*fabs(thisparam[ipar]));
+		//if (i==2*f_nvariance+nfac+1) param[i, -1.0*fabs(thisparam[ipar]));
+		if (invhess(ipar,ipar)>=0) Setparam_err(i, sqrt(invhess(ipar,ipar)));
 	      }
 	      else {
-		param[i] = thisparam[ipar];
-		if (invhess(ipar,ipar)>=0) param_err[i] = sqrt(invhess(ipar,ipar));
+		Setparam(i, thisparam[ipar]);
+		if (invhess(ipar,ipar)>=0) Setparam_err(i, sqrt(invhess(ipar,ipar)));
 	      }
 	      ipar++;
 	    }
@@ -3852,26 +3993,26 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
       for (UInt_t i = 0 ; i < nparam ; i++) {
 	if (parfixed[i]==0) {    
 	  if (i<nfac) {
-	    param[i] = fabs(thisparam[ipar]);
+	    Setparam(i, fabs(thisparam[ipar]));
 	  }
 	  else if ((fac_nmix>1)&&(i>=f_nvariance+nfac+1)&&(i<f_nvariance+nfac+1+nfac)) {
-	    param[i] = fabs(thisparam[ipar]);
+	    Setparam(i, fabs(thisparam[ipar]));
 	  }
 	  else if ((fac_nmix>2)&&(i>=2*(f_nvariance+nfac+1))&&(i<2*(f_nvariance+nfac+1)+nfac)) {
-	    param[i] = fabs(thisparam[ipar]);
+	    Setparam(i, fabs(thisparam[ipar]));
 	  }
 	  // Force sign on means:
 	  else if ((fac_nmix>1)&&(i>=f_nvariance)&&(i<f_nvariance+nfac)) {
-	    param[i] = fabs(thisparam[ipar]);
+	    Setparam(i, fabs(thisparam[ipar]));
 	  }
 	  else if ((fac_nmix>2)&&(i>=2*f_nvariance+nfac+1)&&(i<2*f_nvariance+nfac+1+nfac)) {
-	    param[i] = -1.0*fabs(thisparam[ipar]);
-	    //if (i==2*f_nvariance+nfac+1) param[i] = -1.0*fabs(thisparam[ipar]);
+	    Setparam(i, -1.0*fabs(thisparam[ipar]));
+	    //if (i==2*f_nvariance+nfac+1) param[i] = -1.0*fabs(thisparam[ipar]));
 	  }
 	  else {
-	    param[i] = thisparam[ipar];
+	    Setparam(i, thisparam[ipar]);
 	  }
-	  //	  param_err[i] = CalcStdErrLkhdRatio(i);
+	  //	  Setparam_err(i] = CalcStdErrLkhdRatio(i);
 
 	  ipar++;
 	}
@@ -4224,26 +4365,26 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
     if (parfixed[i]==0) {
       //first force variances positive:
       if (i<nfac) {
-	param[i] = fabs(gamma[ifreepar]);
+	Setparam(i, fabs(gamma[ifreepar]));
       }
       else if ((fac_nmix>1)&&(i>=f_nvariance+nfac+1)&&(i<f_nvariance+nfac+1+nfac)) {
-	param[i] = fabs(gamma[ifreepar]);
+	Setparam(i, fabs(gamma[ifreepar]));
       }
       else if ((fac_nmix>2)&&(i>=2*(f_nvariance+nfac+1))&&(i<2*(f_nvariance+nfac+1)+nfac)) {
-	param[i] = fabs(gamma[ifreepar]);
+	Setparam(i, fabs(gamma[ifreepar]));
       }
       // Force sign on means:
       else if ((fac_nmix>1)&&(i>=f_nvariance)&&(i<f_nvariance+nfac)) {
-	param[i] = fabs(gamma[ifreepar]);
+	Setparam(i, fabs(gamma[ifreepar]));
                                            // 	if (i==f_nvariance) param[i] = fabs(gamma[ifreepar]);
 	// 	else param[i] = -1.0*fabs(gamma[ifreepar]);
       }
       else if ((fac_nmix>2)&&(i>=2*f_nvariance+nfac+1)&&(i<2*f_nvariance+nfac+1+nfac)) {
-	param[i] = -1.0*fabs(gamma[ifreepar]);
+	Setparam(i, -1.0*fabs(gamma[ifreepar]));
 	// 	if (i==(2*f_nvariance+nfac+1)) param[i] = -1.0*fabs(gamma[ifreepar]);
 	// 	else fabs(gamma[ifreepar]);
       }
-      else param[i] = gamma[ifreepar];
+      else Setparam(i, gamma[ifreepar]);
 
       freeparlist[ifreepar] = i;
 
@@ -4421,6 +4562,14 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
   }
   //  cout << start <<", " << end << "\n";
 
+
+  // Find first outcome model
+  UInt_t first_outmodel=9999;
+  for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
+    if ((models[imod].GetGroup()==1)&&(first_outmodel==9999)) first_outmodel = imod;
+  }
+
+  
   // if (rank>0)   cout << "point 5, rank=" << rank << endl;
   //  cout << "point 5\n";
   //Declare some variables to save time:
@@ -4526,7 +4675,7 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	      probilk = probilk *w[facint[ifac]];
 	    }
 	    
-	    if (iflag>=2) {
+	    if ((iflag>=2)&&(stage!=2)) {
 	      //  for (UInt_t ifac = 0; ifac < nfac ; ifac++) gradilk[Getifvar(imix,ifac)] += 1.0/Getfvar(imix,ifac);
  	      // gradient of weight term:
  	      for (UInt_t imix_grad = 0; imix_grad < est_nmix-1 ; imix_grad++) {
@@ -4580,12 +4729,16 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 
 	      //	      if ((!initializing)&&(intpt==0)&&(i==0)&&(imix==0)) cout << "Processing model " << models[imod].GetName() << " of type " <<  models[imod].GetType() << " ignore=" << models[imod].GetIgnore() << "\n";
 
-	      models[imod].Eval(i*nvar,data,param,firstpar,fac_val,modelEval,modhess,iflag);
+	      //Do not estimate gradient and hessian for measurement system if evaluating outcomes
+	      Int_t thisflag = iflag;
+	      if ((imod<first_outmodel)&&(stage==2)) thisflag = 1;
+	      
+	      models[imod].Eval(i*nvar,data,param,firstpar,fac_val,modelEval,modhess,thisflag);
 //	      models[imod].Eval(i*nvar,data,param,firstpar,fac_val,modelEval,modhess,2);
  	      probilk = probilk*modelEval[0];
             
 
-	      if (iflag>=2) {
+	      if (thisflag>=2) {
  		//gradients for factor-specific parameters
 		if (nfac_eff>0) {
 		  if ((fac_corr!=0)&&(nfac>1)) {
@@ -4637,12 +4790,13 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 		}
 
 		// Ok, now calculate Hessian if not missing data (modhess.size=0)
-		if ((iflag==3)&&(modhess.size()>0)) {
+		if ((thisflag==3)&&(modhess.size()>0)) {
 		  Double_t nDimModHess = nparam_models[imod] + nfac;
-		  if (nDimModHess*nDimModHess!=modhess.size()) 
+		  if (nDimModHess*nDimModHess!=modhess.size()) {
 		    cout << "Shit Got Hessian dimensions wrong! Expected " << nDimModHess*nDimModHess
 			 << " and got " << modhess.size() << "\n";
-
+		    assert(0);
+		  }
 		  if (predicting==1) {
 		    for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {        //loop over each fac
 		      for (UInt_t jfac = ifac ; jfac < nfac ; jfac++) {        //loop over each fac
@@ -5281,8 +5435,14 @@ void TMinLkhd::PrintParamTab(int pmod) {
 	  for (UInt_t ireg = 0 ; ireg < regs.size(); ireg++) {	
 	    if (varuse.at(ivar)==regs.at(ireg)) {
 	      int iparam = fparam_models[imod] + ireg + ichoice*(models[imod].GetNreg()+nfac);
-	      printf("& %8.3f & %8.3f ",param[iparam]*margeffmult.at(imod-firstmod),param_err[iparam]*margeffmult.at(imod-firstmod));
-	      fprintf(pFile,"& %8.3f & %8.3f ",param[iparam]*margeffmult.at(imod-firstmod),param_err[iparam]*margeffmult.at(imod-firstmod));
+	      if (param_fixval.at(iparam)<-9998.0) { 
+		printf("& %8.3f & %8.3f ",param[iparam]*margeffmult.at(imod-firstmod),param_err[iparam]*margeffmult.at(imod-firstmod));
+		fprintf(pFile,"& %8.3f & %8.3f ",param[iparam]*margeffmult.at(imod-firstmod),param_err[iparam]*margeffmult.at(imod-firstmod));
+	      }
+	      else {
+		printf("& %8.3f & %8.3f ",param[iparam]*margeffmult.at(imod-firstmod),0.0);
+		fprintf(pFile,"& %8.3f & %8.3f ",param[iparam]*margeffmult.at(imod-firstmod),0.0);
+	      }
 	      varused=1;
 	    }
 	  }
@@ -5541,6 +5701,114 @@ void TMinLkhd::PrintParam(int pmod) {
     }
   }
 }
+
+
+void TMinLkhd::PrintParam_Varlist() {
+
+
+  FILE * pFile;
+  TString filename;
+  filename = TString("fullmodel_par_varlist.txt");
+  filename.Prepend(workingdir);
+  pFile = fopen ( ((char *)filename.Data()),"w");
+
+  UInt_t ipar = 0;
+
+  for (UInt_t imix = 0 ; imix < fac_nmix ; imix++) {
+
+      //variances
+      for (UInt_t ivar = 0; ivar < f_nvariance ; ivar++) {
+	if (ivar < nfac) {
+	  fprintf(pFile,"%4d factor%1d_mix%1d sigma \n",ipar,ivar,imix);
+
+	  ipar++;
+	}
+	else {
+	  // 2-factors only:
+	  fprintf(pFile,"%4d factor_mix%1d rho \n",ipar, imix);
+	  ipar++;
+	} 
+      }
+      if (imix<fac_nmix-1) {
+	// means
+	for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {
+	  fprintf(pFile,"%4d factor%1d_mix%1d mean \n",ipar,ifac,imix);
+	  ipar++;
+	}
+	
+	// weights: =0.0 means all equally weighted
+	fprintf(pFile,"%4d factor_mix%1d weight \n",ipar,imix);
+	ipar++;
+      }
+  }
+  if (ipar != nfac_param) {
+    cout << "ERROR ERROR: ipar!= nfac_para\n";
+    assert(0);
+  } 
+    
+  UInt_t start = 0;
+  UInt_t end = models.size();
+  
+  for (UInt_t imod = start ; imod < end ; imod++) {
+    int nchoice = 1;
+    if (models[imod].GetType()==3) nchoice = models[imod].GetNchoice()-1;
+    for (int ichoice = 0 ; ichoice < nchoice ; ichoice++) {
+    
+      vector <Int_t> regs = models[imod].GetReg();
+      
+      for (UInt_t ireg = 0 ; ireg < regs.size(); ireg++) {
+	
+	if  ( (models[imod].GetType()==3)&&(nchoice>2) ) {
+	  fprintf(pFile,"%4d %s_ch%d %20s \n",ipar,models[imod].GetName(),ichoice+2,var_table.at(regs[ireg]).Data());
+	}
+	else{
+	  fprintf(pFile,"%4d %20s %20s \n",ipar,models[imod].GetName(),var_table.at(regs[ireg]).Data());
+	}
+	ipar++;
+      }
+      
+      vector <Double_t> fnorm = models[imod].GetNorm();
+      for (UInt_t i = 0 ; i < nfac ; i++) {
+	if (fnorm.size()==0) {
+	  
+	  if  ( (models[imod].GetType()==3)&&(nchoice>2) ) {
+	    fprintf(pFile,"%4d %s_ch%d factor%d \n",ipar,models[imod].GetName(),ichoice+2,i+1);
+	  }
+	  else{
+	    fprintf(pFile,"%4d %20s factor%d \n",ipar,models[imod].GetName(),i+1);
+	  }
+	  
+	  ipar++;
+	}
+	else {
+	  if (fnorm[i]<-9998) {
+	    if  ( (models[imod].GetType()==3)&&(nchoice>2) ) {
+	      fprintf(pFile,"%4d %s_ch%d factor%d \n",ipar,models[imod].GetName(),ichoice+2,i+1);
+	    }
+	    else{
+	      fprintf(pFile,"%4d %20s factor%d \n",ipar,models[imod].GetName(),i+1);
+	    }
+	    ipar++;
+	  }
+	}
+      }
+      if (models[imod].GetType()==1) {
+	fprintf(pFile,"%4d %20s sigma \n",ipar,models[imod].GetName());
+	ipar++;
+      }
+      else if (models[imod].GetType()==4) {
+	for (int ithresh = 1 ; ithresh < models[imod].GetNchoice() ; ithresh++) {
+	  fprintf(pFile,"%4d %20s threshold%d \n",ipar,models[imod].GetName(),ithresh);
+	  ipar++;
+	}
+      }
+    }
+  }
+  
+  fclose(pFile);
+
+}
+
 
 int fexist(const char *filename ) {
   int status = 0;

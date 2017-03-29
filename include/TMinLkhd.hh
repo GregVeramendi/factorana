@@ -92,6 +92,7 @@ private:
   std::vector<UInt_t> nobs_models;
   std::vector <Double_t> param;
   std::vector <Double_t> param_err;
+  std::vector <Double_t> param_fixval;
   std::vector <UInt_t> parfixed;
   std::vector <Int_t> parconstrained;
   //  UInt_t newfixpar;
@@ -118,6 +119,16 @@ private:
     else return (imix*nquad_points*nquad_points + x1i*nquad_points + x2i);
   }
 
+  //Set value of param
+  void Setparam(UInt_t ipar, double value) {
+    if (param_fixval.at(ipar)<-9998.0) param.at(ipar) = value;
+  }
+  void Setparam_err(UInt_t ipar, double value) {
+    if (param_fixval.at(ipar)<-9998.0) param_err.at(ipar) = value;
+  }
+
+
+  
 public:
   TMinLkhd();
   TMinLkhd(const char *name, const char *title, Int_t nfactors, Int_t fcorr = 1, Int_t fnmix=0, Int_t nquad = 8, Int_t thisstage = 0);
@@ -191,17 +202,20 @@ public:
 
   void ResetNewFixPar() {SetBitOff(newflag,2);}
   UInt_t GetNewFixPar() {return GetBit(newflag,2);}
-  void FixPar(UInt_t iparam) {if (parfixed.at(iparam)==0) nfreeparam--; parfixed.at(iparam) = 1; SetBitOn(newflag,2);}
-  void ReleasePar(UInt_t iparam) { if (parfixed.at(iparam)==1) nfreeparam++; parfixed.at(iparam) = 0; SetBitOn(newflag,2);}
+  void FixPar(UInt_t iparam) {if (parfixed.at(iparam)==0) { nfreeparam--; parfixed.at(iparam) = 1; SetBitOn(newflag,2);} }
+  void ReleasePar(UInt_t iparam) { if (parfixed.at(iparam)==1) {nfreeparam++; parfixed.at(iparam) = 0; SetBitOn(newflag,2);} }
   UInt_t GetFixPar(UInt_t iparam) {return parfixed.at(iparam);}
   std::vector<UInt_t> GetFixPar() {return parfixed;}
   void SetFixPar(Int_t * thisfixpar) {
     for (UInt_t ipar = 0; ipar < nparam ; ipar++) {
       if (thisfixpar[ipar]==1) FixPar(ipar); 
-      else ReleasePar(ipar);
+      else if (thisfixpar[ipar]==0) ReleasePar(ipar);
     }
   }
-
+  void FixParamValue(int parnum, double value) {param_fixval.at(parnum) = value;}
+  void LastModel_FixParamValue(TString fixvar, double value, int choice = -1);
+  
+  
   void SetIgnoreMod(UInt_t imod) {SetBitOn(newflag,3); models[imod].SetIgnore(1);}
   void SetAllIgnoreMod(Int_t * thisignoremod) { SetBitOn(newflag,3); for (UInt_t imod = 0; imod < models.size() ; imod++) models[imod].SetIgnore(thisignoremod[imod]);}
   void RemoveIgnoreMod(UInt_t imod) {SetBitOn(newflag,3); models[imod].SetIgnore(0);}
@@ -223,6 +237,7 @@ public:
 
   void PrintParam(Int_t imod = -1);
   void PrintParamTab(int pmod = 0);
+  void PrintParam_Varlist();
   void SetData(char * filename, char * var_table);
   void AddModel(const char *name, const char *title, TString modeltype, std::vector<TString> & moddata,Double_t * normfac = NULL, UInt_t nchoice = 2);
   void LastModel_Splitsim(TString splitvar);
@@ -239,6 +254,7 @@ public:
 
   void LastModel_Detailsim() {models.back().DetailSim(1);}
   void LastModel_SetEndogenousReg(UInt_t modelN);
+  void LastModel_SetEndogenousMajor(UInt_t modelN);
   void AllModel_Detailsim() {for (UInt_t imod = 0 ; imod < models.size() ; imod++) models[imod].DetailSim(1);}
   void SimIncludeData() {simIncData = 1;}
   void SimSamplePosterior() {sampleposterior = 1;}

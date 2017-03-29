@@ -368,6 +368,7 @@ void LkhdFcn(Int_t &npar, Double_t *gin, Double_t &f,
 	Int_t * fixpar = new Int_t[ntotparam];
 	for (UInt_t ipar = 0; ipar < ntotparam ; ipar++) {
 	  fixpar[ipar] = thisfixpar[ipar];
+	  //	  fprintf(stdout,"Param %8d Fixed to %d\n",ipar,fixpar[ipar]);
 	}
 	MPI_Bcast(fixpar, ntotparam, MPI_INT, 0, MPI_COMM_WORLD);
 	
@@ -389,6 +390,7 @@ void LkhdFcn(Int_t &npar, Double_t *gin, Double_t &f,
 	Int_t * ignoremod = new Int_t[nmod];
 	for (UInt_t imod = 0; imod < nmod ; imod++) {
 	  ignoremod[imod] = thisignoremod[imod];
+	  //	  fprintf(stdout,"Model %8d Fixed to %d\n",imod,ignoremod[imod]);
 	}
 	MPI_Bcast(ignoremod, nmod, MPI_INT, 0, MPI_COMM_WORLD);
 	

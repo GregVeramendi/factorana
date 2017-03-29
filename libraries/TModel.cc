@@ -1,3 +1,4 @@
+
 #include "TModel.hh"
 
 #include "Riostream.h"
@@ -20,14 +21,11 @@
 #include <cmath>
 #include <iostream>
 #include <assert.h>
+#include <random>
 
 using namespace std;
 
-//ClassImp(TModel)
-
-// CAN't ALWAYS RESET THE SEED HERE!!
-mt19937_64 mt(7);
-
+static std::mt19937_64 mt(7);
 
 TModel::TModel(const char *name, const char *title, Int_t modeltype, Int_t modelgroup, Int_t prntgroup, std::vector<Int_t> & moddata, Int_t nfac, Double_t * thisnormfac, UInt_t nchoice)
   : TNamed(name,title)
@@ -46,9 +44,9 @@ TModel::TModel(const char *name, const char *title, Int_t modeltype, Int_t model
   for (int i = 0 ; i < nregressors ; i++) regressors.push_back(moddata[i+2]);
 
   simresult = -9999.0;
-  endogReg = -9999;
-  endogModel = 0;
-
+  endogRegList.clear();
+  endogModelList.clear();
+  endogChoiceList.clear();
 
 //  printf("Regressors: ");
 //  for (int i = 0 ; i < nregressors ; i++) {
@@ -78,35 +76,138 @@ void TModel::SplitSim(UInt_t ivar) {
   splitsim = (Int_t)ivar;
 }
 
-void TModel::SetEndogenousReg(UInt_t endModel, std::vector<TModel> & models) {
-
-  if (endogReg!=-9999) {
-    cout << "ERROR (TModel::SetEndogenousReg): This model already has an endogenous regressor defined!"
-	 << endl;
-    assert(0);
-  }
+void TModel::SetEndogenousReg(UInt_t endModel, std::vector<TModel> & models, std::vector<TString> & vartab) {
   
   Int_t foundreg = 0;
-  for (int i = 0 ; i < nregressors ; i++) {
-    if (models.at(endModel).GetOutcome()==regressors[i]) foundreg=1;
-  }
-  if (foundreg==1) {
-    endogReg = models.at(endModel).GetOutcome();
-    endogModel = endModel; 
 
-    cout << "Model "<< models.at(endogModel).GetName() 
-	 << " being set as endogenous covariate (" 
-	 << endogReg << ") in model " 
-	 << GetName() << endl;
+  for (int ireg = 0 ; ireg < nregressors ; ireg++) {
+    
+    // Look for endogenous regressors from linear or probit models
+    if ((models.at(endModel).GetType()==1)||(models.at(endModel).GetType()==2)) {
+      if (models.at(endModel).GetOutcome()==regressors[ireg]) {
+	foundreg++;
+	endogRegList.push_back(models.at(endModel).GetOutcome());
+	endogModelList.push_back(endModel); 
+	endogChoiceList.push_back(-1);
+	
+	cout << "Model "<< models.at(endModel).GetName() 
+	     << " being set as endogenous covariate (" 
+	     << models.at(endModel).GetOutcome() << ") in model " 
+	     << GetName() << endl;
+      }
+    }
+    else if ((models.at(endModel).GetType()==3)||(models.at(endModel).GetType()==4)) {
+      
+      //Look for endogenous regressors from multinomial models
+      
+      TString outcomename = vartab.at(models.at(endModel).GetOutcome());
+      if (vartab.at(regressors[ireg]).BeginsWith(outcomename)) {
+	
+	TString thisendogreg = vartab.at(regressors[ireg]);
+	cout << "Found regressor " << thisendogreg;
+	
+	int choicelength = thisendogreg.Length() - outcomename.Length();
+	if ((choicelength<1)||(choicelength>2)) {
+	  cout << "TModel::SetEndogenousVar(): choicelength can only be 1-2 characters!!" << endl;
+	  assert(0);
+	}
+	
+	char charchoice = thisendogreg[thisendogreg.Length()-1];
+	int choice = -1;
+	//Use the fact that in ascii 48 is '0', 49 is '1', etc.
+	if ((charchoice>47)&&(charchoice<58)) {
+	  choice = charchoice-48;
+	  
+	  if (choicelength==2) {
+	    charchoice = thisendogreg[thisendogreg.Length()-2];
+	    if ((charchoice>47)&&(charchoice<58)) {
+	      choice += 10*(charchoice-48);
+	    }
+	    else choice=-1;
+	  }
+	}
+	if ((choice>0)&&(choice<100)) {
+	  foundreg++;
+	  cout << ", where choice=" << choice << endl;
+	  endogRegList.push_back(regressors[ireg]);
+	  endogModelList.push_back(endModel);
+	  endogChoiceList.push_back(choice);
+	}
+	else {
+	  cout << endl << "ERROR (TModel::SetEndogenousReg): Last character has to be a number between 1-99!!!"
+	       << "\n\t We were looking for var " << vartab.at(models.at(endModel).GetOutcome())
+	       << " and found " << thisendogreg
+	       << " choicelength=" << choicelength
+	       << " in model " << models.back().GetName() << endl;
+
+	  assert(0);
+	}
+      }
+    }
+
+    //Look for missing indicator
+    //We will assume that there is one indicator for multinomial choice models
+    TString varname_miss = vartab.at(models.at(endModel).GetOutcome()) + "_miss";
+    if (vartab.at(regressors[ireg])==varname_miss) {
+      	foundreg++;
+	cout << "TModel::SetEndogenousVar(): Found missing indicator " << varname_miss << endl;
+	endogRegList.push_back(regressors[ireg]);
+	endogModelList.push_back(-1); 
+	endogChoiceList.push_back(-1);
+    }
+
   }
-  else {
+
+  
+  if (foundreg==0) {
     cout << "ERROR (TModel::SetEndogenousReg): Endogenous regressor is not in list of covariates!"
-         << "\n\t We were looking for var#" << models.at(endModel).GetOutcome()
+         << "\n\t We were looking for var" << vartab.at(models.at(endModel).GetOutcome())
 	 << " in model " << models.back().GetName()
 	 << endl;
     assert(0);
   }
 }
+
+//void TModel::SetEndogenousMajor(UInt_t endModel, std::vector<TModel> & models, std::vector<TString> & vartab) {
+//
+//  Int_t foundreg = 0;
+//  TString outcomename = vartab.at(models.at(endModel).GetOutcome());
+//  cout << "Looking for major regressors that start with " << outcomename << endl;
+//
+//  for (int ireg = 0 ; ireg < nregressors ; ireg++) {
+//    if (vartab.at(regressors[ireg]).BeginsWith(outcomename)) {
+//
+//      TString thisendogreg = vartab.at(regressors[ireg]);
+//
+//      cout << "Found regressor " << thisendogreg;
+//
+//      char cmaj = thisendogreg[thisendogreg.Length()-1];
+//      int maj = -1;
+//      //Use the fact that in ascii 48 is '0', 49 is '1', etc.
+//      if ((cmaj>48)&&(cmaj<55)) {
+//	maj = cmaj-48;
+//	foundreg++;
+//	cout << ", where major=" << maj << endl;
+//      }
+//      else {
+//	cout << "TModel::SendEndogenousMajor(): Last character has to be a number between 1-6!!" << endl;
+//	assert(0);
+//      }
+//      endogRegList.push_back(regressors[ireg]);
+//      endogModelList.push_back(endModel);
+//      endogChoiceList.push_back(maj);
+//    }
+//  }
+//  cout << "Found " << foundreg << " endogenous major indicators!\n";
+//
+//  if (foundreg==0) {
+//    cout << "ERROR (TModel::SetEndogenousReg): Endogenous regressor is not in list of covariates!"
+//         << "\n\t We were looking for var#" << models.at(endModel).GetOutcome()
+//	 << " in model " << models.back().GetName()
+//	 << endl;
+//    assert(0);
+//  }
+//}
 
 
 void TModel::PrintModel(std::vector<TString> vartab)
@@ -1009,11 +1110,19 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
       if (data[iobs_offset+missing]==0) this_missing = 1;
     }
 
-    for (int i = 0; i < nregressors  ; i++) {
-      if (regressors[i] != endogReg) {
-	if (data[iobs_offset+regressors[i]]<-9998) this_missing = 2;
+    for (int ireg = 0; ireg < nregressors  ; ireg++) {
+
+      Int_t thisendog = 0;
+      for (UInt_t iendogvar = 0 ; iendogvar < endogRegList.size() ; iendogvar++) {
+	if (regressors[ireg] == endogRegList[iendogvar]) {
+	  thisendog = 1;
+	  if ( (endogModelList[iendogvar]>=0)&&(models.at(endogModelList[iendogvar]).GetSimResult()<-9998) ) this_missing = 2;
+	}
       }
-      else if (models.at(endogModel).GetSimResult()<-9998) this_missing = 2;
+
+      if (thisendog==0) {
+	if (data[iobs_offset+regressors[ireg]]<-9998) this_missing = 2;
+      }
     }
     
 
@@ -1028,17 +1137,17 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
 
     if (this_missing >1) {
 
-      //print out detailed variables (Vobs, Vend, Vfac0..VfacN) and shprob for linear models
+      //print out detailed variables (Vobs, Vend, Vfac0..VfacN, eps)
       if (detailsim) {
-	int ndetailvar = 1 + numfac;
-	if (endogReg!=-9999) ndetailvar++;
-	if (modtype==1) ndetailvar++;
+	// Vobs, eps, Vfac#
+	int ndetailvar = 2 + numfac;
+	if (endogRegList.size()>0) ndetailvar++;
 	for (int ichoice = 2 ; ichoice <=numlogitchoice; ichoice++) {
-	  for (int i = 0; i < 4; i++)  fprintf(pFile,", %10d",-9999);
+	  for (int i = 0; i < ndetailvar; i++)  fprintf(pFile,", %10d",-9999);
 	}
       }
 
-      //print out shprob for each choice
+      //print out prob for each choice
       if (modtype==2)  fprintf(pFile,", %10d",-9999);
       if ((modtype==3)||(modtype==4)) {
 	for (int ichoice = 2 ; ichoice <=numchoice; ichoice++) fprintf(pFile,", %10d",-9999);
@@ -1052,7 +1161,7 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
 
       vector<double> expres(numlogitchoice-1,0.0);
 
-      double vendog = 0.0;
+      vector<double> vendog(numlogitchoice-1,0.0);
 
       UInt_t ifreefac = 0;
 
@@ -1061,29 +1170,50 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
 	ifreefac = 0;
 	UInt_t nparamchoice = nregressors + numfac;
 	
-	for (int i = 0; i < nregressors  ; i++) {
-	  if (regressors[i]!=splitsim) {
+	for (int ireg = 0; ireg < nregressors  ; ireg++) {
+	  if (regressors[ireg]!=splitsim) {
 	    
-	    if (regressors[i] != endogReg) {
-	      expres[ichoice] += param[i+firstpar+ichoice*nparamchoice]*data[iobs_offset+regressors[i]];
-	    }
-	    else {
-	      expres[ichoice] += param[i+firstpar+ichoice*nparamchoice]*models.at(endogModel).GetSimResult();
-	      vendog = param[i+firstpar+ichoice*nparamchoice]*models.at(endogModel).GetSimResult();
-	      //	     vendog = param[i+firstpar];
+	    double thisterm = param[ireg+firstpar+ichoice*nparamchoice]*data[iobs_offset+regressors[ireg]];
+
+	    for (UInt_t iendogvar = 0 ; iendogvar < endogRegList.size() ; iendogvar++) {
+	      if (regressors[ireg] == endogRegList[iendogvar]) {
+
+		// process linear and probit models
+		if ( (endogChoiceList[iendogvar]==-1) && (endogModelList[iendogvar]>=0) ) {
+		  thisterm = param[ireg+firstpar+ichoice*nparamchoice]*models.at(endogModelList[iendogvar]).GetSimResult();
+		  vendog[ichoice] += thisterm;
+		}
+		// process multinomial choice models
+		else if ( (endogChoiceList[iendogvar]>-1) && (endogModelList[iendogvar]>-1) ) {
+		  int simchoice = models.at(endogModelList[iendogvar]).GetSimResult();
+		  if (endogChoiceList[iendogvar] == simchoice) {
+		    thisterm = param[ireg+firstpar+ichoice*nparamchoice];
+		    vendog[ichoice] += thisterm;
+		  }
+		  else thisterm = 0.0;
+		}
+		// don't do anything for missing indicators (set to zero)
+		else {
+		  //require model >= 0 as model= -1 implies missing indicator which we ignore in simulation
+		  // ignore missing indicators
+		  thisterm = 0.0;
+		}
+ 	      }
+	    } //loop over endogenous variables and see if there is a match
+
+	    expres[ichoice] += thisterm;
 	      
-	      //	     printf("Model %25s using %25s: obs=%6d reg=%4d beta=%8.3f endog=%8.3f vend=%8.3f\n",GetName(),models.at(endogModel).GetName(),iobs_offset,regressors[i],param[i+firstpar],models.at(endogModel).GetSimResult(),vendog);
-	    }
+	      //	     printf("Model %25s using %25s: obs=%6d reg=%4d beta=%8.3f endog=%8.3f vend=%8.3f\n",GetName(),models.at(endogModel).GetName(),iobs_offset,regressors[ireg],param[i+firstpar],models.at(endogModel).GetSimResult(),vendog);
 	  }
-	  else expres[ichoice] += param[i+firstpar+ichoice*nparamchoice]*isplit;
+	  else expres[ichoice] += param[ireg+firstpar+ichoice*nparamchoice]*isplit;
 	}
 	if (detailsim) {
-	  if (endogReg==-9999) {
+	  if (endogRegList.size()==0) {
 	    fprintf(pFile,", %10.5f",expres[ichoice]);
 	  }
 	  else {
-	    fprintf(pFile,", %10.5f",expres[ichoice]-vendog);
-	    fprintf(pFile,", %10.5f",vendog);
+	    fprintf(pFile,", %10.5f",expres[ichoice]-vendog[ichoice]);
+	    fprintf(pFile,", %10.5f",vendog[ichoice]);
 	  }
 	}      
 	Double_t fac_comp = 0.0;
@@ -1121,6 +1251,7 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
 	Double_t eps = gRandom->Gaus(0.0,1.0);
 	Double_t prb = ROOT::Math::normal_cdf(expres[0]);
 	//	if (detailsim) fprintf(pFile,", %10.5f",prb);
+	if (detailsim) fprintf(pFile,", %10.5f",eps);
 	fprintf(pFile,", %10.5f",prb);
 	if ((expres[0]+eps)>0) { 
 	  fprintf(pFile,", %10d",1);
@@ -1133,36 +1264,44 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
       }
       else if (modtype==3) {
 
-	//print out probabilities of choices 2...
-	
-	double logitdenom = 1.0;
-	for (int icat = 1 ; icat < numchoice; icat++) {
-	  logitdenom += exp(expres[icat-1]);
-	}
-	for (int icat = 1 ; icat < numchoice; icat++) fprintf(pFile,", %10.5f",exp(expres[icat-1])/logitdenom);
-
 	std::extreme_value_distribution<double> EV1Dist(0,1.0);
 
+	//Simulate choice
 	int thischoice = 1;
 
 	// Draw extreme error value for choice 1
-        double maxval = EV1Dist(mt);
-
+	double eps1 = EV1Dist(mt);
+        double maxval = eps1;
+       
 	// See if any of the other choices are larger
 	for (int icat = 1 ; icat < numchoice; icat++) {
-	  double thisval = expres[icat-1] + EV1Dist(mt);
+	  double eps = EV1Dist(mt);
+
+	  //print out difference in epsilons
+	  if (detailsim) fprintf(pFile,", %10.5f",eps-eps1);
+
+	  double thisval = expres[icat-1] + eps;
+
 	  if (thisval > maxval ) {
 	    maxval = thisval;
 	    thischoice = icat+1;	    
 	  }
 	}
 
+	//print out probabilities of choices...
+	double logitdenom = 1.0;
+	for (int icat = 1 ; icat < numchoice; icat++) {
+	  logitdenom += exp(expres[icat-1]);
+	}
+	for (int icat = 1 ; icat < numchoice; icat++) fprintf(pFile,", %10.5f",exp(expres[icat-1])/logitdenom);
+
 	fprintf(pFile,", %10d",thischoice);
 	simresult = Double_t(thischoice);
       }
       else if (modtype==4) {
-	//	Double_t eps = gRandom->Gaus(0.0,1.0);
-	//	if (detailsim) fprintf(pFile,", %10.5f",prb);
+
+	Double_t eps = gRandom->Gaus(0.0,1.0);
+	if (detailsim) fprintf(pFile,", %10.5f",eps);
 
 	double threshold[2];
 	for (int ichoice = 1 ; ichoice < numchoice; ichoice++) {
@@ -1186,7 +1325,6 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
 	  fprintf(pFile,", %10.5f",CDF[1] - CDF[0]);
 	}
 
-	Double_t eps = gRandom->Gaus(0.0,1.0);
 	Int_t choice = 1;
 	Double_t thisthreshold = param[firstpar+nregressors+ifreefac];
 	for (int icat = 2 ; icat < numchoice ; icat++) { 
