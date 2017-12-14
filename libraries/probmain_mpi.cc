@@ -142,9 +142,9 @@ int main(int argc,char *argv[]) {
 	  mymodel.SetFixPar(fpar);
 	}
 
-// 	Int_t nfreeparam = mymodel.GetNfreeparam();
-// 	if (mymodel.GetNewFixPar()==1) fprintf(stdout,"Process %d of %d is on %s: has %d free parameters\n",
-// 				  my_rank, np, processor_name, nfreeparam);
+ 	// Int_t nfreeparam = mymodel.GetNfreeparam();
+ 	// if (mymodel.GetNewFixPar()==1) fprintf(stdout,"Process %d of %d is on %s: has %d free parameters\n",
+ 	// 			  my_rank, np, processor_name, nfreeparam);
 
 	//Check to see if ignoring models has changed
 	//       MPI_Bcast(&newmodignore, 1, MPI_INT, 0, MPI_COMM_WORLD);

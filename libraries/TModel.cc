@@ -90,10 +90,10 @@ void TModel::SetEndogenousReg(UInt_t endModel, std::vector<TModel> & models, std
 	endogModelList.push_back(endModel); 
 	endogChoiceList.push_back(-1);
 	
-	cout << "Model "<< models.at(endModel).GetName() 
-	     << " being set as endogenous covariate (" 
-	     << models.at(endModel).GetOutcome() << ") in model " 
-	     << GetName() << endl;
+	// cout << "Model "<< models.at(endModel).GetName() 
+	//      << " being set as endogenous covariate (" 
+	//      << models.at(endModel).GetOutcome() << ") in model " 
+	//      << GetName() << endl;
       }
     }
     else if ((models.at(endModel).GetType()==3)||(models.at(endModel).GetType()==4)) {
@@ -104,10 +104,10 @@ void TModel::SetEndogenousReg(UInt_t endModel, std::vector<TModel> & models, std
       if (vartab.at(regressors[ireg]).BeginsWith(outcomename)) {
 	
 	TString thisendogreg = vartab.at(regressors[ireg]);
-	cout << "Found regressor " << thisendogreg;
 	
 	int choicelength = thisendogreg.Length() - outcomename.Length();
 	if ((choicelength<1)||(choicelength>2)) {
+	  cout << "Found regressor " << thisendogreg;
 	  cout << "TModel::SetEndogenousVar(): choicelength can only be 1-2 characters!!" << endl;
 	  assert(0);
 	}
@@ -128,7 +128,7 @@ void TModel::SetEndogenousReg(UInt_t endModel, std::vector<TModel> & models, std
 	}
 	if ((choice>0)&&(choice<100)) {
 	  foundreg++;
-	  cout << ", where choice=" << choice << endl;
+	  //	  cout << ", where choice=" << choice << endl;
 	  endogRegList.push_back(regressors[ireg]);
 	  endogModelList.push_back(endModel);
 	  endogChoiceList.push_back(choice);
@@ -150,7 +150,7 @@ void TModel::SetEndogenousReg(UInt_t endModel, std::vector<TModel> & models, std
     TString varname_miss = vartab.at(models.at(endModel).GetOutcome()) + "_miss";
     if (vartab.at(regressors[ireg])==varname_miss) {
       	foundreg++;
-	cout << "TModel::SetEndogenousVar(): Found missing indicator " << varname_miss << endl;
+	//	cout << "TModel::SetEndogenousVar(): Found missing indicator " << varname_miss << endl;
 	endogRegList.push_back(regressors[ireg]);
 	endogModelList.push_back(-1); 
 	endogChoiceList.push_back(-1);

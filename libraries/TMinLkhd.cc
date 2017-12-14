@@ -61,6 +61,9 @@ TMinLkhd::TMinLkhd()
   nfreeparam = 0;
   stage = 0;
   cpurank = 0;
+  max_cpu_limit = -1.0;
+  stoch_deriv_frac = -1.0;   
+  CalcHess = 1;
   printlvl = 1;
   printmargeffect = 0;
   current_printgroup = 0;
@@ -103,6 +106,8 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
   nfac=nfactors;
   nquad_points=nquad;
   stage = thisstage;
+  max_cpu_limit = -1.0;
+  stoch_deriv_frac = -1.0;   
   ClearDataMembers();
   initializing = 0;
   predicting = 0;
@@ -113,6 +118,7 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
   subsample_percent = 1.0;
   nbootsamples = 0;
   bootstrapstart = 0;
+  CalcHess = 1;
   HessStdErr = 1;
   sampleposterior = 0;
   simIncData = 0;
@@ -931,9 +937,11 @@ void TMinLkhd::ResetFitInfo() {
 	printf("Fixing variance to 1.0 for factor #%d\n",ifac);
 	param_fixval.at(ifac) = 1.0;
 	param.at(ifac) = 1.0;
-	param_err.at(ifac) = -9999.0;
-	parfixed.at(ifac) = 2;
-	nfreeparam--;
+	param_err.at(ifac) = 0.0;
+
+	FixPar(ifac);
+	//	parfixed.at(ifac) = 1;
+	//	nfreeparam--;
 
 	fnorm.at(ifac) = 1.0;
 	normout_mn.at(ifac) = 0.0;
@@ -969,6 +977,11 @@ void TMinLkhd::ResetFitInfo() {
 
   // Initialize parameters of models:
   for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
+
+    //Scale initial values differently depending on model
+    Double_t thismult = 1.0;
+    if (models[imod].GetType()==3) thismult = 0.1;
+    
     // If this is a multinomial logit, we want to do this for each choice if nchoice>2:
     int nchoice = 2; // In this case we don't need to do anything special even if it is logit
     if (models[imod].GetType()==3) nchoice = models[imod].GetNchoice();
@@ -1072,10 +1085,10 @@ void TMinLkhd::ResetFitInfo() {
 	// Set intercept or beta0
 	  if (reg_sd<0.01) {
 	    //	printf("Setting par%d=%f\n",ipar,outcome_mn/reg_mn);
-	    if (fabs(reg_mn)>0.01) Setparam(ipar, loadingMultiplier*outcome_mn/reg_mn);
+	    if (fabs(reg_mn)>0.01) Setparam(ipar, thismult*loadingMultiplier*outcome_mn/reg_mn);
 	    else Setparam(ipar, 1.0);
 	  }
-	  else Setparam(ipar, loadingMultiplier*covsign*outcome_sd/reg_sd/regs.size());
+	  else Setparam(ipar, thismult*loadingMultiplier*covsign*outcome_sd/reg_sd/regs.size());
 	  Setparam_err(ipar, 0.5*fabs(param[ipar]));
 	  if (param_err[ipar]<0.1*outcome_sd/regs.size()) Setparam_err(ipar, 0.1*outcome_sd/regs.size());
 
@@ -1086,13 +1099,13 @@ void TMinLkhd::ResetFitInfo() {
       vector <Double_t> thisnorm = models[imod].GetNorm();
       for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {
 	if (thisnorm.size()==0) {
-	  Setparam(ipar, loadingMultiplier*facloadsign.at(ifac));
+	  Setparam(ipar, thismult*loadingMultiplier*facloadsign.at(ifac));
 	  Setparam_err(ipar, 0.01);
 	  ipar++;
 	}
 	else {
 	  if (thisnorm.at(ifac)<-9998) {
-	    Setparam(ipar, loadingMultiplier*facloadsign.at(ifac));
+	    Setparam(ipar, thismult*loadingMultiplier*facloadsign.at(ifac));
 	    Setparam_err(ipar, 0.01);
 	    ipar++;
 	  }
@@ -1225,13 +1238,15 @@ Int_t TMinLkhd::TestCode(Int_t printlevel) {
    cputime = timer.CpuTime();
   printf("Calculating the Gradient   took %8.4f seconds.\n",cputime/Double_t(repeat));
 
-  timer.Reset();
-  timer.Start();
-  for (int i = 0 ; i < repeat ; i++) LkhdFcn(nparam_min,grad,fvalue,thisparam,3,hess);
-  timer.Stop();
-   cputime = timer.CpuTime();
-  printf("Calculating the Hessian    took %8.4f seconds.\n",cputime/Double_t(repeat));
-
+  if ((CalcHess ==1) || (initializing==1)) {
+    timer.Reset();
+    timer.Start();
+    for (int i = 0 ; i < repeat ; i++) LkhdFcn(nparam_min,grad,fvalue,thisparam,3,hess);
+    timer.Stop();
+    cputime = timer.CpuTime();
+    printf("Calculating the Hessian    took %8.4f seconds.\n",cputime/Double_t(repeat));
+  }
+  
   delete [] thisparam;
   delete [] grad;
   delete [] hess;
@@ -1610,6 +1625,8 @@ Int_t TMinLkhd::TestHessian(){
   }
 
   LkhdFcn(num_param,defgrad,fvalue,thisparam,3,hess);
+
+  LkhdFcn(num_param,defgrad,fvalue,thisparam,2);
   //  Double_t defF = fvalue;
 
   cout << "***** Testing Hessian *******\n";
@@ -1744,6 +1761,7 @@ Int_t TMinLkhd::TestHessian(){
       if (diff < 1e-10) diff = 1e-10;
 
       if (diff > 1e-4) printf("Hessian[%3i][%3i]: calc = %11.4e | finite = %11.4e | percent diff = %11.4e\n",ipar,jpar, hess[hessterm], Hessijgf, diff);
+      //      printf("Hessian[%3i][%3i]: calc = %11.4e | finite = %11.4e | percent diff = %11.4e\n",ipar,jpar, hess[hessterm], Hessijgf, diff);
       
 //       Double_t diff;
 //       if (fabs(Hessijfc) > 1e-7) diff = (Hessijgc - Hessijfc)/fabs(Hessijfc);
@@ -2169,7 +2187,10 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
     }
   }
 
-
+  if (printlvl>2) {
+    cout << endl << "********Parameter values:" << endl;
+    PrintParam(0);
+  }
   cout << "Calculating likelihood of measurement system..." << endl;
   LkhdFcn(ifreepar,grad,fvalue,thisparam,1);
   cout << "Measurement system Likelihood=" << fvalue << endl;
@@ -2969,13 +2990,15 @@ Int_t TMinLkhd::Min_Minuit(Int_t printlevel) {
    cputime = timer.CpuTime();
   printf("Calculating the Gradient   took %8.4f seconds.\n",cputime);
 
-  timer.Reset();
-  timer.Start();
-  LkhdFcn(nparam_min,grad,fvalue,thisparam,3,hess);
-  timer.Stop();
-   cputime = timer.CpuTime();
-  printf("Calculating the Hessian    took %8.4f seconds.\n",cputime);
-
+  if ((CalcHess ==1) || (initializing==1)) {
+    timer.Reset();
+    timer.Start();
+    LkhdFcn(nparam_min,grad,fvalue,thisparam,3,hess);
+    timer.Stop();
+    cputime = timer.CpuTime();
+    printf("Calculating the Hessian    took %8.4f seconds.\n",cputime);
+  }
+  
   delete [] thisparam;
   delete [] grad;
   delete [] hess;
@@ -3735,13 +3758,15 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
     // for (int ipar = 0 ; ipar < nparam_min ; ipar++) printf("Par Grad #%4d: %8.5f\n",ipar,grad[ipar]);
 
 
-    timer.Reset();
-    timer.Start();
-    LkhdFcn(nparam_min,grad,fvalue,thisparam,3,hess);
-    timer.Stop();
-    cputime = timer.CpuTime();
-    printf("Calculating the Hessian    took %8.4f seconds.\n",cputime);
-    // printf("The Hessian is:\n");
+    if ((CalcHess ==1) || (initializing==1)) {
+      timer.Reset();
+      timer.Start();
+      LkhdFcn(nparam_min,grad,fvalue,thisparam,3,hess);
+      timer.Stop();
+      cputime = timer.CpuTime();
+      printf("Calculating the Hessian    took %8.4f seconds.\n",cputime);
+    }
+      // printf("The Hessian is:\n");
     // for (int ipar = 0 ; ipar < nparam_min*(nparam_min+1)/2 ; ipar++) printf("Hess element #%4d: %8.5f\n",ipar,hess[ipar]);
 
   }
@@ -3770,11 +3795,19 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
   app->Options()->SetStringValue("linear_solver", "ma57");
   //  app->Options()->SetStringValue("linear_solver", "mumps");
 
-  //  app->Options()->SetStringValue("hessian_approximation", "limited-memory"); //default is exact
+  if ( (CalcHess == 0) && (initializing==0) )  app->Options()->SetStringValue("hessian_approximation", "limited-memory"); //default is exact
+  //   app->Options()->SetStringValue("hessian_approximation", "exact"); //default is exact
+
+//  UInt_t estimating_outcomes = 0;
+//  for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
+//    // Use the fact that all outcome models are ignored when estimating measurement system
+//    if ((models[imod].GetGroup()>0)&&(models[imod].GetIgnore()==0)) estimating_outcomes = 1;
+//  }
+
+  if (max_cpu_limit>0.0) app->Options()->SetNumericValue("max_cpu_time", max_cpu_limit);
 
   app->Options()->SetStringValue("output_file", "ipopt.out");
   app->Options()->SetIntegerValue("max_iter", 1000000);
-//   app->Options()->SetStringValue("hessian_approximation", "exact"); //default is exact
 
   // The following overwrites the default name (ipopt.opt) of the
   // options file
@@ -3803,11 +3836,11 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 
     printf("IPOPT FAILED WITH STATUS %d, restart %d...\n",status,badstatuscounter);
     Double_t nudge = 0.9;
-    if (badstatuscounter==1) nudge = 0.8;
-    else if (badstatuscounter==2) nudge = 0.7;
-    else if (badstatuscounter==3) nudge = 0.5;
-    else if (badstatuscounter==4) nudge =  0.1;
-    else if (badstatuscounter==5) nudge =  0.01;
+    if (badstatuscounter==1) nudge = 1.1;
+    else if (badstatuscounter==2) nudge = 0.8;
+    else if (badstatuscounter==3) nudge = 1.2;
+    else if (badstatuscounter==4) nudge =  0.7;
+    else if (badstatuscounter==5) nudge =  1.3;
 
     mynlp->restart(nudge);
     status = app->OptimizeTNLP(mynlp);
@@ -3886,6 +3919,7 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 
     Int_t diagneg = 0;
     if (HessStdErr>0) {
+
       LkhdFcn(_nN,grad,fvalue,thisparam,3,hess);
       
       TMatrixD invhess(_nN,_nN);
@@ -3947,6 +3981,22 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 	  }
 	} // Predicting==0
 	else {
+
+	  Double_t * trialparam = new Double_t[_nN];
+	  Double_t * Lratio = new Double_t[_nN];
+	  double baseline = fvalue;
+
+	  
+	  for (Int_t ifac = 0 ; ifac < _nN ; ifac++) {
+	    for (Int_t jfac = 0 ; jfac < _nN ; jfac++) trialparam[jfac] = thisparam[jfac];
+	    trialparam[ifac] += sqrt(2.0)*1.22*0.75*sqrt(invhess(ifac,ifac));
+	    
+	    LkhdFcn(_nN,grad,fvalue,trialparam,1,hess);
+	    Lratio[ifac] = fvalue - baseline;
+	    
+	  }
+	  
+	  
 	  // Save factor predictions
 	  facprediction.clear();
 	  for (UInt_t ifac = 0; ifac < nfac ; ifac++) facprediction.push_back(thisparam[ifac]);
@@ -3967,7 +4017,8 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 	      }
 	      // append the factor predictions
 	      for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
-		fprintf(pFile,"%10.5f ",thisparam[ifac]);
+		//		fprintf(pFile,"%10.5f %10.5f ",thisparam[ifac],sqrt(invhess(ifac,ifac)));
+		fprintf(pFile,"%10.5f %10.5f %10.5f ",thisparam[ifac],sqrt(invhess(ifac,ifac)), -Lratio[ifac]);
 		//	    for (UInt_t ifac = 0; ifac < nfac ; ifac++) fprintf(pFile,"%10.5f %10.5f ",thisparam[ifac],sqrt(invhess(ifac,ifac)));
 	      }
 	    }
@@ -3975,12 +4026,30 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 	      for (UInt_t ivar = 0 ; ivar < nvar ; ivar++) {
 		fprintf(pFile,"%10.5f ",data[predictobs*nvar+ivar]);
 	      }
-	      for (UInt_t ifac = 0; ifac < nfac ; ifac++) fprintf(pFile,"%10.5f ",thisparam[ifac]);
+	      for (UInt_t ifac = 0; ifac < nfac ; ifac++) fprintf(pFile,"%10.5f %10.5f ",thisparam[ifac],sqrt(invhess(ifac,ifac)));
 	    }
 
+	    // if (predictobs<10) {
+	    //   fprintf(pFile,"\n Likelihood for this observation:\n");
+	    //   for (float igrid = 0.0 ; igrid<40.0 ; igrid++) { 
+	    // 	fprintf(pFile,"%10.5f ", -2.0 + igrid/10.0);
+		
+	    // 	for (Int_t ifac = 0 ; ifac < _nN ; ifac++) {
+	    // 	  for (Int_t jfac = 0 ; jfac < _nN ; jfac++) trialparam[jfac] = thisparam[jfac];
+	    // 	  //		trialparam[ifac] += sqrt(invhess(ifac,ifac));
+	    // 	  trialparam[ifac] = -2.0 + igrid/10.0;
+	    // 	  LkhdFcn(_nN,grad,fvalue,trialparam,1,hess);
+	    // 	  fprintf(pFile,"%10.5f ", fvalue);
+	    // 	}
+	    // 	fprintf(pFile,"\n");
+	    //   }
+	    //	  }
+	    
 	    fprintf(pFile,"\n");
 	    fclose (pFile);
 	  }
+	  delete [] Lratio;
+	  delete [] trialparam;
 	}
       }
     }
@@ -4346,7 +4415,7 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 
 
 void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, Double_t *gamma, Int_t iflag, Int_t rank, Int_t np) {
-  
+
   
   //   cout << "point 1\n";
   // **********************
@@ -4565,10 +4634,17 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 
   // Find first outcome model
   UInt_t first_outmodel=9999;
+  UInt_t estimating_outcomes = 0;
   for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
+    // Find first outcome model
     if ((models[imod].GetGroup()==1)&&(first_outmodel==9999)) first_outmodel = imod;
+
+    // Use the fact that all outcome models are ignored when estimating measurement system
+    if ((models[imod].GetGroup()>0)&&(models[imod].GetIgnore()==0)) estimating_outcomes = 1;
   }
 
+  //comment this out later:
+  //  cout << "Estimating_outcomes=" << estimating_outcomes << endl;
   
   // if (rank>0)   cout << "point 5, rank=" << rank << endl;
   //  cout << "point 5\n";
@@ -4576,42 +4652,65 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
   vector<Double_t> modhess;
   vector<Double_t> modelEval;
 
-
   // Loop over observations
 //   for (UInt_t iobs = start ; iobs < end ; iobs++) {
 //     UInt_t i = bootstrapobs[iobs];
+  TRandom *r3 = new TRandom3();
+  Int_t countstochflag1 = 0;
 
   for (UInt_t i = start ; i < end ; i++) {
 
-    if ((skipobs[i]==0)&&(bootstrapobs[i]>0)) {
-    //   for (UInt_t i = 0 ; i < 1 ; i++) {
-    //Reset i quantities
-    Double_t totalprob = 0.0;
-    if (iflag>=2) {
-      for (UInt_t ipar = 0 ; ipar < nparam; ipar++) totalgrad[ipar] = 0.0;
-      //      if (iflag==3) for (UInt_t ipar = 0 ; ipar < nparam*nparam; ipar++) totalhess[ipar] = 0.0;
-      if (iflag==3) {
-
-	if (predicting==0) {
-	  for (ifreepar = 0 ; ifreepar < nfreeparam; ifreepar++) {
-	    for (UInt_t jfreepar = ifreepar ; jfreepar < nfreeparam; jfreepar++) {
-	      Int_t fullHessindex = freeparlist[ifreepar]*nparam+freeparlist[jfreepar];
-	      totalhess[fullHessindex] = 0.0;
+    Int_t stochflag = iflag;
+    if ((iflag>2)&&(stoch_deriv_frac>0.0)) {
+      Double_t draw = r3->Uniform();
+      if (draw>stoch_deriv_frac) {
+	stochflag = 2;
+	countstochflag1++;
+      }
+    }
+    
+    //Check to see if observation is missing for relevant outcome models
+    UInt_t estimate_thisobs = 0;
+    if (estimating_outcomes==0) estimate_thisobs = 1;
+    else {
+      for (UInt_t imod = first_outmodel ; imod < models.size() ; imod++) {
+	if (models[imod].GetIgnore()==0) {
+	  if (models[imod].GetMissing()>-1) {
+	    if (data[i*nvar + models[imod].GetMissing()] != 0) estimate_thisobs = 1;
+	  }
+	  else estimate_thisobs = 1;
+	}
+      }
+    }
+    if ( (estimate_thisobs==1) && (skipobs[i]==0) && (bootstrapobs[i]>0) ) {
+      //   for (UInt_t i = 0 ; i < 1 ; i++) {
+      //Reset i quantities
+      Double_t totalprob = 0.0;
+      if (stochflag>=2) {
+	for (UInt_t ipar = 0 ; ipar < nparam; ipar++) totalgrad[ipar] = 0.0;
+	//      if (stochflag==3) for (UInt_t ipar = 0 ; ipar < nparam*nparam; ipar++) totalhess[ipar] = 0.0;
+	if (stochflag==3) {
+	  
+	  if (predicting==0) {
+	    for (ifreepar = 0 ; ifreepar < nfreeparam; ifreepar++) {
+	      for (UInt_t jfreepar = ifreepar ; jfreepar < nfreeparam; jfreepar++) {
+		Int_t fullHessindex = freeparlist[ifreepar]*nparam+freeparlist[jfreepar];
+		totalhess[fullHessindex] = 0.0;
+	      }
 	    }
 	  }
-	}
-	else {
-	  for (UInt_t ifac = 0 ; ifac < nfac; ifac++) {
-	    for (UInt_t jfac = ifac ; jfac < nfac; jfac++) {
-	      Int_t fullHessindex = ifac*nparam+jfac;
-	      totalhess[fullHessindex] = 0.0;
+	  else {
+	    for (UInt_t ifac = 0 ; ifac < nfac; ifac++) {
+	      for (UInt_t jfac = ifac ; jfac < nfac; jfac++) {
+		Int_t fullHessindex = ifac*nparam+jfac;
+		totalhess[fullHessindex] = 0.0;
+	      }
 	    }
 	  }
 	}
       }
-    }
-  //   cout << "point 6\n";
-    for (UInt_t imix = 0 ; imix < est_nmix*(nfac_eff>0)+(nfac_eff==0) ; imix++) {
+      //   cout << "point 6\n";
+      for (UInt_t imix = 0 ; imix < est_nmix*(nfac_eff>0)+(nfac_eff==0) ; imix++) {
 
       vector<UInt_t> facint(nfac_eff,0);
       // need to turn this into one loop so it doesn't depend on nfac:
@@ -4637,12 +4736,12 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	//	cout << "****calculating element imix=" << imix << ", intpt=" << intpt << "\n";
 	  // Reset ilk quantities (i=obs, l=mixture, k=integration point)
 	  Double_t probilk = 1.0;
-	  if (iflag>=2) {
+	  if (stochflag>=2) {
 
 	    // USE ASSIGN TO RESET TO 0?????
 	    for (UInt_t ipar = 0 ; ipar < nparam; ipar++) gradilk[ipar] = 0.0;
 
- 	    if (iflag==3) {
+ 	    if (stochflag==3) {
 
 	      if (predicting==0) {
 		for (ifreepar = 0 ; ifreepar < nfreeparam; ifreepar++) {
@@ -4675,7 +4774,7 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	      probilk = probilk *w[facint[ifac]];
 	    }
 	    
-	    if ((iflag>=2)&&(stage!=2)) {
+	    if ((stochflag>=2)&&(stage!=2)) {
 	      //  for (UInt_t ifac = 0; ifac < nfac ; ifac++) gradilk[Getifvar(imix,ifac)] += 1.0/Getfvar(imix,ifac);
  	      // gradient of weight term:
  	      for (UInt_t imix_grad = 0; imix_grad < est_nmix-1 ; imix_grad++) {
@@ -4683,7 +4782,7 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
  		else gradilk[Getifw(imix_grad)] += -w_mix[imix_grad];
  	      }
  	      //Hessian of weight terms:
- 	      if (iflag==3) {
+ 	      if (stochflag==3) {
  		for (UInt_t imix_grad1 = 0; imix_grad1 < est_nmix-1 ; imix_grad1++) {
  		  for (UInt_t imix_grad2 = imix_grad1; imix_grad2 < est_nmix-1 ; imix_grad2++) {
  		    if (imix_grad1==imix_grad2) {
@@ -4730,8 +4829,8 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	      //	      if ((!initializing)&&(intpt==0)&&(i==0)&&(imix==0)) cout << "Processing model " << models[imod].GetName() << " of type " <<  models[imod].GetType() << " ignore=" << models[imod].GetIgnore() << "\n";
 
 	      //Do not estimate gradient and hessian for measurement system if evaluating outcomes
-	      Int_t thisflag = iflag;
-	      if ((imod<first_outmodel)&&(stage==2)) thisflag = 1;
+	      Int_t thisflag = stochflag;
+	      if ((imod<first_outmodel)&&(estimating_outcomes==1)) thisflag = 1;
 	      
 	      models[imod].Eval(i*nvar,data,param,firstpar,fac_val,modelEval,modhess,thisflag);
 //	      models[imod].Eval(i*nvar,data,param,firstpar,fac_val,modelEval,modhess,2);
@@ -5077,9 +5176,9 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	  totalprob = totalprob + probilk;
 	  
 	  // sum gradiant and hessian over integration points and mixtures
-	  if (iflag>=2) {
+	  if (stochflag>=2) {
 
- 	    if (iflag==3) {
+ 	    if (stochflag==3) {
 
 	      if (predicting==0) {
 		for (ifreepar = 0 ; ifreepar < nfreeparam; ifreepar++) {
@@ -5122,10 +5221,12 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
     if (bootstrapobs[i]>1) repeatobs *= bootstrapobs[i];
     if (weightvar>-1) repeatobs *= data[i*nvar+weightvar];
 
-
     logLkhd += -log(totalprob)*repeatobs;
 
-    if (iflag>=2) {
+    //Reweight hessian for stochastic derivatives
+    //    if ((stoch_deriv_frac>0.0)&&(iflag>2)) repeatobs /= stoch_deriv_frac;
+
+    if (stochflag>=2) {
       if (predicting==0) {
 	ifreepar = 0;
 	for (UInt_t ipar = 0 ; ipar < nparam; ipar++) {
@@ -5134,21 +5235,24 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	    ifreepar++;
 	  }
 	}
-      }
-      else {
+      }      else {
 	// If predicting factors:
 	for (UInt_t ifac = 0 ; ifac < nfac; ifac++) {
 	  gradL[ifac] += (-totalgrad[ifac]/totalprob)*repeatobs;
 	}
       }
 
+      
        if (iflag==3) {
 	 if (predicting==0) {
 	   Int_t hessindex = 0;
 	   for (ifreepar = 0 ; ifreepar < nfreeparam; ifreepar++) {
 	     for (UInt_t jfreepar = ifreepar ; jfreepar < nfreeparam; jfreepar++) {
 	       Int_t fullHessindex = freeparlist[ifreepar]*nparam+freeparlist[jfreepar];
-	       hessL[hessindex] += (-totalhess[fullHessindex]/totalprob + totalgrad[freeparlist[ifreepar]]*totalgrad[freeparlist[jfreepar]]/(totalprob*totalprob))*repeatobs;
+	       hessL[hessindex] += (totalgrad[freeparlist[ifreepar]]*totalgrad[freeparlist[jfreepar]]/(totalprob*totalprob))*repeatobs;
+
+	       if (stoch_deriv_frac<0.0) hessL[hessindex] += (-totalhess[fullHessindex]/totalprob)*repeatobs;
+	       //	       else if (stochflag==3) hessL[hessindex] += (-totalhess[fullHessindex]/totalprob/stoch_deriv_frac)*repeatobs;
 	       hessindex++;
 	     }
 	   }
@@ -5179,7 +5283,9 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 
     } //check skipobs
   } // loop over observations
- 
+
+  //  printf("Found %d skips out of %d and frac=%f; %f\n",countstochflag1,end-start, float(countstochflag1)/(float(end-start)), stoch_deriv_frac);
+  
    counter++;
    return;
 }
@@ -5578,8 +5684,11 @@ void TMinLkhd::PrintParam(int pmod) {
     for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {
       Int_t imod = norm_models.at(ifac);
       //      cout << "fac#" << ifac << " normalized in model " << imod;
-      vector <Double_t> fnorm = models.at(imod).GetNorm();
-      if (imod>-1) cout << "fac #" << ifac << ": " << models.at(imod).GetTitle() << " with normalization=" << fnorm.at(ifac) << "\n";
+      if (imod>-1) {
+	vector <Double_t> fnorm = models.at(imod).GetNorm();
+	cout << "fac #" << ifac << ": " << models.at(imod).GetTitle() << " with normalization=" << fnorm.at(ifac) << "\n";
+      }
+      else cout << "fac #" << ifac << ": Variance fixed to 1.0\n";
     }
 
     cout << endl << "****Factors*************" << endl;

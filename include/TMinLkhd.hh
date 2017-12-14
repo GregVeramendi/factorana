@@ -58,6 +58,10 @@ private:
 
   UInt_t EstSequentMix;
 
+  Double_t max_cpu_limit;
+  Double_t stoch_deriv_frac;
+  UInt_t CalcHess;
+  
   UInt_t nquad_points;
   UInt_t stage;
   std::vector<Double_t> x; 
@@ -263,7 +267,10 @@ public:
   void SetObsIndex(const TString index);
   void UseWeights(const TString weight);
   void PrintMargEffect() {printmargeffect=1;}
-
+  void SetCPULimit(const double sec) { if (sec>0) max_cpu_limit = sec;}
+  void SetStochasticDeriv(const double frac) { if (frac>0.0 && frac<1.0) stoch_deriv_frac = frac;}
+  void DoNotUseHessian() {CalcHess = 0;}
+  
   Int_t Minimize(Int_t printlevel = 1);
   Int_t Est_measurementsys(Int_t printlevel = 1);
   Int_t Est_outcomes(Int_t printlevel = 1);
