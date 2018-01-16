@@ -38,6 +38,8 @@
 
 using namespace std;
 
+const long double PI = 3.141592653589793238;
+
 int fexist(const char *filename );
 int dexist(const char *dirname );
 
@@ -57,6 +59,7 @@ TMinLkhd::TMinLkhd()
   fac_corr =0; 
   nfac=0;
   nquad_points=0;
+  adapt_int = 0;
   nparam = 0;
   nfreeparam = 0;
   stage = 0;
@@ -104,7 +107,9 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
   fac_nmix =fnmix;
   est_nmix = fac_nmix;
   nfac=nfactors;
-  nquad_points=nquad;
+  //  nquad_points=nquad;
+  nquad_points=abs(nquad);
+  adapt_int = (nquad<0);
   stage = thisstage;
   max_cpu_limit = -1.0;
   stoch_deriv_frac = -1.0;   
@@ -141,31 +146,52 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
 //   newmodignore = 0;
 
   // Calculate Gaussian quadrature points and weights
-  if (nquad>0) {
-    // Calculate quadrature constants
-    // Using arrays:
-//     x = new Double_t[nquad];
-//     w = new Double_t[nquad];
-//    calcgausshermitequadrature(nquad_points,x,w);
+  if (nquad_points>0) {
 
-// Using vectors:
-    x.resize(nquad);
-    w.resize(nquad);
+    x.resize(nquad_points);
+    w.resize(nquad_points);
 
-    Double_t * getx = new Double_t[nquad];
-    Double_t * getw = new Double_t[nquad];
+    //Make minimum array size 7 for adaptive integration calculations
+    Int_t arraysize = nquad_points;
+    if (arraysize<7) arraysize = 7;
+      
+    Double_t * getx = new Double_t[arraysize];
+    Double_t * getw = new Double_t[arraysize];
     calcgausshermitequadrature(nquad_points,getx,getw);
 
     Double_t sqrt2 = sqrt(2.0);
     // Here we scale all x's by square root of two in anticipation of likelihood calculation
-    for (int i = 0; i < nquad; i++) {
+    for (UInt_t i = 0; i < nquad_points; i++) {
       x[i] = sqrt2*getx[i];
       w[i] = getw[i];
     }
+
+    // Calculate quadrature points for adaptive integration. Need 1, 3, 5, 7 points
+    if (adapt_int==1) {
+      // We include 1, 3, 5, 7 quadrature points for adaptive integration
+      xadapt.resize(16);
+      wadapt.resize(16);
+
+      Int_t lasti = 0;
+      xadapt.at(lasti) = 0.0;
+      wadapt.at(lasti) = sqrt(PI);
+      //      printf("adaptive points [%2d]= %8.5f %8.5f\n",1,xadapt.at(lasti),wadapt.at(lasti));
+
+      for (int iquad = 3 ; iquad < 8; iquad +=2 ) {
+	calcgausshermitequadrature(iquad,getx,getw);
+	for (int ipoint = 0 ; ipoint < iquad; ipoint++) {
+	  lasti++;
+	  xadapt.at(lasti) = sqrt2*getx[ipoint];
+	  wadapt.at(lasti) = getw[ipoint];
+	  //	  printf("adaptive points [%2d]= %8.5f %8.5f\n",iquad,xadapt.at(lasti),wadapt.at(lasti));
+	}
+      }
+    }
+
     delete [] getx;
     delete [] getw;
 
-//    cout << "The quadrature points are:" << endl;
+    //    cout << "The quadrature points are:" << endl;
 //    for (int i = 0 ; i < nquad ; i++) cout << x[i] << " " << w[i] << endl;
   }
 
@@ -425,6 +451,55 @@ void TMinLkhd::SetData(char * filename, char * vart_file) {
     for (UInt_t iobs = 0 ; iobs < nobs ; iobs++) bootstrapobs[iobs] = 1;
   }  
 }
+
+
+
+void TMinLkhd::SetFactorScores() {
+
+  if (nobs==0) {
+    cout << "***Error in TMinLkhd::SetFactorScores*** You must add the data file before you can specify the index variable" << endl;
+    assert(0);
+  }
+
+  // Read in factor-scores if using adaptive integration
+  std::vector<Double_t> initv(nfac,0.0);
+  fscore.resize(nobs,initv);
+  fstderr.resize(nobs,initv);
+  
+  TString filename = TString("factor_predictions.txt");
+  filename.Prepend(workingdir);
+  
+  if (fexist((char *)filename.Data())) {
+    Int_t obs_id;
+    Double_t score, score_err;
+    
+    ifstream in1;
+    in1.open(filename.Data());
+    if (GetMPRank()==0) cout << "Reading in factor scores: " << filename.Data() << "\n";
+    
+    for (UInt_t iobs = 0 ; iobs < nobs; iobs++) {
+      in1 >> obs_id;
+      for (UInt_t ifac = 0; ifac < nfac; ifac++) {
+	in1 >> score >> score_err;
+	
+	if (!in1.good()) {
+	  cout << "***ABORTING: Problem reading factor score values\n";
+	  assert(0);
+	}
+	fscore[iobs][ifac] = score;
+	fstderr[iobs][ifac] = score_err;
+	//      printf("%4d %8.4f %8.4f\n",parnum,lastpar,lastpar_err);
+      }
+    }
+    in1.close();
+  }
+  else {
+    cout << "***ABORTING: " << filename.Data() << " not found, need values of parameters in measurement system!!\n";
+    assert(0);
+  }
+}  
+
+
 
 void TMinLkhd::SetObsIndex(const TString index) {
 
@@ -743,8 +818,7 @@ void TMinLkhd::ResetFitInfo() {
     if (param_fixval.at(ipar)>-9998.0) {
       param.at(ipar) = param_fixval.at(ipar);
       param_err.at(ipar) = -9999.0;
-      parfixed.at(ipar) = 2;
-      nfreeparam--;
+      FixParPerm(ipar);
     }
   }
   //  printf("***TMinLkhd::ResetFitInfo() with %d parameters and %d free.\n",param.size(),nfreeparam);
@@ -926,7 +1000,7 @@ void TMinLkhd::ResetFitInfo() {
   // Check that there is a normalization for each factor
   for (UInt_t ifac =0; ifac < nfac; ifac++) {
     if (norm_models.at(ifac) == -1) {
-      cout << "Factor #" << ifac << "is not normalized!\n";
+      if (GetMPRank()==0) cout << "Factor #" << ifac << " is not normalized: ";
 
       if (fac_nmix>1) {
 	printf("Not able to use mixtures without normalizing a loading\n");
@@ -934,12 +1008,12 @@ void TMinLkhd::ResetFitInfo() {
       }
       else {
 	// If using normal distribution fix variance to 1.0:
-	printf("Fixing variance to 1.0 for factor #%d\n",ifac);
+	if (GetMPRank()==0) printf("Fixing variance to 1.0 for factor #%d\n",ifac);
 	param_fixval.at(ifac) = 1.0;
 	param.at(ifac) = 1.0;
 	param_err.at(ifac) = 0.0;
 
-	FixPar(ifac);
+	FixParPerm(ifac);
 	//	parfixed.at(ifac) = 1;
 	//	nfreeparam--;
 
@@ -1099,13 +1173,13 @@ void TMinLkhd::ResetFitInfo() {
       vector <Double_t> thisnorm = models[imod].GetNorm();
       for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {
 	if (thisnorm.size()==0) {
-	  Setparam(ipar, thismult*loadingMultiplier*facloadsign.at(ifac));
+	  Setparam(ipar, thismult*loadingMultiplier*facloadsign.at(ifac)*0.1);
 	  Setparam_err(ipar, 0.01);
 	  ipar++;
 	}
 	else {
 	  if (thisnorm.at(ifac)<-9998) {
-	    Setparam(ipar, thismult*loadingMultiplier*facloadsign.at(ifac));
+	    Setparam(ipar, thismult*loadingMultiplier*facloadsign.at(ifac)*0.1);
 	    Setparam_err(ipar, 0.01);
 	    ipar++;
 	  }
@@ -1933,10 +2007,17 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
   
   if (printlvl>0) cout << endl << "********Initial parameter values:" << endl;
   if (printlvl>0) PrintParam(0);
-  for (Int_t ipar = 0 ; ipar < num_param ;ipar++) thisparam[ipar] = param[ipar];
-  
+
+  Int_t ifreepar = 0;
+  for (Int_t ipar = 0 ; ipar < num_param ;ipar++) {
+    if (parfixed[ipar]==0) {
+      thisparam[ifreepar] = param[ipar];
+      ifreepar++;
+    }
+  }
+
   cout << "Ok, now minimizing all parameters!\n";
-  LkhdFcn(num_param,grad,fvalue,thisparam,2);
+  LkhdFcn(ifreepar,grad,fvalue,thisparam,1);
   cout << "Initial Likelihood=" << fvalue << endl;
   
   timer.Reset();
@@ -2022,8 +2103,16 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
   if (ierflg==0) {
     // ierflg = Min_Minuit(0);
     ierflg = Min_Ipopt(1);
-    for (Int_t ipar = 0 ; ipar < num_param ;ipar++) thisparam[ipar] = param[ipar];
-    LkhdFcn(num_param,grad,fvalue,thisparam,1);
+
+    ifreepar = 0;
+    for (Int_t ipar = 0 ; ipar < num_param ;ipar++) {
+      if (parfixed[ipar]==0) {
+	thisparam[ifreepar] = param[ipar];
+	ifreepar++;
+      }
+    }
+    //    for (Int_t ipar = 0 ; ipar < num_param ;ipar++) thisparam[ipar] = param[ipar];
+    LkhdFcn(ifreepar,grad,fvalue,thisparam,1);
     cout << "Final Likelihood=" << fvalue << endl;
     finallkhds[fac_nmix-1] = fvalue;
 
@@ -2038,8 +2127,16 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
     cout << "*******MINIMIZATION FAILED!!********" << endl;
     if (printlvl>0) PrintParam(0);
     
-    for (Int_t ipar = 0 ; ipar < num_param ;ipar++) thisparam[ipar] = param[ipar];
-    LkhdFcn(num_param,grad,fvalue,thisparam,2);
+    //    for (Int_t ipar = 0 ; ipar < num_param ;ipar++) thisparam[ipar] = param[ipar];
+
+    ifreepar = 0;
+    for (Int_t ipar = 0 ; ipar < num_param ;ipar++) {
+      if (parfixed[ipar]==0) {
+	thisparam[ifreepar] = param[ipar];
+	ifreepar++;
+      }
+    }
+    LkhdFcn(ifreepar,grad,fvalue,thisparam,2);
     if (printlvl>0) cout << "Last Likelihood=" << fvalue << endl;
     if (printlvl>0) cout << "Gradient= \n";
     for (Int_t ipar = 0 ; ipar < num_param ;ipar++) printf("%4d: %8.4f\n",ipar,grad[ipar]);
@@ -2111,6 +2208,9 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
 
 
 Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
+
+  TString filename;
+
   cout << "***** Estimating Outcomes *******\n";
 
   // Get first outcome model and parameter
@@ -2129,7 +2229,7 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
   }
   // Read in the values of the parameters in the measurement system:
 
-  TString filename;
+  //  TString filename;
   if ((nsubsamples==0)&&(nbootsamples==0)) {
     filename = TString("meas_par.txt");
   }
@@ -2192,9 +2292,15 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
     PrintParam(0);
   }
   cout << "Calculating likelihood of measurement system..." << endl;
-  LkhdFcn(ifreepar,grad,fvalue,thisparam,1);
-  cout << "Measurement system Likelihood=" << fvalue << endl;
 
+  TStopwatch timer;
+  timer.Reset();
+  timer.Start();
+  LkhdFcn(ifreepar,grad,fvalue,thisparam,1);
+  timer.Stop();
+  cout << "Measurement system Likelihood=" << fvalue << endl;
+  cout << "Calculating the Likelihood took " << timer.CpuTime() << " seconds.\n";
+  
   for (UInt_t imod = 0 ; imod < models.size() ; imod++) RemoveIgnoreMod(imod);
   for (UInt_t i = 0 ; i < nparam ; i++) ReleasePar(i);
 
@@ -2227,7 +2333,7 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
     }
 
     //    ierflg = Min_Minuit(-1);
-    ierflg = Min_Ipopt(0);
+    ierflg = Min_Ipopt(1);
     if (printlvl>0) PrintParam(imod+1);
     if ((ierflg!=0)&&(nsubsamples==0)&&(nbootsamples==0)) assert(0);
     
@@ -2248,7 +2354,7 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
 
   vector<Int_t> failed_groups;
 
-  TStopwatch timer;
+  //  TStopwatch timer;
   timer.Reset();
   timer.Start();
   // Estimate Outcomes in each group:
@@ -3786,7 +3892,9 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
   SmartPtr<IpoptApplication> app = new IpoptApplication();
 
   //  app->Options()->SetNumericValue("tol", 1e-7);
-  //  app->Options()->SetIntegerValue("print_level", printlevel+1);
+  if (predicting==1){
+    app->Options()->SetIntegerValue("print_level", printlevel+1);
+  }
   app->Options()->SetStringValue("mu_strategy", "adaptive");
   app->Options()->SetStringValue("nlp_scaling_method","none");
   app->Options()->SetNumericValue("obj_scaling_factor",1.0);
@@ -3905,11 +4013,10 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 //                                  void   * const  userParams);
 
   if ((status==1)||(status==0)) {
-    if (printlevel>0) cout << "Minimization done. Lkhd= " << fvalue << "\n";
 
     mynlp->getparam(thisparam);
 
-    if (printlevel>0) cout << "Calculating Standard Errors...\n";
+    if (printlevel>0) cout << "Minimization done. Calculating Standard Errors...\n";
 
     for (UInt_t i = 0 ; i < nparam ; i++) {
       if (parfixed[i]==0) {
@@ -3921,7 +4028,9 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
     if (HessStdErr>0) {
 
       LkhdFcn(_nN,grad,fvalue,thisparam,3,hess);
-      
+      if (printlevel>0) cout << "Lkhd= " << fvalue << "\n";
+
+    
       TMatrixD invhess(_nN,_nN);
       counter = 0;
       for (Int_t irow = 0 ; irow < _nN ; irow++) {
@@ -3984,23 +4093,54 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 
 	  Double_t * trialparam = new Double_t[_nN];
 	  Double_t * Lratio = new Double_t[_nN];
+	  Double_t * sigmai = new Double_t[_nN];
 	  double baseline = fvalue;
 
 	  
 	  for (Int_t ifac = 0 ; ifac < _nN ; ifac++) {
-	    for (Int_t jfac = 0 ; jfac < _nN ; jfac++) trialparam[jfac] = thisparam[jfac];
-	    trialparam[ifac] += sqrt(2.0)*1.22*0.75*sqrt(invhess(ifac,ifac));
+	    double minlratio = 10.0;
+	    sigmai[ifac] = sqrt(invhess(ifac,ifac));
 	    
-	    LkhdFcn(_nN,grad,fvalue,trialparam,1,hess);
-	    Lratio[ifac] = fvalue - baseline;
+	    for (Int_t jfac = 0 ; jfac < _nN ; jfac++) trialparam[jfac] = thisparam[jfac];
+
+	    while (minlratio>1.0) {
+	      
+	      trialparam[ifac] = thisparam[ifac] + sigmai[ifac];
+	      LkhdFcn(_nN,grad,fvalue,trialparam,1,hess);
+	      if (fvalue - baseline < minlratio) minlratio = fvalue - baseline;
+
+	      trialparam[ifac] = thisparam[ifac] - sigmai[ifac];
+	      LkhdFcn(_nN,grad,fvalue,trialparam,1,hess);
+	      if (fvalue - baseline < minlratio) minlratio = fvalue - baseline;
+
+	      if (minlratio>1.0) sigmai[ifac] = 0.8*sigmai[ifac];
+	    }
+
+	    //	    trialparam[ifac] = 0.0;
+	    //	    LkhdFcn(_nN,grad,fvalue,trialparam,1,hess);
+	    Lratio[ifac] = minlratio;
 	    
 	  }
 	  
 	  
 	  // Save factor predictions
-	  facprediction.clear();
-	  for (UInt_t ifac = 0; ifac < nfac ; ifac++) facprediction.push_back(thisparam[ifac]);
+	  facprediction.resize(nfac,0.0);
+	  for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
 
+	    // Reset extreme values that have scores>sqrt(2)*4.5*sigma
+	    // This is the most extreme point used with Gauss-Hermite quadrature (n=16)
+	    // I am guessing this will not happen as often once we include the prior (factor distribution)
+	    // when estimating the factor scores. It is pretty rare now.
+	    if ((fac_nmix==1) && (fabs(thisparam[ifac]) > 4.688738939305818364688*sqrt(2.0)*Getfvar(0,ifac)) ) {
+	      facprediction.at(ifac) = 4.688738939305818364688*sqrt(2.0)*Getfvar(0,ifac);
+	      if (thisparam[ifac]<0) facprediction.at(ifac) = -1.0*facprediction.at(ifac);
+	    }
+	    else {
+	      facprediction.at(ifac) = thisparam[ifac];
+	    }
+	  }
+	  
+	  
 	  // print factor predictions for this observation if not bootstrap
 	  if ((nsubsamples==0)&&(nbootsamples==0)) {
 	    FILE * pFile;
@@ -4008,25 +4148,16 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 	    filename = TString("factor_predictions.txt");
 	    filename.Prepend(workingdir);
 	    pFile = fopen(filename.Data(),"a");
-	    if (simIncData==0) {
-	      if (indexvar==-1) {
-		fprintf(pFile,"%10d ", predictobs);
-	      }
-	      else {
-		fprintf(pFile,"%10d ", Int_t(data[predictobs*nvar+indexvar]));
-	      }
-	      // append the factor predictions
-	      for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
-		//		fprintf(pFile,"%10.5f %10.5f ",thisparam[ifac],sqrt(invhess(ifac,ifac)));
-		fprintf(pFile,"%10.5f %10.5f %10.5f ",thisparam[ifac],sqrt(invhess(ifac,ifac)), -Lratio[ifac]);
-		//	    for (UInt_t ifac = 0; ifac < nfac ; ifac++) fprintf(pFile,"%10.5f %10.5f ",thisparam[ifac],sqrt(invhess(ifac,ifac)));
-	      }
+	    if (indexvar==-1) {
+	      fprintf(pFile,"%10d ", predictobs);
 	    }
 	    else {
-	      for (UInt_t ivar = 0 ; ivar < nvar ; ivar++) {
-		fprintf(pFile,"%10.5f ",data[predictobs*nvar+ivar]);
-	      }
-	      for (UInt_t ifac = 0; ifac < nfac ; ifac++) fprintf(pFile,"%10.5f %10.5f ",thisparam[ifac],sqrt(invhess(ifac,ifac)));
+	      fprintf(pFile,"%10d ", Int_t(data[predictobs*nvar+indexvar]));
+	    }
+	    // append the factor predictions
+	    for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
+	      //	      fprintf(pFile,"%10.5f %10.5f %10.5f ",thisparam[ifac],sigmai[ifac], Lratio[ifac]);
+	      fprintf(pFile,"%10.5f %10.5f ",facprediction[ifac],sigmai[ifac]);
 	    }
 
 	    // if (predictobs<10) {
@@ -4709,33 +4840,72 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	  }
 	}
       }
-      //   cout << "point 6\n";
+
+      //      cout << "point 6\n";
       for (UInt_t imix = 0 ; imix < est_nmix*(nfac_eff>0)+(nfac_eff==0) ; imix++) {
 
-      vector<UInt_t> facint(nfac_eff,0);
-      // need to turn this into one loop so it doesn't depend on nfac:
+       // Store: npoints, factor_values and weights for each point
+       UInt_t nint_points = 1;
+       nint_points = pow(nquad_points,nfac_eff);
+       std::vector<UInt_t> fac_npoints(nfac,nquad_points);
+       std::vector<Int_t> facint_offset(nfac,0);
+       
+       if ((adapt_int==1)&&(nfac_eff>0)) {
+	 double adapt_int_thresh = 0.5;
+	 Double_t ave_std = 0.0;
+	 Int_t nfac_noRE = 0;
 
-      // UInt_t totpoints = 1;
-      // for (UInt_t ifac = 0 ; ifac < nfac_eff; ifac++) totpoints *= nquad_points;
-      // for (UInt_t intpt = 0; intpt < totpoints ; intpt++) {
+	 for (UInt_t ifac = 0 ; ifac <nfac ; ifac++) {
 
-      // (nfac==0) and (nfac<2) are limits so that likelihood is eval'd even if nfac!=2
-	for (UInt_t intpt = 0; intpt < pow(nquad_points,nfac_eff) ; intpt++) {
-//       for(UInt_t int1 = 0; int1 < nquad_points*(nfac_eff>0)+(nfac_eff==0); int1++) {
-// 	for (UInt_t int2 = 0 ; int2 < nquad_points*(nfac_eff>1)+(nfac_eff<2); int2++) {
+	   //If random effect (fstderr<0) then use nquad_points
+	   UInt_t tmp_npoints = nquad_points;
+
+	   if (fstderr[i][ifac]>0.0) {
+	     // We can later adjust this
+	     tmp_npoints = 1+2*floor(fstderr[i][ifac]/Getfvar(imix,ifac)/adapt_int_thresh);
+	     if (tmp_npoints>7) tmp_npoints = nquad_points;
+
+	     ave_std += fstderr[i][ifac]/Getfvar(imix,ifac);
+	     nfac_noRE++;
+	   }
+
+	   fac_npoints[ifac] = tmp_npoints;
+	   //	   if ((fac_npoints[ifac]==1)||(fac_npoints[ifac]==nquad_points)) facint_offset[ifac] = 0;
+	   if (fac_npoints[ifac]==3) facint_offset[ifac] = 1;
+	   else if (fac_npoints[ifac]==5) facint_offset[ifac] = 4;
+	   else if (fac_npoints[ifac]==7) facint_offset[ifac] = 9;
+	 }
+
+	 //If std is big on average then use nquad_points
+	 if ( ave_std/nfac_noRE > 1.5) {
+	   for (UInt_t ifac = 0 ; ifac <nfac ; ifac++) {
+	     facint_offset[ifac] = 0;
+	     fac_npoints[ifac]=nquad_points;
+	   }
+	 }
+	 nint_points = 1;
+	 for (UInt_t ifac = 0 ; ifac <nfac ; ifac++) nint_points *= fac_npoints[ifac];
+       }
+
+       //       cout << "Finished calculating adaptive integration numbers!\n";
+       //loop over integration points
+       vector<UInt_t> facint(nfac,0);
+
+       for (UInt_t intpt = 0; intpt < nint_points ; intpt++) {
 
 	// get integration points for each factor from loop
 	if (intpt!=0) {
 	  for (UInt_t ifac = 0 ; ifac <nfac_eff ; ifac++) {
 	    facint[ifac]++;
-	    if (facint[ifac]<nquad_points) break;
-	    else facint[ifac] = 0;
+	    if (facint[ifac]<fac_npoints[ifac]) break;
+	      else facint[ifac] = 0;
 	  }
 	}
-
+	
 	//	cout << "****calculating element imix=" << imix << ", intpt=" << intpt << "\n";
 	  // Reset ilk quantities (i=obs, l=mixture, k=integration point)
 	  Double_t probilk = 1.0;
+
 	  if (stochflag>=2) {
 
 	    // USE ASSIGN TO RESET TO 0?????
@@ -4770,8 +4940,17 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	    probilk = probilk*w_mix[imix];
 
 	    //weight of quadrature approximation to integral
-	    for (UInt_t ifac = 0 ; ifac < nfac_eff; ifac++) {
-	      probilk = probilk *w[facint[ifac]];
+	    if (adapt_int==0) {
+	      for (UInt_t ifac = 0 ; ifac < nfac_eff; ifac++) {
+		probilk = probilk *w[facint[ifac]];
+	      }
+	    }
+	    else {
+	      //	      cout << "Calculating quadrature weights!\n";
+	      for (UInt_t ifac = 0 ; ifac < nfac_eff; ifac++) {
+		if (fac_npoints[ifac]<8) probilk = probilk * wadapt[facint[ifac] + facint_offset[ifac]];
+		else probilk = probilk *w[facint[ifac]];
+	      }
 	    }
 	    
 	    if ((stochflag>=2)&&(stage!=2)) {
@@ -4809,7 +4988,7 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
  	  else if (predicting) {
 	    for (UInt_t ifac = 0; ifac < nfac ; ifac++) fac_val.push_back(gamma[ifac]);
 	  }
- 	  else {
+ 	  else if (adapt_int==0) {
 	    if (fac_corr==0) {
 	      for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
 		fac_val.push_back(Getfvar(imix,ifac)*x[facint[ifac]]+fac_mean[ifac+nfac*imix]);
@@ -4820,6 +4999,21 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	      if (nfac>1) fac_val.push_back(x2sc[Getx2i(imix,facint[0],facint[1])]+fac_mean[1+nfac*imix]);
 	    }
  	  }
+	  else if (adapt_int==1) {
+	    for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
+		if (fac_npoints[ifac]<8) {
+		  fac_val.push_back(fscore[i][ifac] + fstderr[i][ifac]*xadapt[facint[ifac]+facint_offset[ifac]]);
+
+		  // Additional terms from importance sampling:
+		  probilk = probilk * exp(facint_offset[ifac]*facint_offset[ifac]);
+		  probilk = probilk * exp(-1.0*fac_val[ifac]*fac_val[ifac]/(2*Getfvar(imix,ifac)*Getfvar(imix,ifac)));
+		  
+		}
+		else {
+		  fac_val.push_back(Getfvar(imix,ifac)*x[facint[ifac]]+fac_mean[ifac+nfac*imix]);
+		}
+	    }
+	  }
 
 	  //	  cout << "now calculating actual models\n";
  	  for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
@@ -5310,8 +5504,10 @@ void TMinLkhd::PrintParamTab(int pmod) {
     for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {
       Int_t imod = norm_models.at(ifac);
       //      cout << "fac#" << ifac << " normalized in model " << imod;
-      vector <Double_t> fnorm = models.at(imod).GetNorm();
-      if (imod>-1) cout << "fac #" << ifac << ": " << models.at(imod).GetTitle() << " with normalization=" << fnorm.at(ifac) << "\n";
+      if (imod>-1) {
+	vector <Double_t> fnorm = models.at(imod).GetNorm();
+	cout << "fac #" << ifac << ": " << models.at(imod).GetTitle() << " with normalization=" << fnorm.at(ifac) << "\n";
+      }
     }
 
 

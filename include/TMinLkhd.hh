@@ -5,6 +5,7 @@
 #include "TNamed.h"
 #include "TModel.hh"
 #include "TString.h"
+
 #include <vector>
 
 void SetBitOn(UInt_t & var, UInt_t shift);
@@ -62,11 +63,14 @@ private:
   Double_t stoch_deriv_frac;
   UInt_t CalcHess;
   
+  Bool_t adapt_int;
   UInt_t nquad_points;
   UInt_t stage;
-  std::vector<Double_t> x; 
-  std::vector<Double_t> w; //Quadrature constants
+  std::vector<Double_t> x, xadapt, w, wadapt; //Quadrature constants         
 
+  std::vector<std::vector<Double_t> >  fscore;
+  std::vector<std::vector<Double_t> >  fstderr;
+  
   UInt_t nfac;
   Int_t fac_corr;
   UInt_t fac_nmix;
@@ -207,7 +211,8 @@ public:
   void ResetNewFixPar() {SetBitOff(newflag,2);}
   UInt_t GetNewFixPar() {return GetBit(newflag,2);}
   void FixPar(UInt_t iparam) {if (parfixed.at(iparam)==0) { nfreeparam--; parfixed.at(iparam) = 1; SetBitOn(newflag,2);} }
-  void ReleasePar(UInt_t iparam) { if (parfixed.at(iparam)==1) {nfreeparam++; parfixed.at(iparam) = 0; SetBitOn(newflag,2);} }
+  void FixParPerm(UInt_t iparam) {if (parfixed.at(iparam)==0) { nfreeparam--; parfixed.at(iparam) = 2; SetBitOn(newflag,2);}}
+  void ReleasePar(UInt_t iparam) { if (parfixed.at(iparam)==1) {nfreeparam++; parfixed.at(iparam) = 0; SetBitOn(newflag,2);}}
   UInt_t GetFixPar(UInt_t iparam) {return parfixed.at(iparam);}
   std::vector<UInt_t> GetFixPar() {return parfixed;}
   void SetFixPar(Int_t * thisfixpar) {
@@ -264,6 +269,7 @@ public:
   void SimSamplePosterior() {sampleposterior = 1;}
   void SetSimNobs(UInt_t nobs) {sim_nobs = nobs;}
 
+  void SetFactorScores();
   void SetObsIndex(const TString index);
   void UseWeights(const TString weight);
   void PrintMargEffect() {printmargeffect=1;}
