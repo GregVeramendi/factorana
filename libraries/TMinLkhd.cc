@@ -2723,37 +2723,38 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
     predicting = 1;
     predictobs = 0;
 
-    // clear file of predicted factor scores
-    if ((nsubsamples==0)&&(nbootsamples==0)) {
-      FILE * pFile;
-      filename = TString("factor_predictions.txt");
-      filename.Prepend(workingdir);
-      pFile = fopen (filename.Data(),"w");
-      fclose (pFile);
-    }
+//     // clear file of predicted factor scores
+//     if ((nsubsamples==0)&&(nbootsamples==0)) {
+//       FILE * pFile;
+//       filename = TString("factor_predictions.txt");
+//       filename.Prepend(workingdir);
+//       pFile = fopen (filename.Data(),"w");
+//       fclose (pFile);
+//     }
 
     Int_t ierflg = 0;
     // get posterior density at mode
     for (UInt_t iobs = 0 ; iobs < nobs ; iobs++) {
-      if(iobs%100==0) printf("Predicting factors for observation #%d\n",iobs);
-      predictobs = iobs;
-      ierflg = Min_Ipopt(0);
+      //       if(iobs%100==0) printf("Predicting factors for observation #%d\n",iobs);
+      //      predictobs = iobs;
+      //      ierflg = Min_Ipopt(0);
 
       for (UInt_t ifac = 0; ifac <  nfac; ifac++) {
-	thisparam[ifac] = facprediction.at(ifac);
+	thisparam[ifac] = fscore[iobs][ifac];
       }
+      predictobs = iobs;
       LkhdFcn(npar_min,grad,fvalue,thisparam,1,hess);
       maxlkhd.at(iobs) = fvalue;
-      printf("*** maxlkhd(obs=%d)=%5.3f\n\n",iobs,fvalue);
+      //      printf("*** maxlkhd(obs=%d)=%5.3f\n\n",iobs,fvalue);
 
       if (ierflg!=0) {
 	printf("PREDICT_FACTOR: Failed to minimize factor for observation #%d\n",iobs);
         assert(0);
       }
     }
+    printf("Finished Calculating value of likelihood at factor scores\n");
   }
 
-  
   // Get maxweight
   Double_t maxweight = -1.0;
   if (weightvar!=-1) {
@@ -2805,6 +2806,8 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 	  else imix=2;
 	}
 	
+	fac_val.clear();
+	
 	//Calculate factors 
 	if ((nfac==2)&&(fac_corr!=0)) {
 	  fac_val.push_back(fac_mean.at(imix*nfac) + Getfvar(imix,0)*f_draw.at(0));
@@ -2824,7 +2827,7 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 	  for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) thisparam[ifac] = fac_val.at(ifac);
 
 	  LkhdFcn(npar_min,grad,fvalue,thisparam,1,hess);
-
+	  //	  fvalue = 0.0;
 	  Double_t postdensity = exp(maxlkhd.at(obs_drw)-fvalue);
 	  Double_t draw = r3->Uniform();
 
@@ -2833,10 +2836,18 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 	  //	  printf("lkhd=%5.3f maxlkhd=%5.3f prob=%5.4f draw=%5.4f\n", fvalue, maxlkhd.at(obs_drw), postdensity, draw);
 
 	  if (draw<postdensity) acceptdraw=1;
+	  //	  if (1) acceptdraw=1;
 	  else {
 	    // reject draw
-	    fac_val.clear();
-	    //	    if (ndraws>1000000) {
+	    if (ndraws>10000) {
+	      printf("***Simulating: Couldn't find factors that pass acceptance sampling! \n Using factors that maximize the likelihood of measurement system for observation %d\n",obs_drw);
+	      for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {
+		//		printf("Setting %d factor for %d observation where arrays are size %d and %d.\n",ifac,obs_drw,fac_val.size(),fscore.size());
+		fac_val.at(ifac) = fscore[obs_drw][ifac];  
+		acceptdraw=1;
+	      }
+	    }
+	    
 	    // if (0) {
 	    //   Int_t ierflg = 0;
 	    //   ierflg = Min_Ipopt(0);
@@ -5477,6 +5488,8 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 
     } //check skipobs
   } // loop over observations
+
+  delete r3;
 
   //  printf("Found %d skips out of %d and frac=%f; %f\n",countstochflag1,end-start, float(countstochflag1)/(float(end-start)), stoch_deriv_frac);
   
