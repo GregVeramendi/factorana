@@ -91,6 +91,7 @@ TMinLkhd::TMinLkhd()
   cpurank = 0;
   initBetaOLS = 0;
   initFixedLoadings = 0;
+  initVariance = -1.0;
   loadingMultiplier = 0.001;
   bootstrapstart = 0;
 }
@@ -127,6 +128,7 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
   HessStdErr = 1;
   sampleposterior = 0;
   simIncData = 0;
+  simWithData = 0;
   sim_nobs = 100000;
   newflag = 0;
   EstSequentMix = 0;
@@ -138,6 +140,7 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
   current_estimationgroup = 0;
   initBetaOLS = 0;
   initFixedLoadings = 0;
+  initVariance = -1.0;
   loadingMultiplier = 0.001;
 
 //   newskipobs = 0;
@@ -693,17 +696,92 @@ void TMinLkhd::ConstrainLastFactorLoadingToModel(const UInt_t targetmod, UInt_t 
 }
 
 
-void TMinLkhd::LastModel_SetEndogenousReg(UInt_t modelN) {
+void TMinLkhd::LastModel_SetEndogenousReg(TString endogvar) {
 
-  if (modelN<models.size()) {
-    models.back().SetEndogenousReg(modelN,models,var_table);  
+  // Get var number:
+  int endogvarnum = -9999;
+  for (UInt_t ivar = 0 ; ivar < nvar ; ivar++) {
+    if (!endogvar.CompareTo(var_table.at(ivar))) {
+      endogvarnum = ivar;
+      break;
+    }
   }
-  else {
-    cout << "***Error in TMinLkhd::LastModel_SetEndogenousReg*** Model number is bigger than the size of the model array!" << endl;
+  if (endogvarnum==-9999) {
+    cout << "***Error in TMinLkhd::LastModel_SetEndogenousReg(" << models.back().GetName() << ")*** Could not find the variable " 
+	 << endogvar.Data()  << " in the list of variables. Maybe a typo??"
+	 << endl;
     assert(0);
   }
 
+  models.back().AddEndogenousReg(endogvarnum);
+  
 }
+
+
+void TMinLkhd::SetSimModelOrder(std::vector<TString> & modlist) {
+  
+  sim_modelorder.clear();
+
+  for (UInt_t ilist = 0 ; ilist < modlist.size(); ilist++) {
+  
+    // Get var number:
+    int modvarnum = -9999;
+    for (UInt_t ivar = 0 ; ivar < nvar ; ivar++) {
+      if (!modlist.at(ilist).CompareTo(var_table.at(ivar))) {
+	modvarnum = ivar;
+	break;
+      }
+    }
+    if (modvarnum==-9999) {
+      cout << "***Error in TMinLkhd::SetSimModelOrder*** Could not find the variable " 
+	   << modlist.at(ilist).Data()  << " in the list of variables. Maybe a typo??"
+	   << endl;
+      assert(0);
+    }
+    
+    int modnum = -9999.0;
+    for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
+      if (models.at(imod).GetOutcome()==modvarnum) {
+	modnum = imod;
+	break;
+      }
+    }
+    if (modnum==-9999) {
+      cout << "***Error in TMinLkhd::SetSimModelOrder*** Could not find model with outcome " 
+	   << modlist.at(ilist).Data()  << " in the list of models. Maybe a typo??"
+	   << endl;
+      assert(0);
+    }
+    sim_modelorder.push_back(modnum);
+  }
+
+  //Check that all models have been included:
+  for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
+    int foundmodel = 0;
+    for (UInt_t jmod = 0 ; jmod < sim_modelorder.size() ; jmod++) {
+      if (sim_modelorder.at(jmod)==imod) {
+	foundmodel = 1;
+	break;
+      }
+    }
+    if (foundmodel==0) sim_modelorder.push_back(imod);
+  }
+
+  if (models.size()!=sim_modelorder.size()) {
+      cout << "***Error in TMinLkhd::SetSimModelOrder*** Model lists don't match! WTF?" 
+	   << endl;
+      assert(0);
+  }
+
+  //Print order of simulating models
+  printf("Simulation order of models set to:\n");
+
+  for (UInt_t jmod = 0 ; jmod < sim_modelorder.size() ; jmod++) {
+    printf("%d: %s\n",jmod,models.at(sim_modelorder.at(jmod)).GetName());
+  }
+}
+
+
 
 void TMinLkhd::LastModel_FixParamValue(TString fixvar, double value, int choice) {
 
@@ -1186,8 +1264,14 @@ void TMinLkhd::ResetFitInfo() {
 	}
       }
       if (models[imod].GetType()==1) {
-	Setparam(ipar, outcome_sd);
-	Setparam_err(ipar, 0.5*outcome_sd);
+	if (initVariance>0) {
+	  Setparam(ipar, initVariance);
+	  Setparam_err(ipar, 0.5*initVariance);
+	}
+	else {
+	 Setparam(ipar, outcome_sd);
+	 Setparam_err(ipar, 0.5*outcome_sd);
+	}
 	ipar++;
       }
       if (models[imod].GetType()==4) {
@@ -1212,16 +1296,16 @@ Int_t TMinLkhd::Minimize(Int_t printlevel) {
   
   // Reset the fit parameters and results
   ResetFitInfo();
-  if (stage==0) return TestCode(printlevel);
-  else if (stage==1) return Est_measurementsys(printlevel);
-  else if (stage==2) return Est_outcomes(printlevel);
+  if (stage==0) return TestCode(printlvl);
+  else if (stage==1) return Est_measurementsys(printlvl);
+  else if (stage==2) return Est_outcomes(printlvl);
   else if (stage==3) {
-    Int_t err = Est_measurementsys(printlevel);
-    if (err==0) err = Est_outcomes(printlevel);
+    Int_t err = Est_measurementsys(printlvl);
+    if (err==0) err = Est_outcomes(printlvl);
     return err;
   }
-  else if (stage==4) return Simulate(printlevel);
-  else if (stage==5) return PredictFactors(printlevel);
+  else if (stage==4) return Simulate(printlvl);
+  else if (stage==5) return PredictFactors(printlvl);
   else {
     cout << "******ERROR: non-existent stage=" << stage << "\n";
     return -1;
@@ -2306,39 +2390,43 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
 
   //Run regressions first:
   Int_t ierflg = 0;
-  initializing=1;
-  for (UInt_t imod = 0 ; imod < models.size() ; imod++) SetIgnoreMod(imod);
-  cout << "**************Running individual regressions" << "\n";
-  for (UInt_t imod = first_outmodel ; imod < models.size() ; imod++) {
-    if ((printlvl>0)||(imod%10==0)||(imod == UInt_t(first_outmodel))||(imod+1 == models.size())) cout << "****Minimizing Model #" << imod << "\n";
-    if (printlvl>1) PrintParam(imod+1);
-    RemoveIgnoreMod(imod);
-    for (UInt_t i = 0 ; i < nparam ; i++) {
-      if ((i<fparam_models[imod]) || (i>=fparam_models[imod]+models[imod].GetNreg())) FixPar(i);
-      else ReleasePar(i);
-    }
-    if (models[imod].GetType()==1) ReleasePar(fparam_models[imod]+nparam_models[imod]-1);
-    
-    if ( (models[imod].GetType()==3) && (models[imod].GetNchoice()>2) ) {
-      for (int ichoice = 1 ; ichoice < models[imod].GetNchoice()-1 ; ichoice++) {
-	for (Int_t i =  0; i <  models[imod].GetNreg() ; i++) {
-	  ReleasePar((fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac)) + i);
+
+  if (initBetaOLS==1) {
+    initializing=1;
+    for (UInt_t imod = 0 ; imod < models.size() ; imod++) SetIgnoreMod(imod);
+    cout << "**************Running individual regressions" << "\n";
+    for (UInt_t imod = first_outmodel ; imod < models.size() ; imod++) {
+      if ((printlvl>0)||(imod%10==0)||(imod == UInt_t(first_outmodel))||(imod+1 == models.size())) cout << "****Minimizing Model #" << imod << "\n";
+      if (printlvl>1) PrintParam(imod+1);
+      RemoveIgnoreMod(imod);
+      for (UInt_t i = 0 ; i < nparam ; i++) {
+	if ((i<fparam_models[imod]) || (i>=fparam_models[imod]+models[imod].GetNreg())) FixPar(i);
+	else ReleasePar(i);
+      }
+      if (models[imod].GetType()==1) ReleasePar(fparam_models[imod]+nparam_models[imod]-1);
+      
+      if ( (models[imod].GetType()==3) && (models[imod].GetNchoice()>2) ) {
+	for (int ichoice = 1 ; ichoice < models[imod].GetNchoice()-1 ; ichoice++) {
+	  for (Int_t i =  0; i <  models[imod].GetNreg() ; i++) {
+	    ReleasePar((fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac)) + i);
+	  }
 	}
       }
-    }
-    if (models[imod].GetType()==4) {
-      for (Int_t i = 0 ; i < models[imod].GetNchoice()-1 ; i++) {
-	ReleasePar(fparam_models[imod]+nparam_models[imod]-1-i); 
+      if (models[imod].GetType()==4) {
+	for (Int_t i = 0 ; i < models[imod].GetNchoice()-1 ; i++) {
+	  ReleasePar(fparam_models[imod]+nparam_models[imod]-1-i); 
+	}
       }
+      
+      //    ierflg = Min_Minuit(-1);
+      ierflg = Min_Ipopt(1);
+      if (printlvl>0) PrintParam(imod+1);
+      if ((ierflg!=0)&&(nsubsamples==0)&&(nbootsamples==0)) assert(0);
+      
+      SetIgnoreMod(imod);
     }
-
-    //    ierflg = Min_Minuit(-1);
-    ierflg = Min_Ipopt(1);
-    if (printlvl>0) PrintParam(imod+1);
-    if ((ierflg!=0)&&(nsubsamples==0)&&(nbootsamples==0)) assert(0);
-    
-    SetIgnoreMod(imod);
   }
+  
 
   // Now minimize each model groups with the measurement system and factors
   initializing=0;
@@ -2442,8 +2530,16 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
 }
 
 Int_t TMinLkhd::Simulate(Int_t printlevel) {
-  
 
+
+  if (simWithData==0) {
+  //Set up endogenous regressors in each model:
+  for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
+    models.at(imod).SetEndogenousRegs(models,var_table);
+  }
+  printf("Finished setting endogenous variables!\n");
+  }
+  
   TString filename;
   if ((nsubsamples==0)&&(nbootsamples==0)) {
     filename = TString("fullmodel_par.txt");
@@ -2552,7 +2648,6 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 
   // open file here
   FILE * pFile;
-  //  pFile = fopen ("/local/johneric/veram_code_sims/simulation_data.dict","w");
 
   if ((nsubsamples==0)&&(nbootsamples==0)) {
     filename = TString("simulation_data.csv");
@@ -2562,7 +2657,10 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
     out << GetCurrentSample();
     filename = TString("simulation_data_").Append(out.str()).Append(".csv");
   }
-
+  if (simWithData==1) {
+    filename = TString("simulation_data_gof.csv");
+  }
+  
   filename.Prepend(workingdir);
   pFile = fopen ( ((char *)filename.Data()),"w");
 
@@ -2583,32 +2681,36 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
   varuse.resize(nvar,0);
   Int_t nsimvar = nfac;
   for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
+
+    UInt_t thismod = imod;
+    if (sim_modelorder.size()==models.size()) thismod = sim_modelorder.at(imod);
+
     // simulation gives: missing, I_obs, I_factor, shock/prob, outcome
-    fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_miss"))).Data());
+    fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()).Append("_miss"))).Data());
     nsimvar++;
 
-    if (models[imod].GetDetailSim()) {
+    if (models[thismod].GetDetailSim()) {
       int nlogitchoice = 2;
-      if (models[imod].GetType()==3) nlogitchoice = models[imod].GetNchoice();
+      if (models[thismod].GetType()==3) nlogitchoice = models[thismod].GetNchoice();
 
       // If it is a multinomial logit model we need to produce nchoice-1 * V and shprob variables
       for (int ichoice = 2 ; ichoice <= nlogitchoice ; ichoice++) {
       
 	// Only want this more than once if it is a multinomial logit model
-	if ( (models[imod].GetType()==3) || (ichoice==2) ) {
-	  fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vobs"))).Data());
-	  if ((models[imod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
+	if ( (models[thismod].GetType()==3) || (ichoice==2) ) {
+	  fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()).Append("_Vobs"))).Data());
+	  if ((models[thismod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
 	  nsimvar +=1;
 
-	  if (models[imod].GetEndogenousReg().size()>0) {
-	    fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vend"))).Data());
-	    if ((models[imod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
+	  if ( (models[thismod].GetEndogenousReg().size()>0)&&(simWithData==0) ) {
+	    fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()).Append("_Vend"))).Data());
+	    if ((models[thismod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
 	    nsimvar +=1;
 	  }
 	
 	  for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
-	    fprintf(pFile,", %s%d",(TString("sim_").Append(TString(models[imod].GetName()).Append("_Vfac"))).Data(),ifac);
-	    if ((models[imod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
+	    fprintf(pFile,", %s%d",(TString("sim_").Append(TString(models[thismod].GetName()).Append("_Vfac"))).Data(),ifac);
+	    if ((models[thismod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
 	    nsimvar +=1;
 	  }
 	}
@@ -2617,67 +2719,67 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
       // If it is a multinomial logit model we need to produce nchoice - 1 eps variables
       for (int ichoice = 2 ; ichoice <= nlogitchoice ; ichoice++) {
 	// Only want this more than once if it is a multinomial logit model
-	if ( (models[imod].GetType()==3) || (ichoice==2) ) {
-	  fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_eps"))).Data());
-	  if ((models[imod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
+	if ( (models[thismod].GetType()==3) || (ichoice==2) ) {
+	  fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()).Append("_eps"))).Data());
+	  if ((models[thismod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
 	  nsimvar +=1;
 	}
       }
     }
 
     // If it is a discrete choice model we need to produce nchoice-1 prob variables
-    if ((models[imod].GetType()==2) || (models[imod].GetType()==3) || (models[imod].GetType()==4)) {
+    if ((models[thismod].GetType()==2) || (models[thismod].GetType()==3) || (models[thismod].GetType()==4)) {
 
       int nchoice = 2;
-      if ((models[imod].GetType()==3) || (models[imod].GetType()==4)) nchoice = models[imod].GetNchoice();
+      if ((models[thismod].GetType()==3) || (models[thismod].GetType()==4)) nchoice = models[thismod].GetNchoice();
 
       for (int ichoice = 2 ; ichoice <= nchoice ; ichoice++) {
 	// generate probabilities for choices in multinomial models
-	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("_prob"))).Data());
-	if ( ((models[imod].GetType()==3) || (models[imod].GetType()==4)) && (nchoice>2) ) fprintf(pFile,"_C%1d",ichoice);
+	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()).Append("_prob"))).Data());
+	if ( ((models[thismod].GetType()==3) || (models[thismod].GetType()==4)) && (nchoice>2) ) fprintf(pFile,"_C%1d",ichoice);
 	nsimvar += 1;
       }
     }
 
-    fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()))).Data());
+    fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()))).Data());
     nsimvar++;
 
     //This is where we split up a model using an indicator variable
-    if (models[imod].GetSplitSim()) {
-      fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_miss"))).Data());
-      if (models[imod].GetDetailSim()) {
-	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_Vobs"))).Data());
+    if (models[thismod].GetSplitSim()) {
+      fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()).Append("1_miss"))).Data());
+      if (models[thismod].GetDetailSim()) {
+	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()).Append("1_Vobs"))).Data());
 	nsimvar +=1;
 	
-	if (models[imod].GetEndogenousReg().size()>0) {
-	  fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_Vend"))).Data());
+	if (models[thismod].GetEndogenousReg().size()>0) {
+	  fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()).Append("1_Vend"))).Data());
 	  nsimvar +=1;
 	}
 
 	for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
-	  fprintf(pFile,", %s%d",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_Vfac"))).Data(),ifac);
+	  fprintf(pFile,", %s%d",(TString("sim_").Append(TString(models[thismod].GetName()).Append("1_Vfac"))).Data(),ifac);
 	  nsimvar +=1;
 	}
 
-	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_eps"))).Data());
+	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()).Append("1_eps"))).Data());
 	nsimvar +=1;
 
       }
       
-      if ((models[imod].GetType()==2)||(models[imod].GetDetailSim())) {
-	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1_prob"))).Data());
+      if ((models[thismod].GetType()==2)||(models[thismod].GetDetailSim())) {
+	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()).Append("1_prob"))).Data());
 	nsimvar++;
       }
       
-      fprintf(pFile,", %s",(TString("sim_").Append(TString(models[imod].GetName()).Append("1"))).Data());
+      fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()).Append("1"))).Data());
       nsimvar +=2;
     } // Get splitsim
     
     // figure out which variables are used:
-    vector <Int_t> regs = models[imod].GetReg();
+    vector <Int_t> regs = models[thismod].GetReg();
     for (UInt_t ireg = 0 ; ireg < regs.size(); ireg++) varuse.at(regs[ireg]) = 1;
-    varuse.at(models[imod].GetOutcome()) = 1;
-    if (models[imod].GetMissing()>-1) varuse.at(models[imod].GetMissing()) = 1;
+    varuse.at(models[thismod].GetOutcome()) = 1;
+    if (models[thismod].GetMissing()>-1) varuse.at(models[thismod].GetMissing()) = 1;
   }
 
   Int_t nvarused = 0;
@@ -2763,6 +2865,8 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
     }
   }
 
+  //This is mostly for goodness of fit where we simulate each model using data and factor scores
+  if (simWithData==1) sim_nobs = nobs;
   for (UInt_t igen = 0 ; igen < sim_nobs ; igen++) {
     if (igen%10000==0) printf("Simulating %5d\n",igen);
     
@@ -2771,15 +2875,19 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
     UInt_t obs_drw = -1;
     int acceptdraw = 0;
     UInt_t ndraws = 0;
-    while (acceptdraw==0) {
-      ndraws++;
 
-      obs_drw = UInt_t(r3->Rndm()*(nobs));
-      if (obs_drw==nobs) obs_drw--;
-
-      if (weightvar==-1) acceptdraw=1;
-      else if (r3->Uniform() < data[obs_drw*nvar+weightvar]/maxweight) acceptdraw=1;
+    if (simWithData==0) {
+      while (acceptdraw==0) {
+	ndraws++;
+	
+	obs_drw = UInt_t(r3->Rndm()*(nobs));
+	if (obs_drw==nobs) obs_drw--;
+	
+	if (weightvar==-1) acceptdraw=1;
+	else if (r3->Uniform() < data[obs_drw*nvar+weightvar]/maxweight) acceptdraw=1;
+      }
     }
+    else obs_drw = igen;
 
     //    if (igen%1000==0)&&(weightvar!=-1) printf("Drawing Xs, after %d draws, weighratio=%5.3f.\n",ndraws,data[obs_drw*nvar+weightvar]/maxweight);
 
@@ -2787,88 +2895,95 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 
     if (nfac>0) {
 
-      acceptdraw = 0;
-      ndraws = 0;
-      while (acceptdraw==0) {
-	ndraws++;
-	// First draw factors from unconditional factor distribution
-	vector<Double_t> f_draw;
+      if (simWithData==0) {
 
-	// Draw from Normal distribution
-	for (UInt_t i = 0 ; i < nfac; i++) f_draw.push_back(r3->Gaus(0.0,1.0));
-	
-	//Select mixture
-	UInt_t imix = 0;
-	if (fac_nmix>1) {
-	  Double_t draw = r3->Uniform();
-	  if (draw<w_mix.at(0)) imix = 0;
-	  else if (draw < w_mix.at(0) + w_mix.at(1)) imix=1;
-	  else imix=2;
-	}
-	
-	fac_val.clear();
-	
-	//Calculate factors 
-	if ((nfac==2)&&(fac_corr!=0)) {
-	  fac_val.push_back(fac_mean.at(imix*nfac) + Getfvar(imix,0)*f_draw.at(0));
-	  fac_val.push_back(fac_mean.at(imix*nfac+1) + Getfvar(imix,1)*(f_draw.at(0)*Getfvar(imix,2) + f_draw.at(1)*sqrt(1-Getfvar(imix,2)*Getfvar(imix,2)))); 
-	}
-	else {
-	  for (UInt_t ifac = 0 ; ifac < nfac; ifac++) fac_val.push_back(fac_mean.at(imix*nfac+ifac) + Getfvar(imix,ifac)*f_draw.at(ifac));
-	}
-
-	// check if we are sampling from posterior or just factor distribution
-	if (sampleposterior==0) acceptdraw=1;
-	else {
-	  predictobs = obs_drw;
-
-	  // get posterior density 
-
-	  for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) thisparam[ifac] = fac_val.at(ifac);
-
-	  LkhdFcn(npar_min,grad,fvalue,thisparam,1,hess);
-	  //	  fvalue = 0.0;
-	  Double_t postdensity = exp(maxlkhd.at(obs_drw)-fvalue);
-	  Double_t draw = r3->Uniform();
-
-	  //	  printf("%8d ",obs_drw);
-	  //	  for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) printf("%7.3f ",fac_val.at(ifac));
-	  //	  printf("lkhd=%5.3f maxlkhd=%5.3f prob=%5.4f draw=%5.4f\n", fvalue, maxlkhd.at(obs_drw), postdensity, draw);
-
-	  if (draw<postdensity) acceptdraw=1;
-	  //	  if (1) acceptdraw=1;
-	  else {
-	    // reject draw
-	    if (ndraws>10000) {
-	      printf("***Simulating: Couldn't find factors that pass acceptance sampling! \n Using factors that maximize the likelihood of measurement system for observation %d\n",obs_drw);
-	      for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {
-		//		printf("Setting %d factor for %d observation where arrays are size %d and %d.\n",ifac,obs_drw,fac_val.size(),fscore.size());
-		fac_val.at(ifac) = fscore[obs_drw][ifac];  
-		acceptdraw=1;
-	      }
-	    }
-	    
-	    // if (0) {
-	    //   Int_t ierflg = 0;
-	    //   ierflg = Min_Ipopt(0);
-
-	    //   if (ierflg!=0) {
-	    // 	printf("PREDICT_FACTOR: Failed to minimize factor for observation #%d\n",iobs);
-	    // 	assert(0);
-	    //   }
-
-	    //   printf("***Simulating: Couldn't find factors that pass acceptance sampling! Using factors that maximize the likelihood for observation %d, ",obs_drw);
-	    //   for (UInt_t ifac = 0; ifac <  nfac; ifac++) {
-	    // 	fac_val.at(ifac) = facprediction.at(ifac);
-	    // 	printf("fac%d = %8.3f,  ", ifac, fac_val.at(ifac));
-	    //   }
-	    //   printf("\n");
-	    //   acceptdraw=1;
-	    //	    }
+	acceptdraw = 0;
+	ndraws = 0;
+	while (acceptdraw==0) {
+	  ndraws++;
+	  // First draw factors from unconditional factor distribution
+	  vector<Double_t> f_draw;
+	  
+	  // Draw from Normal distribution
+	  for (UInt_t i = 0 ; i < nfac; i++) f_draw.push_back(r3->Gaus(0.0,1.0));
+	  
+	  //Select mixture
+	  UInt_t imix = 0;
+	  if (fac_nmix>1) {
+	    Double_t draw = r3->Uniform();
+	    if (draw<w_mix.at(0)) imix = 0;
+	    else if (draw < w_mix.at(0) + w_mix.at(1)) imix=1;
+	    else imix=2;
 	  }
-	}
-      } // while (!acceptdraw)
+	  
+	  fac_val.clear();
+	  
+	  //Calculate factors 
+	  if ((nfac==2)&&(fac_corr!=0)) {
+	    fac_val.push_back(fac_mean.at(imix*nfac) + Getfvar(imix,0)*f_draw.at(0));
+	    fac_val.push_back(fac_mean.at(imix*nfac+1) + Getfvar(imix,1)*(f_draw.at(0)*Getfvar(imix,2) + f_draw.at(1)*sqrt(1-Getfvar(imix,2)*Getfvar(imix,2)))); 
+	  }
+	  else {
+	    for (UInt_t ifac = 0 ; ifac < nfac; ifac++) fac_val.push_back(fac_mean.at(imix*nfac+ifac) + Getfvar(imix,ifac)*f_draw.at(ifac));
+	  }
+	  
+	  // check if we are sampling from posterior or just factor distribution
+	  if (sampleposterior==0) acceptdraw=1;
+	  else {
+	    predictobs = obs_drw;
+	    
+	    // get posterior density 
+	    
+	    for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) thisparam[ifac] = fac_val.at(ifac);
+	    
+	    LkhdFcn(npar_min,grad,fvalue,thisparam,1,hess);
+	    //	  fvalue = 0.0;
+	    Double_t postdensity = exp(maxlkhd.at(obs_drw)-fvalue);
+	    Double_t draw = r3->Uniform();
+	    
+	    //	  printf("%8d ",obs_drw);
+	    //	  for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) printf("%7.3f ",fac_val.at(ifac));
+	    //	  printf("lkhd=%5.3f maxlkhd=%5.3f prob=%5.4f draw=%5.4f\n", fvalue, maxlkhd.at(obs_drw), postdensity, draw);
+	    
+	    if (draw<postdensity) acceptdraw=1;
+	    //	  if (1) acceptdraw=1;
+	    else {
+	      // reject draw
+	      if (ndraws>10000) {
+		printf("***Simulating: Couldn't find factors that pass acceptance sampling! \n Using factors that maximize the likelihood of measurement system for observation %d\n",obs_drw);
+		for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {
+		  //		printf("Setting %d factor for %d observation where arrays are size %d and %d.\n",ifac,obs_drw,fac_val.size(),fscore.size());
+		  fac_val.at(ifac) = fscore[obs_drw][ifac];  
+		  acceptdraw=1;
+		}
+	      }
+	    
+	      // if (0) {
+	      //   Int_t ierflg = 0;
+	      //   ierflg = Min_Ipopt(0);
+	      
+	      //   if (ierflg!=0) {
+	      // 	printf("PREDICT_FACTOR: Failed to minimize factor for observation #%d\n",iobs);
+	      // 	assert(0);
+	      //   }
+	      
+	      //   printf("***Simulating: Couldn't find factors that pass acceptance sampling! Using factors that maximize the likelihood for observation %d, ",obs_drw);
+	      //   for (UInt_t ifac = 0; ifac <  nfac; ifac++) {
+	      // 	fac_val.at(ifac) = facprediction.at(ifac);
+	      // 	printf("fac%d = %8.3f,  ", ifac, fac_val.at(ifac));
+	      //   }
+	      //   printf("\n");
+	      //   acceptdraw=1;
+	      //	    }
+	    }
+	  }
+	} // while (!acceptdraw)
       //      if (igen%1000==0) printf("Drew Theta(%d), after %d draws.\n",obs_drw,ndraws);
+      }
+      else {
+	fac_val.clear();
+	for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) fac_val.push_back(fscore[obs_drw][ifac]); 
+      }
     }
 
     if (indexvar==-1) {
@@ -2882,11 +2997,21 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 
     // Now simulate the models:
     for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
+
+      UInt_t thismod = imod;
+      if (sim_modelorder.size()==models.size()) thismod = sim_modelorder.at(imod);
+
       // simulation gives: missing, I_obs, I_factor, shock/prob, outcome
-      models[imod].Sim(obs_drw*nvar,data,models,param,fparam_models[imod],fac_val, pFile);
+      models[thismod].Sim(obs_drw*nvar,data,models,param,fparam_models[thismod],fac_val, pFile, simWithData);
     }
      if (simIncData) for (int ivar = 0 ; ivar < nvarused ; ivar++) fprintf(pFile,", %10.5f",-9999.0);
     fprintf(pFile,", %10d \n",1);
+
+    // Clear outcome data so they aren't used for other observations
+    for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
+      models.at(imod).ClearSimResult();
+    }
+
   }
 
   // Now append data to file

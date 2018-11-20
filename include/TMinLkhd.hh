@@ -55,6 +55,7 @@ private:
   Bool_t initFixedLoadings;
   UInt_t HessStdErr;
   Double_t loadingMultiplier;
+  Double_t initVariance; 
   //  Bool_t AutoRestartMeas;
 
   UInt_t EstSequentMix;
@@ -80,9 +81,11 @@ private:
   std::vector<Int_t> norm_models; 
 
   UInt_t simIncData;
+  UInt_t simWithData;
   UInt_t sim_nobs;
   UInt_t sampleposterior;
-
+  std::vector<UInt_t> sim_modelorder;
+  
   UInt_t nobs;
   UInt_t nvar;
   std::vector<Double_t> data;
@@ -157,6 +160,7 @@ public:
   TString GetWorkingDir() {return workingdir;}
 
   void SetInitLoadingMultiple(Double_t newmult) {loadingMultiplier = newmult;}
+  void SetInitVariance(Double_t initvar) {initVariance = initvar;}
   void SetInitFixedLoading() {initFixedLoadings=1;}
   void SetInitBetaOLS() {initBetaOLS=1;}
 
@@ -262,13 +266,16 @@ public:
   void SetNewFlag(UInt_t nflag) {newflag = nflag;}
 
   void LastModel_Detailsim() {models.back().DetailSim(1);}
-  void LastModel_SetEndogenousReg(UInt_t modelN);
+  void LastModel_SetXtileThresh(std::vector<Double_t> & threshlist) {models.back().SetXtileThresholds(threshlist);}
+  void LastModel_SetEndogenousReg(TString endogvar);
   void LastModel_SetEndogenousMajor(UInt_t modelN);
   void AllModel_Detailsim() {for (UInt_t imod = 0 ; imod < models.size() ; imod++) models[imod].DetailSim(1);}
   void SimIncludeData() {simIncData = 1;}
+  void SimWithData() {simWithData = 1;}
   void SimSamplePosterior() {sampleposterior = 1;}
   void SetSimNobs(UInt_t nobs) {sim_nobs = nobs;}
-
+  void SetSimModelOrder (std::vector<TString> & modorder);
+  
   void SetFactorScores();
   void SetObsIndex(const TString index);
   void UseWeights(const TString weight);

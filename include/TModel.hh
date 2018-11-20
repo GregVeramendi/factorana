@@ -27,10 +27,13 @@ private:
   Bool_t ignore;
 
   Double_t simresult;
+  Double_t simresidual;
+  std::vector<Int_t> endogVarList;
   std::vector<Int_t> endogRegList;
   std::vector<Int_t> endogModelList;
   std::vector<Int_t> endogChoiceList;
-
+  std::vector<Double_t> endogXtiles;
+  
   //static std::mt19937 mt{std::random_device{}()};
 
   public:
@@ -52,19 +55,23 @@ private:
   std::vector<Double_t> GetNorm() {return facnorm;}
   Int_t GetReg(UInt_t i) {return regressors[i];}
   Int_t GetSplitSim() {return (splitsim>-1);}
-
+  Bool_t ModelHasXtiles() {return (endogXtiles.size()>0);}
+  
   void DetailSim(UInt_t ivar) {detailsim = ivar;}
   UInt_t GetDetailSim() {return detailsim;}
   Double_t GetSimResult() {return simresult;}
-
-  void SetEndogenousReg(UInt_t endModel, std::vector<TModel> & models,std::vector<TString> & vartab);
+  void ClearSimResult() {simresult = -9999.0;}
+  
+  void SetXtileThresholds(std::vector<Double_t> & thresh) {endogXtiles = thresh;}
+  void AddEndogenousReg(UInt_t endogvarnum) {endogVarList.push_back(endogvarnum);}
+  void SetEndogenousRegs(std::vector<TModel> & models,std::vector<TString> & vartab);
   //  void SetEndogenousMajor(UInt_t endModel, std::vector<TModel> & models, std::vector<TString> & vartab);
   std::vector<Int_t> GetEndogenousReg() {return endogRegList;}
   void SplitSim(UInt_t ivar);
   void PrintModel(std::vector<TString> vartab);
   void Eval(UInt_t iobs_offset, const std::vector<Double_t> & data, const std::vector<Double_t> & param, UInt_t firstpar, const std::vector <Double_t> & fac, std::vector<Double_t> & modeval, std::vector<Double_t> & hess, Int_t gradflag);
 
-  void Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::vector<TModel> & models, const std::vector<Double_t> & param, UInt_t firstpar, const std::vector <Double_t> & fac, FILE * pfile);
+  void Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::vector<TModel> & models, const std::vector<Double_t> & param, UInt_t firstpar, const std::vector <Double_t> & fac, FILE * pfile, UInt_t gof = 0);
   Double_t GetPdf(UInt_t iobs_offset, const std::vector<Double_t> & data, const std::vector<Double_t> & param, UInt_t firstpar, const std::vector <Double_t> & fac);
 
 //   std::vector<Double_t> Eval(UInt_t iobs_offset, Double_t * data, std::vector<Double_t> param, UInt_t firstpar, std::vector <Double_t> fac);
