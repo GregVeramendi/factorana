@@ -46,12 +46,15 @@ private:
   UInt_t bootstrapstart;
   //  UInt_t newbootstrap;
   std::vector <UInt_t> bootstrapobs;
-
+  UInt_t nchsamples;
+  
   UInt_t predictobs;
   std::vector<Double_t> facprediction;
-
+  Bool_t includePriorFactorScore;
+  
   //Settings for initial parameters
   Bool_t initBetaOLS;
+  Bool_t initEstOutcomeLoadings;
   Bool_t initFixedLoadings;
   UInt_t HessStdErr;
   Double_t loadingMultiplier;
@@ -63,8 +66,10 @@ private:
   Double_t max_cpu_limit;
   Double_t stoch_deriv_frac;
   UInt_t CalcHess;
+  UInt_t HessFactorScores;
   
   Bool_t adapt_int;
+  Double_t adapt_int_thresh;
   UInt_t nquad_points;
   UInt_t stage;
   std::vector<Double_t> x, xadapt, w, wadapt; //Quadrature constants         
@@ -163,7 +168,9 @@ public:
   void SetInitVariance(Double_t initvar) {initVariance = initvar;}
   void SetInitFixedLoading() {initFixedLoadings=1;}
   void SetInitBetaOLS() {initBetaOLS=1;}
-
+  void SetIncludePriorFactorScore() {includePriorFactorScore = 1;}
+  void SetInitEstOutcomeLoadings() {initEstOutcomeLoadings=1;}
+  
   void CalcHessStdErr(UInt_t useHess = 1) {HessStdErr = useHess;}
   //  void SetAutoRestartMeasEstimation(); {AutoRestartMeas=1;}
 
@@ -179,6 +186,8 @@ public:
   void SetBootStrapStartSample(int BSstart) {bootstrapstart = BSstart;}
   UInt_t GetBootStrapStartSample() {return bootstrapstart;}
 
+  void SetNCHSamples(int nsamples) {nchsamples = nsamples;}
+  
   UInt_t GetNewSkipObs() {return GetBit(newflag,0);}
   void ResetSkipObs() {SetBitOff(newflag,0);}
   void SetSkipObs(Int_t * thisobsskip) {SetBitOn(newflag,0); for (UInt_t iobs = 0; iobs < nobs ; iobs++) skipobs[iobs] = thisobsskip[iobs];}
@@ -282,6 +291,8 @@ public:
   void PrintMargEffect() {printmargeffect=1;}
   void SetCPULimit(const double sec) { if (sec>0) max_cpu_limit = sec;}
   void SetStochasticDeriv(const double frac) { if (frac>0.0 && frac<1.0) stoch_deriv_frac = frac;}
+  void SetAdaptIntThresh(const double thresh) { if (thresh>0.0) adapt_int_thresh = thresh;}
+  void UseHessatFactorScores() {HessFactorScores = 1;}
   void DoNotUseHessian() {CalcHess = 0;}
   
   Int_t Minimize(Int_t printlevel = 1);
@@ -289,8 +300,10 @@ public:
   Int_t Est_outcomes(Int_t printlevel = 1);
   Int_t Simulate(Int_t printlevel = 1);
   Int_t PredictFactors(Int_t printlevel = 1);
+  Int_t GenerateCHsamples(Int_t printlevel = 1);
   Int_t TestCode(Int_t printlevel = 1);
   void EvalLkhd(Double_t &f, Double_t *gradL, Double_t *hessL, Double_t *minpar, Int_t iflag, Int_t rank, Int_t np);
+  void CalcLkhd(Double_t &f, Double_t *gradL, Double_t *hessL, Double_t *minpar, Int_t iflag, Int_t rank, Int_t np);
   Double_t CalcStdErrLkhdRatio(UInt_t iparam);
   Int_t Min_Minuit(Int_t printlevel);
   Int_t Min_Knitro(Int_t printlevel);

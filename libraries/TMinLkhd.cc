@@ -60,6 +60,7 @@ TMinLkhd::TMinLkhd()
   nfac=0;
   nquad_points=0;
   adapt_int = 0;
+  adapt_int_thresh = 0.5; 
   nparam = 0;
   nfreeparam = 0;
   stage = 0;
@@ -67,6 +68,7 @@ TMinLkhd::TMinLkhd()
   max_cpu_limit = -1.0;
   stoch_deriv_frac = -1.0;   
   CalcHess = 1;
+  HessFactorScores = 0;
   printlvl = 1;
   printmargeffect = 0;
   current_printgroup = 0;
@@ -75,10 +77,12 @@ TMinLkhd::TMinLkhd()
   initializing = 0;
   predicting = 0;
   predictobs = 0;
+  includePriorFactorScore = 0;
   indexvar = -1;
   weightvar = -1;
   nsubsamples = 0;
   subsample_percent = 1.0;
+  nchsamples = 0;
   nbootsamples = 0;
   bootstrapstart = 0;
   HessStdErr = 1;
@@ -90,6 +94,7 @@ TMinLkhd::TMinLkhd()
   current_sample = -1;
   cpurank = 0;
   initBetaOLS = 0;
+  initEstOutcomeLoadings = 0;
   initFixedLoadings = 0;
   initVariance = -1.0;
   loadingMultiplier = 0.001;
@@ -111,6 +116,7 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
   //  nquad_points=nquad;
   nquad_points=abs(nquad);
   adapt_int = (nquad<0);
+  adapt_int_thresh = 0.5; 
   stage = thisstage;
   max_cpu_limit = -1.0;
   stoch_deriv_frac = -1.0;   
@@ -118,13 +124,16 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
   initializing = 0;
   predicting = 0;
   predictobs = 0;
+  includePriorFactorScore = 0;
   indexvar = -1;
   weightvar = -1;
   nsubsamples = 0;
   subsample_percent = 1.0;
+  nchsamples = 0;
   nbootsamples = 0;
   bootstrapstart = 0;
   CalcHess = 1;
+  HessFactorScores = 0;
   HessStdErr = 1;
   sampleposterior = 0;
   simIncData = 0;
@@ -140,6 +149,7 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
   current_estimationgroup = 0;
   initBetaOLS = 0;
   initFixedLoadings = 0;
+  initEstOutcomeLoadings = 0;
   initVariance = -1.0;
   loadingMultiplier = 0.001;
 
@@ -205,7 +215,7 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
       cout << "***Error in TMinLkhd::TMinLkhd*** Can only estimate correlated factors for nfac=2!!" << endl;
       assert(0);
     }
-    norm_models.resize(nfac,-1);
+    norm_models.resize(nfac,-2);
 
     // nmix = 1,2,3 implemented (nmix=1 --> no mixture)
     // fac_nmix var-covar matrices, (nmix-1)*nfac means, nmix-1 weights 
@@ -482,6 +492,12 @@ void TMinLkhd::SetFactorScores() {
     
     for (UInt_t iobs = 0 ; iobs < nobs; iobs++) {
       in1 >> obs_id;
+
+      if ((indexvar>-1)&&(obs_id!=Int_t(data[iobs*nvar+indexvar]))) {
+	  cout << "***ABORTING: Problem reading factor score values\n";
+	  printf("IDs do not match! dataid=%d and factorscoreID=%d\n",Int_t(data[iobs*nvar+indexvar]),obs_id);
+	  assert(0);
+	}
       for (UInt_t ifac = 0; ifac < nfac; ifac++) {
 	in1 >> score >> score_err;
 	
@@ -609,6 +625,7 @@ void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, 
 
   UInt_t arraysize = moddata.size();
   vector<Int_t> intdata(arraysize,-9999);
+  if (!moddata[0].CompareTo("none")) intdata[0] = -1;
   if (!moddata[1].CompareTo("none")) intdata[1] = -1;
 
   for (UInt_t i = 0 ; i < arraysize ; i++) {
@@ -633,11 +650,30 @@ void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, 
   if ((normfac) && (nfac>0)) {
     for (UInt_t i = 0; i < nfac ; i++) {
       if (normfac[i]<-9998) nparam_thismodel++;
-      else if ((norm_models[i]==-1)&&(fabs(normfac[i])>0.01)) norm_models[i] = models.size();
+      //      else if ((norm_models[i]<0)&&(fabs(normfac[i])>0.001)) norm_models[i] = models.size();
     }
   }
   else nparam_thismodel += nfac;
 
+  //Look for first normalization model in measurement system
+  //Also set norm_models = -1 if at least one model loads on factor
+  if ((current_estimationgroup==0) && (nfac>0)) {
+    if (normfac) {
+      for (UInt_t i = 0; i < nfac ; i++) {
+	//Record first non-zero loading as normalization
+	if ( (norm_models[i]<0) && (fabs(normfac[i])>0.001) ) norm_models[i] = models.size();
+      }
+    }
+    else {
+      //If a model has no normalization, then set norm_models = -1 to indicate there is at least one model that loads on factor
+      for (UInt_t i = 0; i < nfac ; i++) {
+	if (norm_models[i]==-2) norm_models[i] = -1;
+      }
+    }
+  }
+
+
+  
   // variance of error term
   if (type==1) nparam_thismodel++;
 
@@ -1077,8 +1113,9 @@ void TMinLkhd::ResetFitInfo() {
 
   // Check that there is a normalization for each factor
   for (UInt_t ifac =0; ifac < nfac; ifac++) {
-    if (norm_models.at(ifac) == -1) {
-      if (GetMPRank()==0) cout << "Factor #" << ifac << " is not normalized: ";
+    if (norm_models.at(ifac) < 0 ) {
+      if ((GetMPRank()==0) && (norm_models.at(ifac)==-1) ) cout << "Factor #" << ifac << " is not normalized: ";
+      if ((GetMPRank()==0) && (norm_models.at(ifac)==-2) ) cout << "Factor #" << ifac << " is not in measurement system: ";
 
       if (fac_nmix>1) {
 	printf("Not able to use mixtures without normalizing a loading\n");
@@ -1174,7 +1211,7 @@ void TMinLkhd::ResetFitInfo() {
 	// Get covariances between normalized model(s) and outcome
 	if (ncount>lastcount) {
 	  for (UInt_t ifac = 0 ; ifac < nfac; ifac++) {
-	    if (norm_models.at(ifac) != -1) {
+	    if (norm_models.at(ifac) > -1) {
 	      if (models.at(norm_models.at(ifac)).GetMissing()==-1) {
 		sumnormout.at(ifac) += outcome*data.at(iobs*nvar + models[norm_models.at(ifac)].GetOutcome());
 		normoutcount.at(ifac)++;
@@ -1306,6 +1343,7 @@ Int_t TMinLkhd::Minimize(Int_t printlevel) {
   }
   else if (stage==4) return Simulate(printlvl);
   else if (stage==5) return PredictFactors(printlvl);
+  else if (stage==6) return GenerateCHsamples(printlvl); // generate "bootstrap" samples for Cameron-Heckman standard errors
   else {
     cout << "******ERROR: non-existent stage=" << stage << "\n";
     return -1;
@@ -2297,6 +2335,16 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
 
   cout << "***** Estimating Outcomes *******\n";
 
+  //Some checks that factor scores are loaded when they are needed:
+  if  ((initEstOutcomeLoadings)||(adapt_int)) {
+    if (fscore.size()!=nobs){
+      cout << "***ABORTING: Factor scores are not loaded when they are needed for estimation. "
+	   << "initEstOutcomeLoadings=" << initEstOutcomeLoadings
+	   << " and adapt_int=" << adapt_int << "\n";
+      assert(0);
+    }
+  }
+  
   // Get first outcome model and parameter
   Int_t first_outmodel=-1;
   Int_t last_group = 0;
@@ -2353,6 +2401,68 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
   }
 
 
+  // Read in initial values. If init_par.txt exists, use that.
+  filename = "init_par.txt";
+  filename.Prepend(workingdir);
+  if (fexist(filename.Data())) {
+    Int_t parnum;
+    Double_t lastpar;
+    Double_t lastpar_err;
+    
+    ifstream in1;
+    in1.open(filename.Data());
+    cout << "Reading in " << (nparam-fparam_models[first_outmodel]) << " initial values\n";
+    
+    for (UInt_t ipar = 0 ; ipar < nparam; ipar++) {
+      in1 >> parnum >> lastpar >> lastpar_err;
+      if (!in1.good()) {
+	cout << "Problem reading Initial parameter values\n";
+	assert(0);
+      }
+      //      printf("%4d %8.4f %8.4f\n",parnum,lastpar,lastpar_err);
+
+      if ( ipar >= fparam_models[first_outmodel] ) {
+	Setparam(ipar, lastpar*loadingMultiplier);
+	Setparam_err(ipar, lastpar_err);
+      }	
+    }
+    in1.close();
+  }
+
+  /*
+    //temporary code when checkpoint was not printing out all the paramter values
+    // Read in initial values. If init_par.txt exists, use that.
+  filename = "checkpoint_nohess3.txt";
+  filename.Prepend(workingdir);
+  if (fexist(filename.Data())) {
+    Int_t parnum;
+    Double_t lastpar;
+    Double_t lastpar_err;
+    
+    ifstream in1;
+    in1.open(filename.Data());
+    //cout << "Reading in " << (nparam-fparam_models[first_outmodel]) << " initial values\n";
+    cout << "Reading in checkpoint_nohess3.txt\n";
+
+    Int_t nparfree = 0;
+    for (UInt_t ipar = fparam_models[first_outmodel] ; ipar < nparam; ipar++) {
+      if (GetFixPar(ipar)==0) {
+	in1 >> parnum >> lastpar >> lastpar_err;
+	if (!in1.good()) {
+	  cout << "Problem reading Initial parameter values\n";
+	  assert(0);
+	}
+      //      printf("%4d %8.4f %8.4f\n",parnum,lastpar,lastpar_err);
+	nparfree++;
+	Setparam(ipar, lastpar);
+	Setparam_err(ipar, lastpar_err);
+      }
+    }
+    cout << "Done reading in " << nparfree << " parameters from checkpoint_hess3.txt\n";
+    in1.close();
+  }
+  */
+  
   Double_t fvalue = 0;
   Double_t * thisparam = new Double_t[nparam];
   Double_t * grad = new Double_t[nparam];
@@ -2417,12 +2527,30 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
 	  ReleasePar(fparam_models[imod]+nparam_models[imod]-1-i); 
 	}
       }
+
+      // Only estimate factor loadings for factors that load in the measurment system
+      // In other words, do not estimate random effects
+      if  (initEstOutcomeLoadings) {
+	cout << "***Estimating loadings using factor scores.\n";
+	for (UInt_t ifac = 0 ; ifac < nfac; ifac++) {
+	  if (norm_models[ifac]>-2) {
+	    ReleasePar(fparam_models[imod] + models[imod].GetNreg() + ifac); 
+	    
+	    if ( (models[imod].GetType()==3) && (models[imod].GetNchoice()>2) ) {
+	      for (int ichoice = 1 ; ichoice < models[imod].GetNchoice()-1 ; ichoice++) {
+		ReleasePar(fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac) + models[imod].GetNreg() + ifac);
+	      }
+	    }
+	  }
+	}
+      }
+
       
       //    ierflg = Min_Minuit(-1);
       ierflg = Min_Ipopt(1);
       if (printlvl>0) PrintParam(imod+1);
       if ((ierflg!=0)&&(nsubsamples==0)&&(nbootsamples==0)) assert(0);
-      
+
       SetIgnoreMod(imod);
     }
   }
@@ -2531,7 +2659,7 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
 
 Int_t TMinLkhd::Simulate(Int_t printlevel) {
 
-
+ 
   if (simWithData==0) {
   //Set up endogenous regressors in each model:
   for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
@@ -3083,6 +3211,38 @@ Int_t TMinLkhd::PredictFactors(Int_t printlevel) {
     return 1;
   }
 
+  if (includePriorFactorScore==1) {
+    if (fac_nmix==1) {
+      Double_t normfac[10] = {0.0};
+      
+      for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {
+	normfac[ifac] = 1.0;
+	vector<Int_t> intdata(2,-1);
+	TModel newmodel("Prior","Factor Prior", 1, 0,
+			current_printgroup,intdata,nfac,normfac);
+	models.push_back(newmodel);
+	nparam_models.push_back(1);
+	fparam_models.push_back(nparam);
+	nobs_models.push_back(nobs);
+	nparam++;
+	normfac[ifac] = 0.0;
+
+	param.resize(nparam,param[ifac]);
+	param_err.resize(nparam,param_err[ifac]);
+	parfixed.resize(nparam,0);
+	printf("Finished adding Prior #%d.\n",ifac);
+      }
+      parconstrained.resize(nparam,-1);
+      param_fixval.resize(nparam,-9999.0);
+    }
+    else {
+      cout << "ERROR TMinLkhd::PredictFactors: Cannot include prior if using mixtures of normals!!"
+	   << endl;
+      assert(0);
+    }
+  }
+
+  PrintModels();
   PrintParam();
 
 
@@ -3135,6 +3295,75 @@ Int_t TMinLkhd::PredictFactors(Int_t printlevel) {
 
   return 0;
 }
+
+
+Int_t TMinLkhd::GenerateCHsamples(Int_t printlevel) {
+ 
+  if (nchsamples==0) {
+    cout << "TMinLkhd::GenerateCHsamples(): ***ABORTING: Number of samples not defined!\n";
+    assert(0);
+  }
+  
+  TString filename;
+  filename = TString("fullmodel_par.txt");
+
+  filename.Prepend(workingdir);
+  if (fexist((char *)filename.Data())) {
+    Int_t parnum;
+    Double_t lastpar;
+    Double_t lastpar_err;
+    
+    ifstream in1;
+    //    in1.open("fullmodel_par.txt");
+    in1.open((char *)filename.Data());
+    cout << "Reading in " << nparam << " parameters for full model\n";
+    
+    for (UInt_t i = 0 ; i < nparam; i++) {
+      in1 >> parnum >> lastpar >> lastpar_err;
+      if (!in1.good()) {
+	cout << "***ABORTING: Problem reading in parameter values\n";
+	assert(0);
+      }
+      //      printf("%4d %8.4f %8.4f\n",parnum,lastpar,lastpar_err);
+      
+      Setparam(i, lastpar);
+      Setparam_err(i, lastpar_err);
+    }
+    in1.close();
+  }
+  else {
+    cout << "***ABORTING: fullmodel_par.txt not found, need values of parameters to generate CH samples!!\n";
+    return 1;
+  }
+
+  PrintParam();
+
+  TRandom *r3 = new TRandom3();
+  gRandom = r3;
+  FILE * pFile;
+
+  for (UInt_t isample = 0 ; isample < nchsamples ; isample++) {
+      
+    std::stringstream out;
+    out << isample;
+    filename = TString("fullmodel_par_").Append(out.str()).Append(".txt");
+    filename.Prepend(workingdir);
+    pFile = fopen ( ((char *)filename.Data()),"w");
+
+    for (UInt_t ipar=0 ; ipar< nparam ; ipar++) {
+      Double_t newparam = Getparam(ipar);
+      if (parfixed.at(ipar)==0) newparam += r3->Gaus(0.0,1.0)*Getparam_err(ipar);
+      fprintf (pFile, "%5d %12.8f %12.8f\n",ipar,newparam,Getparam_err(ipar));
+    }
+    fclose (pFile);
+
+  }
+
+  return 0;
+}
+
+
+
 
 Int_t TMinLkhd::Min_Minuit(Int_t printlevel) {
 
@@ -4683,6 +4912,34 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 
 void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, Double_t *gamma, Int_t iflag, Int_t rank, Int_t np) {
 
+  //Calculate hessian using factor scores
+  if ((HessFactorScores)&&(iflag>2)) {
+
+    // First calculate "exact" likelihood and gradient
+    CalcLkhd(logLkhd, gradL, hessL, gamma, 2, rank, np);
+
+    //Store values
+    Double_t tmplogLkhd = logLkhd;
+    vector<Double_t> tmpgradL(nparam,0.0);
+    for (UInt_t ipar = 0 ; ipar<nparam; ipar++) tmpgradL[ipar] = gradL[ipar];
+
+    //calculate approximate Hessian
+    Double_t current_threshold = adapt_int_thresh;
+    SetAdaptIntThresh(10000.0);
+    CalcLkhd(logLkhd, gradL, hessL, gamma, iflag, rank, np);
+
+    // Set threshold, likelihood and gradient back to "exact" levels
+    SetAdaptIntThresh(current_threshold);
+    logLkhd = tmplogLkhd;
+    for (UInt_t ipar = 0 ; ipar<nparam; ipar++) gradL[ipar] = tmpgradL[ipar]; 
+  }
+  else {
+    CalcLkhd(logLkhd, gradL, hessL, gamma, iflag, rank, np);
+  }
+}
+
+void TMinLkhd::CalcLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, Double_t *gamma, Int_t iflag, Int_t rank, Int_t np) {
+
   
   //   cout << "point 1\n";
   // **********************
@@ -4984,10 +5241,11 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
        UInt_t nint_points = 1;
        nint_points = pow(nquad_points,nfac_eff);
        std::vector<UInt_t> fac_npoints(nfac,nquad_points);
+
+       //This stores the location in the array of the correct weights and integration points
        std::vector<Int_t> facint_offset(nfac,0);
        
        if ((adapt_int==1)&&(nfac_eff>0)) {
-	 double adapt_int_thresh = 0.5;
 	 Double_t ave_std = 0.0;
 	 Int_t nfac_noRE = 0;
 
@@ -5004,9 +5262,10 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	     ave_std += fstderr[i][ifac]/Getfvar(imix,ifac);
 	     nfac_noRE++;
 	   }
+	   //	   else if (adapt_int_thresh>100.0) tmp_npoints = 3;
 
 	   fac_npoints[ifac] = tmp_npoints;
-	   //	   if ((fac_npoints[ifac]==1)||(fac_npoints[ifac]==nquad_points)) facint_offset[ifac] = 0;
+	   // if ((fac_npoints[ifac]==1)||(fac_npoints[ifac]==nquad_points)) facint_offset[ifac] = 0;
 	   if (fac_npoints[ifac]==3) facint_offset[ifac] = 1;
 	   else if (fac_npoints[ifac]==5) facint_offset[ifac] = 4;
 	   else if (fac_npoints[ifac]==7) facint_offset[ifac] = 9;
@@ -5023,7 +5282,7 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	 for (UInt_t ifac = 0 ; ifac <nfac ; ifac++) nint_points *= fac_npoints[ifac];
        }
 
-       //       cout << "Finished calculating adaptive integration numbers!\n";
+       //       cout << "Finished calculating adaptive integration numbers! " << nint_points << " integration points for obs " << Int_t(data[i*nvar+indexvar]) << ".\n";
        //loop over integration points
        vector<UInt_t> facint(nfac,0);
 
@@ -5119,7 +5378,12 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	  //Calculate value of factors at this integration point
  	  vector<Double_t> fac_val;
  	  if (initializing) {
-	    for (UInt_t ifac = 0; ifac < nfac ; ifac++) fac_val.push_back(0.0);
+	    if ((initEstOutcomeLoadings) && (estimating_outcomes==1)) {
+	      for (UInt_t ifac = 0; ifac < nfac ; ifac++) fac_val.push_back(fscore[i][ifac]);
+	    }
+	    else {
+	      for (UInt_t ifac = 0; ifac < nfac ; ifac++) fac_val.push_back(0.0);
+	    }
  	  }
  	  else if (predicting) {
 	    for (UInt_t ifac = 0; ifac < nfac ; ifac++) fac_val.push_back(gamma[ifac]);
@@ -5150,7 +5414,11 @@ void TMinLkhd::EvalLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 		}
 	    }
 	  }
-
+	  
+	  // printf("%5d %10d, %3d/%3d: ", i,Int_t(data[i*nvar+indexvar]), intpt, nint_points);
+	  // for (UInt_t ifac = 0; ifac < nfac ; ifac++) printf("%4.5f, %4.5f; ", fac_val.at(ifac), wadapt[facint[ifac] + facint_offset[ifac]]);
+	  // printf("\n");
+	  // if (i>100) assert(0);
 	  //	  cout << "now calculating actual models\n";
  	  for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
 	    //ADD IF MISSING HERE???

@@ -282,16 +282,17 @@ void MinuitLkhdFcn(Int_t &npar, Double_t *gin, Double_t &f,
 // 	     Double_t *par, Int_t iflag) {
 void LkhdFcn(Int_t &npar, Double_t *gin, Double_t &f,
 	     Double_t *par, Int_t iflag, Double_t *hess) {
-  
-  if ((mymodel.GetCounter())%100==0) {
+   
+  if ( ((mymodel.GetCounter())%100==0) | (iflag==3) ) {
     TString filename = "checkpoint.txt";
     filename.Prepend(mymodel.GetWorkingDir());
 
     FILE * pFile;
     pFile = fopen (filename.Data(),"w");
-    for (Int_t ipar=0 ; ipar< npar ; ipar++)
+    Int_t totnpar = mymodel.GetNparam();
+    for (Int_t ipar=0 ; ipar< totnpar ; ipar++)
       {
-	fprintf (pFile, "%5d %12.8f %12.8f\n",ipar,par[ipar],0.0);
+	fprintf (pFile, "%5d %12.8f %12.8f\n",ipar,mymodel.Getparam(ipar),mymodel.Getparam_err(ipar));
       }
     fclose (pFile);
   }
@@ -437,6 +438,6 @@ void LkhdFcn(Int_t &npar, Double_t *gin, Double_t &f,
     
     delete [] thisgrad;
     delete [] thishess;
-  }
+  } // initializing else
   return;
 }

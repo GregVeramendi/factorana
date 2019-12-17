@@ -60,6 +60,11 @@ TModel::TModel(const char *name, const char *title, Int_t modeltype, Int_t model
 //  }
 //  printf("\n");
 
+  if (outcome==-1 && modtype>1) {
+      cout << "ERROR (TModel::TModel): Outcome \"none\" found for discrete choice model!"
+	   << endl;
+      assert(0);
+  }
 
   numfac=nfac;
   if (thisnormfac) {
@@ -83,6 +88,13 @@ void TModel::SplitSim(UInt_t ivar) {
 
 //void TModel::SetEndogenousReg(UInt_t endModel, std::vector<TModel> & models, std::vector<TString> & vartab) {
 void TModel::SetEndogenousRegs(std::vector<TModel> & models, std::vector<TString> & vartab) {
+
+
+  //These lists will be used for simulation
+  endogRegList.clear();
+  endogModelList.clear();
+  endogChoiceList.clear();
+  
   
   //Loop over list of endogenous variables
   for (UInt_t iendogvarnum = 0; iendogvarnum < endogVarList.size() ; iendogvarnum++) {
@@ -97,15 +109,20 @@ void TModel::SetEndogenousRegs(std::vector<TModel> & models, std::vector<TString
     }
     if (endModel==9999) {
       cout << "ERROR (TModel::SetEndogenousReg): Endogenous regressor is not an outcome in any model!"
-	   << "\n\t We were looking for var" << vartab.at(endogVarList.at(iendogvarnum))
+	   << "\n\t We were looking for var " << vartab.at(endogVarList.at(iendogvarnum))
 	   << endl;
       assert(0);
     }
     
     Int_t foundreg = 0;
+
+    TString outcomename;
+    if (models.at(endModel).GetOutcome() > -1) outcomename = vartab.at(models.at(endModel).GetOutcome());
+    else outcomename = "none";
+
     
     for (int ireg = 0 ; ireg < nregressors ; ireg++) {
-      
+
       // Look for endogenous regressors from linear or probit models
       if (( models.at(endModel).GetType()==1 && models.at(endModel).ModelHasXtiles()==0 )
 	  || (models.at(endModel).GetType()==2) ) {
@@ -126,7 +143,7 @@ void TModel::SetEndogenousRegs(std::vector<TModel> & models, std::vector<TString
 	
 	//Look for endogenous regressors from multinomial models
 	
-	TString outcomename = vartab.at(models.at(endModel).GetOutcome());
+
 	if (vartab.at(regressors[ireg]).BeginsWith(outcomename)) {
 	  
 	  TString thisendogreg = vartab.at(regressors[ireg]);
@@ -165,10 +182,11 @@ void TModel::SetEndogenousRegs(std::vector<TModel> & models, std::vector<TString
 	  }
 	  else {
 	    cout << endl << "ERROR (TModel::SetEndogenousReg): Last character has to be a number between 1-99!!!"
-		 << "\n\t We were looking for var " << vartab.at(models.at(endModel).GetOutcome())
+		 << "\n\t We were looking for var " << outcomename
+	      //		 << "\n\t We were looking for var " << vartab.at(models.at(endModel).GetOutcome())
 		 << " and found " << thisendogreg
 		 << " choicelength=" << choicelength
-		 << " in model " << models.back().GetName() << endl;
+		 << " in model " << GetName() << endl;
 	    
 	    assert(0);
 	  }
@@ -178,7 +196,9 @@ void TModel::SetEndogenousRegs(std::vector<TModel> & models, std::vector<TString
 
       //Look for missing indicator
       //We will assume that there is one indicator for multinomial choice models
-      TString varname_miss = vartab.at(models.at(endModel).GetOutcome()) + "_miss";
+      //TString varname_miss = vartab.at(models.at(endModel).GetOutcome()) + "_miss";
+      TString varname_miss = outcomename + "_miss";
+      
       if (vartab.at(regressors[ireg])==varname_miss) {
       	foundreg++;
 	cout << "TModel::SetEndogenousVar(): Found missing indicator " << varname_miss << endl;
@@ -192,8 +212,9 @@ void TModel::SetEndogenousRegs(std::vector<TModel> & models, std::vector<TString
   
     if (foundreg==0) {
       cout << "ERROR (TModel::SetEndogenousReg): Endogenous regressor is not in list of covariates!"
-	   << "\n\t We were looking for var" << vartab.at(models.at(endModel).GetOutcome())
-	   << " in model " << models.back().GetName()
+	//	   << "\n\t We were looking for var " << vartab.at(models.at(endModel).GetOutcome())
+	   << "\n\t We were looking for var " << outcomename
+	   << " in model " << GetName()
 	   << endl;
       assert(0);
     }
@@ -255,7 +276,8 @@ void TModel::PrintModel(std::vector<TString> vartab)
   cout << " model for " << this->GetTitle() << "\n";
   printf(" Model groups (estimation, printing): %4d, %4d \n", modgroup,printgroup);
 
-  printf(" Outcome: %12s\n",vartab.at(outcome).Data());
+  if (outcome==-1) printf(" Outcome:         none\n");
+  else printf(" Outcome: %12s\n",vartab.at(outcome).Data());
   if (missing==-1) printf(" Missing:         none\n");
   else printf(" Missing: %12s\n",vartab.at(missing).Data());
 
@@ -286,7 +308,7 @@ void TModel::PrintModel(std::vector<TString> vartab)
 
 void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const std::vector<Double_t> & param, UInt_t firstpar, const std::vector<Double_t> & fac, std::vector<Double_t> & modEval,std::vector<Double_t> & hess, Int_t flag)
 {
-  //  cout << "Entering model, flag=" << flag <<"\n";
+  //  cout << "Entering model " << this->GetTitle() << ", flag=" << flag <<"\n";
 
   //  std::vector<Double_t> modEval;
   if (flag >= 2) {
@@ -351,7 +373,8 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 
 
   if (modtype==1) {
-    Double_t Z = data[iobs_offset+outcome]-expres[0];
+    Double_t Z = 0.0;
+    if (outcome>-1) Z = data[iobs_offset+outcome]-expres[0];
     Double_t sigma = fabs(param[firstpar+nregressors+ifreefac]);
 
     //Now find the density:
@@ -1289,7 +1312,8 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
 	  }
 	}
 	if (gof==1) {
-	  simresult = data[iobs_offset+outcome] - expres[0];
+	  simresult = - expres[0];
+	  if (outcome>-1) simresult += data[iobs_offset+outcome];
 	  //	  fprintf(pFile,", %10.5f",simresult);
 	}
       }
