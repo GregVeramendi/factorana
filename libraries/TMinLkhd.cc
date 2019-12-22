@@ -1242,6 +1242,7 @@ void TMinLkhd::ResetFitInfo() {
       }
       
       // Initialize regressors Get mean, sd and covariance with outcome
+      int countconstcovariates = 0;
       for (UInt_t ireg = 0 ; ireg < regs.size(); ireg++) {
 	sumdt = 0.0;
 	sumdtsq = 0.0;
@@ -1272,10 +1273,27 @@ void TMinLkhd::ResetFitInfo() {
 	Double_t covsign = (sumoutreg/ncount - reg_mn*outcome_mn < 0) ? -1.0 : 1.0;
 	
 	// Set intercept or beta0
-	  if (reg_sd<0.01) {
+	  if (reg_sd<0.001) {
 	    //	printf("Setting par%d=%f\n",ipar,outcome_mn/reg_mn);
-	    if (fabs(reg_mn)>0.01) Setparam(ipar, thismult*loadingMultiplier*outcome_mn/reg_mn);
-	    else Setparam(ipar, 1.0);
+	    if (fabs(reg_mn-1.0) < 0.001) {
+	      if (countconstcovariates==0) {
+		Setparam(ipar, thismult*loadingMultiplier*outcome_mn/reg_mn);
+		Setparam_err(ipar, 0.1*thismult*loadingMultiplier*outcome_mn/reg_mn);
+		countconstcovariates++;
+	      }
+	      else {
+		countconstcovariates++;
+		Setparam(ipar, 0.0);
+		Setparam_err(ipar, -9999.0);
+		FixParPerm(ipar);
+		
+	      }
+	    }
+	    else {
+	      Setparam(ipar, 0.0);
+	      Setparam_err(ipar, -9999.0);
+	      FixParPerm(ipar);
+	    }
 	  }
 	  else Setparam(ipar, thismult*loadingMultiplier*covsign*outcome_sd/reg_sd/regs.size());
 	  Setparam_err(ipar, 0.5*fabs(param[ipar]));
