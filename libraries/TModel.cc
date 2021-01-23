@@ -27,7 +27,9 @@ using namespace std;
 
 static std::mt19937_64 mt(7);
 
-TModel::TModel(const char *name, const char *title, Int_t modeltype, Int_t modelgroup, Int_t prntgroup, std::vector<Int_t> & moddata, Int_t nfac, Double_t * thisnormfac, UInt_t nchoice)
+TModel::TModel(const char *name, const char *title, Int_t modeltype, Int_t modelgroup, Int_t prntgroup,
+	       std::vector<Int_t> & moddata, Int_t nfac, Double_t * thisnormfac,
+	       UInt_t nchoice, UInt_t nrank)
   : TNamed(name,title)
 {
   ignore = 0;
@@ -37,6 +39,8 @@ TModel::TModel(const char *name, const char *title, Int_t modeltype, Int_t model
   modgroup = modelgroup;
   printgroup = prntgroup;
   numchoice = nchoice;
+  numrank = nrank;
+  rankshare = -9999.0;
   outcome = moddata[0];
   missing = moddata[1];
   nregressors = moddata.size()-2;
@@ -83,6 +87,20 @@ TModel::~TModel() {
 
 void TModel::SplitSim(UInt_t ivar) {
   splitsim = (Int_t)ivar;
+}
+
+
+void SetRankShareVar(UInt_t rankshare) {
+  if ((modtype==3) && (numrank>1) && (rankshare >= 0)) {
+    ranksharevar = rankshare;
+  }
+  else {
+    cout << "ERROR (TModel::SetRankShareVar): Either incorrect model type or negative varnumber!"
+	 << "\n\t Model type " << modetype << " nrank=" << numrank 
+	 << endl;
+    assert(0);
+  }
+
 }
 
 
@@ -924,212 +942,231 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 
     // Was state observed? (1,2,...,numchoice)
     // We'll use (0,1,...,numchoice-1) for the variable obsCat
-    Int_t obsCat = -1;
-    for (int icat = 1 ; icat <= numchoice ; icat++) if (icat == int(data[iobs_offset+outcome])) obsCat = icat-1;
-    
-    if (obsCat==-1) {
-      cout << "ERROR (TModel::Eval): Found invalid number for logit outcome!"
- 	   << " In model " <<  this->GetTitle() << "\n"
- 	   << "Looking at outcome #" << outcome 
- 	   << ", Missing (" << missing << ")=" << data[iobs_offset+missing]
- 	   << ", obs#:" << iobs_offset/379.0
- 	   << ", Value=" << data[iobs_offset+outcome] << endl;
+    // First set density to zero so we can sum up the possible ranked choices
+    modEval[0]=0.0;
+
+    for (int irank = 0 ; irank <= numrank ; irank++) {
+      Int_t obsCat = -1;
+      for (int icat = 1 ; icat <= numchoice ; icat++) if (icat == int(data[iobs_offset + outcome + irank])) obsCat = icat-1;
       
-      assert(0);
-    }
-
-    UInt_t nparamchoice = nregressors + numfac;
-
-    double logitdenom = 1.0;
-    for (int icat = 1 ; icat < numchoice; icat++) {
-      logitdenom += exp(expres[icat-1]);
-    }
-
-    modEval[0] = 1.0/logitdenom;
-
-    if (obsCat>0) {
-      modEval[0] *=  exp(expres[obsCat-1]);
-    }
-
-    // Now find the derivatives: 
-    if (flag>=2) {
-      vector<double> pdf(numchoice,1.0/logitdenom);
-      for (int icat = 1 ; icat < numchoice ; icat++) {
-	pdf[icat] *= exp(expres[icat-1]);
+      //Individuals may not use all rankings, so we only check the first one:
+      if ((obsCat==-1)&&(irank==0)) {
+	  cout << "ERROR (TModel::Eval): Found invalid number for logit outcome!"
+	       << " In model " <<  this->GetTitle() << "\n"
+	       << "Looking at outcome #" << outcome 
+	       << ", Missing (" << missing << ")=" << data[iobs_offset+missing]
+	       << ", obs#:" << iobs_offset/379.0
+	       << ", Value=" << data[iobs_offset+outcome] << endl;
+	  
+	  assert(0);
       }
 
-      vector<double> logitgrad;
-      if (flag==3) {
-	logitgrad.resize(numchoice*npar,0.0);
-      }
+      if (obsCat>-1) {
+	UInt_t nparamchoice = nregressors + numfac;
 
-      // gradient of factor parameters
-      for (int ifac = 0 ; ifac < numfac ; ifac++) {
-
-	//***************
-	// gradient of factor-specific parameters (variance, mean, weights, etc)
-	//obsCat term:
-	if (obsCat>0) modEval[1+ifac] += param[firstpar+(obsCat-1)*nparamchoice+nregressors+ifac];
- 	if (flag==3) {
-	  for (int jcat = 1 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + ifac] += param[firstpar+(jcat-1)*nparamchoice+nregressors+ifac];
-	}
-
-	//no parameters for choice=0 (i.e. Z(icat=0) = 0)
-	for (int icat = 1 ; icat < numchoice ; icat++) {
-	  modEval[1+ifac] += -pdf[icat]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
-	  if (flag==3) {
-	    for (int jcat = 0 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + ifac] += -pdf[icat]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
+	vector<double> rankedChoiceCorr(numchoice - 1, 0.0);
+	if (ranksharevar >= 0 )  {
+	  for (int icat = 0 ; icat < numchoice-1; icat++) {
+	    if (data[iobs_offset + ranksharevar + (numchoice-1)*irank + icat]> -9998.0) {
+	      rankedChoiceCorr[icat] = data[iobs_offset + ranksharevar + (numchoice-1)*irank + icat];
+	    }
 	  }
 	}
-
-	//****************
-	//gradient of factor loading (alpha) 
-	//obsCat term:
-	if (obsCat>0) modEval[1+numfac+(obsCat-1)*nparamchoice+nregressors+ifac] += fac[ifac];
-	if (flag==3) {
-	  for (int jcat = 1 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + numfac + (jcat-1)*nparamchoice + nregressors + ifac] +=  fac[ifac];
+    
+	double logitdenom = 1.0;
+	for (int icat = 1 ; icat < numchoice; icat++) {
+	  logitdenom += exp(expres[icat-1] + rankedChoiceCorr[icat-1]);
 	}
 
+	double dens = 1.0/logitdenom;
 
-	//no parameters for choice=0 (i.e. Z(icat=0) = 0)
-	for (int icat = 1 ; icat < numchoice ; icat++) {
-	  modEval[1+numfac+(icat-1)*nparamchoice+nregressors+ifac] += -pdf[icat]*fac[ifac];
-	  if (flag==3) {
-	    for (int jcat = 0 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + numfac + (icat-1)*nparamchoice + nregressors + ifac] += -pdf[icat]*fac[ifac];
-	  }
-	}
-      }
-
-      //****************
-      //gradient of betas
-      for (int ireg = 0; ireg < nregressors  ; ireg++) {
-
-	//obsCat term:
-	if (obsCat>0) modEval[1+numfac+(obsCat-1)*nparamchoice+ireg] += data[iobs_offset+regressors[ireg]];
-	if (flag==3) {
-	  for (int jcat = 1 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + numfac + (jcat-1)*nparamchoice + ireg] +=  data[iobs_offset+regressors[ireg]];
-	}
-
-	//no parameters for choice=0 (i.e. Z(icat=0) = 0)
-	for (int icat = 1 ; icat < numchoice ; icat++) {
-	  modEval[1+numfac+(icat-1)*nparamchoice+ireg] += -pdf[icat]*data[iobs_offset+regressors[ireg]];
-	  if (flag==3) {
-	    for (int jcat = 0 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + numfac + (icat-1)*nparamchoice + ireg] += -pdf[icat]*data[iobs_offset+regressors[ireg]];
-	  }
-	}
-      }
-
-      // Now Calculate Hessian
-
-      if (flag==3) {
-	
-
-	hess.resize(npar*npar,0.0);
-//	for (int i = 0; i < npar ; i++) {
-//	  for (int j = i ; j < npar ; j++) {
-//	    hess[i*npar+j] = 1.0;
-//	  }
-//	}
-
-
-
-	// First do second order derivatives (for now only dZ/dalpha dtheta terms are non-zero)
-		//Need to add dZ/dtheta dalpha
 	if (obsCat>0) {
-	  for (int ifac = 0 ; ifac < numfac ; ifac++) {
-	    Int_t index = numfac+(obsCat-1)*nparamchoice+nregressors+ifac;
-	    hess[ifac*npar+index] += 1.0;
-	  }
+	  dens *=  exp(expres[obsCat-1] + rankedChoiceCorr[icat-1]);
 	}
-	
-	//second, second-order derivative term 
-	for (int icat = 1 ; icat < numchoice ; icat++) {
-	  for (int ifac = 0 ; ifac < numfac ; ifac++) {
-	    Int_t index = numfac+(icat-1)*nparamchoice+nregressors+ifac;
-	    hess[ifac*npar+index] += -pdf[icat]*1.0;
-	  }
-	}
-
-	//Now the first-order derivative Hessian terms
-	// dtheta d....
-	for (int ifac = 0 ; ifac < numfac ; ifac++) {
-
-	  // loop over g categories (see notes)
+    
+	modEval[0] += dens;
+    
+	// Now find the derivatives: 
+	if (flag>=2) {
+	  vector<double> pdf(numchoice,1.0/logitdenom);
 	  for (int icat = 1 ; icat < numchoice ; icat++) {
-
-	      // dtheta dtheta
-	      for (int jfac = ifac ; jfac < numfac ; jfac++) {
-		hess[ifac*npar+jfac] += -pdf[icat]*logitgrad[icat*npar + jfac]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
-	      }
-
-	      // loop over parameters in each category
-	      for (int jcat = 1 ; jcat < numchoice ; jcat++) {
-
-		//dtheta dalpha
-		for (int jfac = 0 ; jfac < numfac ; jfac++) {
-		  Int_t index = numfac+(jcat-1)*nparamchoice+nregressors+jfac;
-		  hess[ifac*npar+index] += -pdf[icat]*logitgrad[icat*npar + index]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
-		}
-
-		//dtheta dbeta
-		for (int ireg = 0; ireg < nregressors  ; ireg++) {
-		  Int_t index = numfac+(jcat-1)*nparamchoice+ireg;
-		  hess[ifac*npar+index] += -pdf[icat]*logitgrad[icat*npar + index]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
-		}
-	      }
+	    pdf[icat] *= exp(expres[icat-1] + rankedChoiceCorr[icat-1]);
 	  }
-	}
-	
-	// loop over row categories (see notes)
-	for (int icat = 1 ; icat < numchoice ; icat++) {
-	  // loop over parameters in each category
-	  for (int jcat = icat ; jcat < numchoice ; jcat++) {
+
+	  vector<double> logitgrad;
+	  if (flag==3) {
+	    logitgrad.resize(numchoice*npar,0.0);
+	  }
+
+	  // gradient of factor parameters
+	  for (int ifac = 0 ; ifac < numfac ; ifac++) {
 	    
-	    //dbeta dbeta
-	    for (int ireg = 0; ireg < nregressors  ; ireg++) {
-	      for (int jreg = 0; jreg < nregressors  ; jreg++) {
-		if ( (jcat>icat) || (jreg>=ireg) ) {
-		  Int_t index1 = numfac+(icat-1)*nparamchoice+ireg;	      
-		  Int_t index2 = numfac+(jcat-1)*nparamchoice+jreg;	      
-		  hess[index1*npar+index2] += -pdf[icat]*logitgrad[icat*npar + index2]*data[iobs_offset+regressors[ireg]];
-		}
-	      }
-	    }
-	    //dbeta dalpha
-	    for (int ireg = 0; ireg < nregressors  ; ireg++) {
-	      for (int jfac = 0 ; jfac < numfac ; jfac++) {
-		Int_t index1 = numfac+(icat-1)*nparamchoice+ireg;	      
-		Int_t index2 = numfac+(jcat-1)*nparamchoice+nregressors+jfac;	      
-		hess[index1*npar+index2] += -pdf[icat]*logitgrad[icat*npar + index2]*data[iobs_offset+regressors[ireg]];
-	      }
+	    //***************
+	    // gradient of factor-specific parameters (variance, mean, weights, etc)
+	    //obsCat term:
+	    if (obsCat>0) modEval[1+ifac] += param[firstpar+(obsCat-1)*nparamchoice+nregressors+ifac];
+	    if (flag==3) {
+	      for (int jcat = 1 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + ifac] += param[firstpar+(jcat-1)*nparamchoice+nregressors+ifac];
 	    }
 	    
-	    //dalpha dbeta
-	    if (jcat>icat) {
+	    //no parameters for choice=0 (i.e. Z(icat=0) = 0)
+	    for (int icat = 1 ; icat < numchoice ; icat++) {
+	      modEval[1+ifac] += -pdf[icat]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
+	      if (flag==3) {
+		for (int jcat = 0 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + ifac] += -pdf[icat]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
+	      }
+	    }
+
+	    //****************
+	    //gradient of factor loading (alpha) 
+	    //obsCat term:
+	    if (obsCat>0) modEval[1+numfac+(obsCat-1)*nparamchoice+nregressors+ifac] += fac[ifac];
+	    if (flag==3) {
+	      for (int jcat = 1 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + numfac + (jcat-1)*nparamchoice + nregressors + ifac] +=  fac[ifac];
+	    }
+	    
+	    
+	    //no parameters for choice=0 (i.e. Z(icat=0) = 0)
+	    for (int icat = 1 ; icat < numchoice ; icat++) {
+	      modEval[1+numfac+(icat-1)*nparamchoice+nregressors+ifac] += -pdf[icat]*fac[ifac];
+	      if (flag==3) {
+		for (int jcat = 0 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + numfac + (icat-1)*nparamchoice + nregressors + ifac] += -pdf[icat]*fac[ifac];
+	      }
+	    }
+	  }
+	  
+	  //****************
+	  //gradient of betas
+	  for (int ireg = 0; ireg < nregressors  ; ireg++) {
+	    
+	    //obsCat term:
+	    if (obsCat>0) modEval[1+numfac+(obsCat-1)*nparamchoice+ireg] += data[iobs_offset+regressors[ireg]];
+	    if (flag==3) {
+	      for (int jcat = 1 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + numfac + (jcat-1)*nparamchoice + ireg] +=  data[iobs_offset+regressors[ireg]];
+	    }
+	    
+	    //no parameters for choice=0 (i.e. Z(icat=0) = 0)
+	    for (int icat = 1 ; icat < numchoice ; icat++) {
+	      modEval[1+numfac+(icat-1)*nparamchoice+ireg] += -pdf[icat]*data[iobs_offset+regressors[ireg]];
+	      if (flag==3) {
+		for (int jcat = 0 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + numfac + (icat-1)*nparamchoice + ireg] += -pdf[icat]*data[iobs_offset+regressors[ireg]];
+	      }
+	    }
+	  }
+	  
+	  // Now Calculate Hessian
+	  
+	  if (flag==3) {
+	    
+	    
+	    hess.resize(npar*npar,0.0);
+	    //	for (int i = 0; i < npar ; i++) {
+	    //	  for (int j = i ; j < npar ; j++) {
+	    //	    hess[i*npar+j] = 1.0;
+	    //	  }
+	    //	}
+
+
+
+	    // First do second order derivatives (for now only dZ/dalpha dtheta terms are non-zero)
+	    //Need to add dZ/dtheta dalpha
+	    if (obsCat>0) {
 	      for (int ifac = 0 ; ifac < numfac ; ifac++) {
-		for (int jreg = 0; jreg < nregressors  ; jreg++) {
-		  Int_t index1 = numfac+(icat-1)*nparamchoice+nregressors+ifac;	      
-		  Int_t index2 = numfac+(jcat-1)*nparamchoice+jreg;	      
-		  hess[index1*npar+index2] += -pdf[icat]*logitgrad[icat*npar + index2]*fac[ifac];
-		}
+		Int_t index = numfac+(obsCat-1)*nparamchoice+nregressors+ifac;
+		hess[ifac*npar+index] += 1.0;
 	      }
 	    }
 	    
-	    //dalpha dalpha
+	    //second, second-order derivative term 
+	    for (int icat = 1 ; icat < numchoice ; icat++) {
+	      for (int ifac = 0 ; ifac < numfac ; ifac++) {
+		Int_t index = numfac+(icat-1)*nparamchoice+nregressors+ifac;
+		hess[ifac*npar+index] += -pdf[icat]*1.0;
+	      }
+	    }
+	    
+	    //Now the first-order derivative Hessian terms
+	    // dtheta d....
 	    for (int ifac = 0 ; ifac < numfac ; ifac++) {
-	      for (int jfac = 0; jfac < numfac  ; jfac++) {
-		if ( (jcat>icat) || (jfac>=ifac) ) {
-		  Int_t index1 = numfac+(icat-1)*nparamchoice+nregressors+ifac;	      
-		  Int_t index2 = numfac+(jcat-1)*nparamchoice+nregressors+jfac;	      
-		  hess[index1*npar+index2] += -pdf[icat]*logitgrad[icat*npar + index2]*fac[ifac];
+	      
+	      // loop over g categories (see notes)
+	      for (int icat = 1 ; icat < numchoice ; icat++) {
+		
+		// dtheta dtheta
+		for (int jfac = ifac ; jfac < numfac ; jfac++) {
+		  hess[ifac*npar+jfac] += -pdf[icat]*logitgrad[icat*npar + jfac]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
+		}
+		
+		// loop over parameters in each category
+		for (int jcat = 1 ; jcat < numchoice ; jcat++) {
+		  
+		  //dtheta dalpha
+		  for (int jfac = 0 ; jfac < numfac ; jfac++) {
+		    Int_t index = numfac+(jcat-1)*nparamchoice+nregressors+jfac;
+		    hess[ifac*npar+index] += -pdf[icat]*logitgrad[icat*npar + index]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
+		  }
+		  
+		  //dtheta dbeta
+		  for (int ireg = 0; ireg < nregressors  ; ireg++) {
+		    Int_t index = numfac+(jcat-1)*nparamchoice+ireg;
+		    hess[ifac*npar+index] += -pdf[icat]*logitgrad[icat*npar + index]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
+		  }
 		}
 	      }
 	    }
 	    
-	  } //jcat
-	} //icat
-      } // flag==3
-    } //flag>=2
+	    // loop over row categories (see notes)
+	    for (int icat = 1 ; icat < numchoice ; icat++) {
+	      // loop over parameters in each category
+	      for (int jcat = icat ; jcat < numchoice ; jcat++) {
+		
+		//dbeta dbeta
+		for (int ireg = 0; ireg < nregressors  ; ireg++) {
+		  for (int jreg = 0; jreg < nregressors  ; jreg++) {
+		    if ( (jcat>icat) || (jreg>=ireg) ) {
+		      Int_t index1 = numfac+(icat-1)*nparamchoice+ireg;	      
+		      Int_t index2 = numfac+(jcat-1)*nparamchoice+jreg;	      
+		      hess[index1*npar+index2] += -pdf[icat]*logitgrad[icat*npar + index2]*data[iobs_offset+regressors[ireg]];
+		    }
+		  }
+		}
+		//dbeta dalpha
+		for (int ireg = 0; ireg < nregressors  ; ireg++) {
+		  for (int jfac = 0 ; jfac < numfac ; jfac++) {
+		    Int_t index1 = numfac+(icat-1)*nparamchoice+ireg;	      
+		    Int_t index2 = numfac+(jcat-1)*nparamchoice+nregressors+jfac;	      
+		    hess[index1*npar+index2] += -pdf[icat]*logitgrad[icat*npar + index2]*data[iobs_offset+regressors[ireg]];
+		  }
+		}
+		
+		//dalpha dbeta
+		if (jcat>icat) {
+		  for (int ifac = 0 ; ifac < numfac ; ifac++) {
+		    for (int jreg = 0; jreg < nregressors  ; jreg++) {
+		      Int_t index1 = numfac+(icat-1)*nparamchoice+nregressors+ifac;	      
+		      Int_t index2 = numfac+(jcat-1)*nparamchoice+jreg;	      
+		      hess[index1*npar+index2] += -pdf[icat]*logitgrad[icat*npar + index2]*fac[ifac];
+		    }
+		  }
+		}
+		
+		//dalpha dalpha
+		for (int ifac = 0 ; ifac < numfac ; ifac++) {
+		  for (int jfac = 0; jfac < numfac  ; jfac++) {
+		    if ( (jcat>icat) || (jfac>=ifac) ) {
+		      Int_t index1 = numfac+(icat-1)*nparamchoice+nregressors+ifac;	      
+		      Int_t index2 = numfac+(jcat-1)*nparamchoice+nregressors+jfac;	      
+		      hess[index1*npar+index2] += -pdf[icat]*logitgrad[icat*npar + index2]*fac[ifac];
+		    }
+		  }
+		}
+	    
+	      } //jcat
+	    } //icat
+	  } // flag==3
+	} //flag>=2
+      } // obsCat>-1
+    } //irank
   } //modtype==3
 
     //    cout << "Returning hessian size=" << hess.size() << "\n";

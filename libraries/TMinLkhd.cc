@@ -59,6 +59,7 @@ TMinLkhd::TMinLkhd()
   fac_corr =0; 
   nfac=0;
   nquad_points=0;
+  fac_npoints.clear();
   adapt_int = 0;
   adapt_int_thresh = 0.5; 
   nparam = 0;
@@ -115,6 +116,7 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
   nfac=nfactors;
   //  nquad_points=nquad;
   nquad_points=abs(nquad);
+  fac_npoints.clear();
   adapt_int = (nquad<0);
   adapt_int_thresh = 0.5; 
   stage = thisstage;
@@ -160,54 +162,34 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
 
   // Calculate Gaussian quadrature points and weights
   if (nquad_points>0) {
-
-    x.resize(nquad_points);
-    w.resize(nquad_points);
-
-    //Make minimum array size 7 for adaptive integration calculations
-    Int_t arraysize = nquad_points;
-    if (arraysize<7) arraysize = 7;
-      
-    Double_t * getx = new Double_t[arraysize];
-    Double_t * getw = new Double_t[arraysize];
-    calcgausshermitequadrature(nquad_points,getx,getw);
-
-    Double_t sqrt2 = sqrt(2.0);
-    // Here we scale all x's by square root of two in anticipation of likelihood calculation
-    for (UInt_t i = 0; i < nquad_points; i++) {
-      x[i] = sqrt2*getx[i];
-      w[i] = getw[i];
-    }
-
-    // Calculate quadrature points for adaptive integration. Need 1, 3, 5, 7 points
-    if (adapt_int==1) {
-      // We include 1, 3, 5, 7 quadrature points for adaptive integration
-      xadapt.resize(16);
-      wadapt.resize(16);
-
-      Int_t lasti = 0;
-      xadapt.at(lasti) = 0.0;
-      wadapt.at(lasti) = sqrt(PI);
-      //      printf("adaptive points [%2d]= %8.5f %8.5f\n",1,xadapt.at(lasti),wadapt.at(lasti));
-
-      for (int iquad = 3 ; iquad < 8; iquad +=2 ) {
-	calcgausshermitequadrature(iquad,getx,getw);
-	for (int ipoint = 0 ; ipoint < iquad; ipoint++) {
-	  lasti++;
-	  xadapt.at(lasti) = sqrt2*getx[ipoint];
-	  wadapt.at(lasti) = getw[ipoint];
-	  //	  printf("adaptive points [%2d]= %8.5f %8.5f\n",iquad,xadapt.at(lasti),wadapt.at(lasti));
-	}
+    
+    //Here we are reserving nquad_points elements for each
+    //set of constants even when fewer are needed, bc it's easier.
+    x.resize(nquad_points*(nquad_points-1));
+    w.resize(nquad_points*(nquad_points-1));
+    
+    //Set constants for one quadrature points (used for adaptive integration)
+    x.at(0) = 0.0;
+    w.at(0) = sqrt(PI);
+    
+    //Create arrays for HGQ function
+    Double_t * getx = new Double_t[nquad_points];
+    Double_t * getw = new Double_t[nquad_points];
+    
+    for (int iquad = 2 ; iquad < nquad_points; iquad++ ) {
+      printf("*****Getting constants for %2d GH quadrature points.\n",iquad+1);
+      calcgausshermitequadrature(iquad,getx,getw);
+      for (int ipoint = 0 ; ipoint < iquad; ipoint++) {
+	x.at((iquad-2)*nquad_points + ipoint) = sqrt2*getx[ipoint];
+	w.at((iquad-2)*nquad_points + ipoint) = getw[ipoint];
+	printf("quadrature points [%2d]= %22.16g %22.16g\n",iquad,GetHGQx(iquad, ipoint),GetHGQw(iquad, ipoint));
       }
+      printf("\n\n");
     }
 
     delete [] getx;
     delete [] getw;
-
-    //    cout << "The quadrature points are:" << endl;
-//    for (int i = 0 ; i < nquad ; i++) cout << x[i] << " " << w[i] << endl;
   }
-
 
   // initialize the parameters that describe the factors
   if (nfac>0) {
@@ -566,6 +548,27 @@ void TMinLkhd::UseWeights(const TString weight) {
   else printf("**OK, Using weight variable %s for likelihood.\n",weight.Data());
 }
 
+void TMinLkhd::SetFactorSpecificQuadPoints(vector<UInt_t> quadlist)
+{
+  if (quadlist.size()==nfac) {
+    fac_npoints.clear();
+    fac_npoints.resize(nfac,nquad_points);
+    
+    for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {
+      if ( (quadlist.at(ifac)>0) & (quadlist.at(ifac)<nquad_points) & (quadlist.at(ifac)%2==0) {
+	fac_npoints.at(ifac) = quadlist.at(ifac);
+      }
+      else {
+	cout << "***Error in TMinLkhd::AddModelSetFactorSpecificQuadPoints(" << name << ")*** Nquad array contains either non-positive elements, odd elements, or elements that are larger than the maximum specified!" << endl;
+	assert(0);
+      }
+    }
+  }
+  else {
+    cout << "***Error in TMinLkhd::AddModelSetFactorSpecificQuadPoints(" << name << ")*** Nquad array not the right size!" << endl;
+    assert(0);
+  }
+}
 
 
 void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, vector<TString> & moddata,Double_t * normfac, UInt_t nchoice)
@@ -751,6 +754,27 @@ void TMinLkhd::LastModel_SetEndogenousReg(TString endogvar) {
 
   models.back().AddEndogenousReg(endogvarnum);
   
+}
+
+
+void TMinLkhd::LastModel_SetRankShareVar(TString sharevar) {
+
+  // Get var number:
+  int sharevarnum = -9999;
+  for (UInt_t ivar = 0 ; ivar < nvar ; ivar++) {
+    if (!sharevar.CompareTo(var_table.at(ivar))) {
+      sharevarnum = ivar;
+      break;
+    }
+  }
+  if (sharevarnum==-9999) {
+    cout << "***Error in TMinLkhd::LastModel_SetRankShareVar(" << models.back().GetName() << ")*** Could not find the variable " 
+	 << sharevar.Data()  << " in the list of variables. Maybe a typo??"
+	 << endl;
+    assert(0);
+  }
+
+  models.back().SetRankShareVar(sharevarnum);
 }
 
 
@@ -5100,12 +5124,12 @@ void TMinLkhd::CalcLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 
 	for (UInt_t j = 0; j <  nquad_points; j++) {
 	  x2sc[Getx2i(imix,i,j)] = Getfvar(imix,1)*
-	    (Getfvar(imix,2)*x[i]+sqrt(1.0-Getfvar(imix,2)*Getfvar(imix,2))*x[j]);
+	    (Getfvar(imix,2)*GetHGQx(nquad_points,i)+sqrt(1.0-Getfvar(imix,2)*Getfvar(imix,2))*GetHGQx(nquad_points,j));
 	  
-	  x2[Getx2i(imix,i,j)] = Getfvar(imix,2)*x[i] + sqrt(1.0-Getfvar(imix,2)*Getfvar(imix,2))*x[j];
+	  x2[Getx2i(imix,i,j)] = Getfvar(imix,2)*GetHGQx(nquad_points,i) + sqrt(1.0-Getfvar(imix,2)*Getfvar(imix,2))*GetHGQx(nquad_points,j);
 	  
 	  dx2sc_drho[Getx2i(imix,i,j)] = Getfvar(imix,1)*
-	    (x[i]-Getfvar(imix,2)*x[j]/(sqrt(1.0-Getfvar(imix,2)*Getfvar(imix,2))));
+	    (GetHGQx(nquad_points,i)-Getfvar(imix,2)*GetHGQx(nquad_points,j)/(sqrt(1.0-Getfvar(imix,2)*Getfvar(imix,2))));
 	}
       }
     }
@@ -5255,50 +5279,55 @@ void TMinLkhd::CalcLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
       //      cout << "point 6\n";
       for (UInt_t imix = 0 ; imix < est_nmix*(nfac_eff>0)+(nfac_eff==0) ; imix++) {
 
-       // Store: npoints, factor_values and weights for each point
-       UInt_t nint_points = 1;
-       nint_points = pow(nquad_points,nfac_eff);
-       std::vector<UInt_t> fac_npoints(nfac,nquad_points);
+	// Store: npoints, factor_values and weights for each point
+	//       nint_points = pow(nquad_points,nfac_eff);
+	//       std::vector<UInt_t> fac_npoints(nfac,nquad_points);
 
-       //This stores the location in the array of the correct weights and integration points
-       std::vector<Int_t> facint_offset(nfac,0);
+	if (fac_npoints.size()==0) fac_npoints.resize(nfac,nquad_points);
+
+	//This stores the location in the array of the correct weights and integration points
+	//       std::vector<Int_t> facint_offset(nfac,0);
        
-       if ((adapt_int==1)&&(nfac_eff>0)) {
-	 Double_t ave_std = 0.0;
-	 Int_t nfac_noRE = 0;
+	if ((adapt_int==1)&&(nfac_eff>0)) {
+	  Double_t ave_std = 0.0;
+	  Int_t nfac_noRE = 0;
+	  std::vector<UInt_t> tmp_npoints(fac_npoints);
+	
+	  for (UInt_t ifac = 0 ; ifac <nfac ; ifac++) {
 
-	 for (UInt_t ifac = 0 ; ifac <nfac ; ifac++) {
+	    //If random effect (fstderr<0) then use default
 
-	   //If random effect (fstderr<0) then use nquad_points
-	   UInt_t tmp_npoints = nquad_points;
+	    if (fstderr[i][ifac]>0.0) {
+	      // Ad-hoc rule, probably needs to be adjusted depending on the model
+	      // Odd number of integration points indicates importance sampling
+	      tmp_npoints.at(ifac) = 1+2*floor(fstderr[i][ifac]/Getfvar(imix,ifac)/adapt_int_thresh);
 
-	   if (fstderr[i][ifac]>0.0) {
-	     // We can later adjust this
-	     tmp_npoints = 1+2*floor(fstderr[i][ifac]/Getfvar(imix,ifac)/adapt_int_thresh);
-	     if (tmp_npoints>7) tmp_npoints = nquad_points;
+	      //If more points than default are specified, use default
+	      if (tmp_npoints.at(ifac)>fac_npoints.at(ifac)) tmp_npoints.at(ifac) = fac_npoints.at(ifac);
 
-	     ave_std += fstderr[i][ifac]/Getfvar(imix,ifac);
-	     nfac_noRE++;
-	   }
-	   //	   else if (adapt_int_thresh>100.0) tmp_npoints = 3;
+	      //keep track of total uncertainty in location of factor
+	      ave_std += fstderr[i][ifac]/Getfvar(imix,ifac);
+	      nfac_noRE++;
+	    }
+	  }
 
-	   fac_npoints[ifac] = tmp_npoints;
-	   // if ((fac_npoints[ifac]==1)||(fac_npoints[ifac]==nquad_points)) facint_offset[ifac] = 0;
-	   if (fac_npoints[ifac]==3) facint_offset[ifac] = 1;
-	   else if (fac_npoints[ifac]==5) facint_offset[ifac] = 4;
-	   else if (fac_npoints[ifac]==7) facint_offset[ifac] = 9;
-	 }
+	  //If std is big on average then use default, otherwise use adaptive points
+	  if ( ave_std/nfac_noRE < 1.5) {
+	    for (UInt_t ifac = 0 ; ifac <nfac ; ifac++) {
+	      if (tmp_npoints[ifac]<fac_npoints[ifac]) fac_npoints[ifac] = tmp_npoints[ifac];
+	    }
+	  }
 
-	 //If std is big on average then use nquad_points
-	 if ( ave_std/nfac_noRE > 1.5) {
-	   for (UInt_t ifac = 0 ; ifac <nfac ; ifac++) {
-	     facint_offset[ifac] = 0;
-	     fac_npoints[ifac]=nquad_points;
-	   }
-	 }
-	 nint_points = 1;
-	 for (UInt_t ifac = 0 ; ifac <nfac ; ifac++) nint_points *= fac_npoints[ifac];
+	  // Get offset for each case:
+	  // if ((fac_npoints[ifac]==1)||(fac_npoints[ifac]==nquad_points)) facint_offset[ifac] = 0;
+	  // if (fac_npoints[ifac]==3) facint_offset[ifac] = 1;
+	  // else if (fac_npoints[ifac]==5) facint_offset[ifac] = 4;
+	  // else if (fac_npoints[ifac]==7) facint_offset[ifac] = 9;
        }
+
+       // Calculate total number of integration points
+       UInt_t nint_points = 1;
+       for (UInt_t ifac = 0 ; ifac <nfac ; ifac++) nint_points *= fac_npoints[ifac];
 
        //       cout << "Finished calculating adaptive integration numbers! " << nint_points << " integration points for obs " << Int_t(data[i*nvar+indexvar]) << ".\n";
        //loop over integration points
@@ -5353,6 +5382,11 @@ void TMinLkhd::CalcLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	    probilk = probilk*w_mix[imix];
 
 	    //weight of quadrature approximation to integral
+	    for (UInt_t ifac = 0 ; ifac < nfac_eff; ifac++) {
+	      probilk = probilk * GetHGQw(fac_npoints[ifac],facint[ifac]);
+	    }
+
+	    /*
 	    if (adapt_int==0) {
 	      for (UInt_t ifac = 0 ; ifac < nfac_eff; ifac++) {
 		probilk = probilk *w[facint[ifac]];
@@ -5361,10 +5395,12 @@ void TMinLkhd::CalcLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	    else {
 	      //	      cout << "Calculating quadrature weights!\n";
 	      for (UInt_t ifac = 0 ; ifac < nfac_eff; ifac++) {
-		if (fac_npoints[ifac]<8) probilk = probilk * wadapt[facint[ifac] + facint_offset[ifac]];
-		else probilk = probilk *w[facint[ifac]];
+		probilk = probilk * GetHGQw(fac_npoints[ifac],facint[ifac]);
+		  //		if (fac_npoints[ifac]%2==1) probilk = probilk * wadapt[facint[ifac] + facint_offset[ifac]];
+		  //		else probilk = probilk *w[facint[ifac]];	  
 	      }
 	    }
+	    */
 	    
 	    if ((stochflag>=2)&&(stage!=2)) {
 	      //  for (UInt_t ifac = 0; ifac < nfac ; ifac++) gradilk[Getifvar(imix,ifac)] += 1.0/Getfvar(imix,ifac);
@@ -5409,26 +5445,29 @@ void TMinLkhd::CalcLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
  	  else if (adapt_int==0) {
 	    if (fac_corr==0) {
 	      for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
-		fac_val.push_back(Getfvar(imix,ifac)*x[facint[ifac]]+fac_mean[ifac+nfac*imix]);
+		fac_val.push_back(Getfvar(imix,ifac)*GetHGQx(fac_npoints[ifac],facint[ifac])+fac_mean[ifac+nfac*imix]);
  	      }
 	    }
 	    else {
-	      if (nfac>0) fac_val.push_back(Getfvar(imix,0)*x[facint[0]]+fac_mean[0+nfac*imix]);
+	      if (nfac>0) fac_val.push_back(Getfvar(imix,0)*GetHGQx(nquad_points,facint[0])+fac_mean[0+nfac*imix]);
 	      if (nfac>1) fac_val.push_back(x2sc[Getx2i(imix,facint[0],facint[1])]+fac_mean[1+nfac*imix]);
 	    }
  	  }
 	  else if (adapt_int==1) {
 	    for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
-		if (fac_npoints[ifac]<8) {
-		  fac_val.push_back(fscore[i][ifac] + fstderr[i][ifac]*xadapt[facint[ifac]+facint_offset[ifac]]);
+
+	      //If npoints is odd, then we use importance sampling
+	      if (fac_npoints[ifac]%2==1) {
+		  fac_val.push_back(fscore[i][ifac] + fstderr[i][ifac]*GetHGQx(fac_npoints[ifac],facint[ifac]));
 
 		  // Additional terms from importance sampling:
-		  probilk = probilk * exp(facint_offset[ifac]*facint_offset[ifac]);
+
+		  probilk = probilk * exp(GetHGQx(fac_npoints[ifac],facint[ifac])*GetHGQx(fac_npoints[ifac],facint[ifac])/2.0);
 		  probilk = probilk * exp(-1.0*fac_val[ifac]*fac_val[ifac]/(2*Getfvar(imix,ifac)*Getfvar(imix,ifac)));
 		  
 		}
 		else {
-		  fac_val.push_back(Getfvar(imix,ifac)*x[facint[ifac]]+fac_mean[ifac+nfac*imix]);
+		  fac_val.push_back(Getfvar(imix,ifac)*GetHGQx(fac_npoints[ifac],facint[ifac])+fac_mean[ifac+nfac*imix]);
 		}
 	    }
 	  }

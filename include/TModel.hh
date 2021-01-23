@@ -24,6 +24,8 @@ private:
   std::vector<Double_t> facnorm;
   Int_t numfac;
   Int_t numchoice; // for multivariate models
+  Int_t numrank; // for exploded logit model
+  Int_t ranksharevar;
   Bool_t ignore;
 
   Double_t simresult;
@@ -38,7 +40,7 @@ private:
 
   public:
   TModel() {};
-  TModel(const char *name, const char *title, Int_t modeltype, Int_t modelgroup, Int_t prntgroup, std::vector<Int_t> & moddata, Int_t nfac, Double_t * thisnormfac = NULL, UInt_t nchoice = 2);
+  TModel(const char *name, const char *title, Int_t modeltype, Int_t modelgroup, Int_t prntgroup, std::vector<Int_t> & moddata, Int_t nfac, Double_t * thisnormfac = NULL, UInt_t nchoice = 2, UInt_t nrank = 1);
   virtual ~TModel();
 
   void SetIgnore(Bool_t ig) {ignore=ig;}
@@ -61,11 +63,12 @@ private:
   UInt_t GetDetailSim() {return detailsim;}
   Double_t GetSimResult() {return simresult;}
   void ClearSimResult() {simresult = -9999.0;}
+
+  //  void SetRankedChoice(UInt_t Nrank; UInt_t rankshare = -9999.0) { if (modtype==3) { numrank = Nrank; ranksharevar = rankshare;} else assert(0) }
   
   void SetXtileThresholds(std::vector<Double_t> & thresh) {endogXtiles = thresh;}
   void AddEndogenousReg(UInt_t endogvarnum) {endogVarList.push_back(endogvarnum);}
   void SetEndogenousRegs(std::vector<TModel> & models,std::vector<TString> & vartab);
-  //  void SetEndogenousMajor(UInt_t endModel, std::vector<TModel> & models, std::vector<TString> & vartab);
   std::vector<Int_t> GetEndogenousReg() {return endogRegList;}
   void SplitSim(UInt_t ivar);
   void PrintModel(std::vector<TString> vartab);

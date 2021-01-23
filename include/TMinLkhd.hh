@@ -71,6 +71,7 @@ private:
   Bool_t adapt_int;
   Double_t adapt_int_thresh;
   UInt_t nquad_points;
+  std::vector<UInt_t> fac_npoints;
   UInt_t stage;
   std::vector<Double_t> x, xadapt, w, wadapt; //Quadrature constants         
 
@@ -128,7 +129,6 @@ private:
   Int_t Getifmean(UInt_t imix,UInt_t ifac) {return imix*(f_nvariance+nfac+1)+f_nvariance+ifac;}
   Int_t Getifw(UInt_t imix) {return imix*(f_nvariance+nfac+1)+f_nvariance+nfac;}
 
-
   //  UInt_t Getx1i(UInt_t imix, UInt_t xi) {return (imix*nquad_points + xi);}
   UInt_t Getx2i(UInt_t imix, UInt_t x1i, UInt_t x2i) {
     if (fac_corr==0) return (imix*nquad_points + x2i);
@@ -139,11 +139,14 @@ private:
   void Setparam(UInt_t ipar, double value) {
     if (param_fixval.at(ipar)<-9998.0) param.at(ipar) = value;
   }
+
   void Setparam_err(UInt_t ipar, double value) {
     if (param_fixval.at(ipar)<-9998.0) param_err.at(ipar) = value;
   }
 
-
+  //Function to get quadrature points
+  Double_t GetHGQx(Uint_t nquad, UInt_t ipoint) { return x[(nquad-2)*nquad_points + ipoint)];}
+  Double_t GetHGQw(Uint_t nquad, UInt_t iquad) { return w[(nquad-2)*nquad_points + ipoint)];}
   
 public:
   TMinLkhd();
@@ -278,6 +281,8 @@ public:
   void LastModel_SetXtileThresh(std::vector<Double_t> & threshlist) {models.back().SetXtileThresholds(threshlist);}
   void LastModel_SetEndogenousReg(TString endogvar);
   void LastModel_SetEndogenousMajor(UInt_t modelN);
+  void LastModel_SetRankShareVar(TString sharevar);
+
   void AllModel_Detailsim() {for (UInt_t imod = 0 ; imod < models.size() ; imod++) models[imod].DetailSim(1);}
   void SimIncludeData() {simIncData = 1;}
   void SimWithData() {simWithData = 1;}
