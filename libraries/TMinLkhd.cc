@@ -176,10 +176,11 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
     Double_t * getx = new Double_t[nquad_points];
     Double_t * getw = new Double_t[nquad_points];
     
-    for (int iquad = 2 ; iquad < nquad_points; iquad++ ) {
+    Double_t sqrt2 = sqrt(2.0);
+    for (UInt_t iquad = 2 ; iquad < nquad_points; iquad++ ) {
       printf("*****Getting constants for %2d GH quadrature points.\n",iquad+1);
       calcgausshermitequadrature(iquad,getx,getw);
-      for (int ipoint = 0 ; ipoint < iquad; ipoint++) {
+      for (UInt_t ipoint = 0 ; ipoint < iquad; ipoint++) {
 	x.at((iquad-2)*nquad_points + ipoint) = sqrt2*getx[ipoint];
 	w.at((iquad-2)*nquad_points + ipoint) = getw[ipoint];
 	printf("quadrature points [%2d]= %22.16g %22.16g\n",iquad,GetHGQx(iquad, ipoint),GetHGQw(iquad, ipoint));
@@ -555,17 +556,17 @@ void TMinLkhd::SetFactorSpecificQuadPoints(vector<UInt_t> quadlist)
     fac_npoints.resize(nfac,nquad_points);
     
     for (UInt_t ifac = 0 ; ifac < nfac ; ifac++) {
-      if ( (quadlist.at(ifac)>0) & (quadlist.at(ifac)<nquad_points) & (quadlist.at(ifac)%2==0) {
+      if ( (quadlist.at(ifac)>0) & (quadlist.at(ifac)<nquad_points) & (quadlist.at(ifac)%2==0) ){
 	fac_npoints.at(ifac) = quadlist.at(ifac);
       }
       else {
-	cout << "***Error in TMinLkhd::AddModelSetFactorSpecificQuadPoints(" << name << ")*** Nquad array contains either non-positive elements, odd elements, or elements that are larger than the maximum specified!" << endl;
+	cout << "***Error in TMinLkhd::AddModelSetFactorSpecificQuadPoints()*** Nquad array contains either non-positive elements, odd elements, or elements that are larger than the maximum specified!" << endl;
 	assert(0);
       }
     }
   }
   else {
-    cout << "***Error in TMinLkhd::AddModelSetFactorSpecificQuadPoints(" << name << ")*** Nquad array not the right size!" << endl;
+    cout << "***Error in TMinLkhd::AddModelSetFactorSpecificQuadPoints()*** Nquad array not the right size!" << endl;
     assert(0);
   }
 }

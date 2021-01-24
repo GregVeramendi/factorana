@@ -145,8 +145,8 @@ private:
   }
 
   //Function to get quadrature points
-  Double_t GetHGQx(Uint_t nquad, UInt_t ipoint) { return x[(nquad-2)*nquad_points + ipoint)];}
-  Double_t GetHGQw(Uint_t nquad, UInt_t iquad) { return w[(nquad-2)*nquad_points + ipoint)];}
+  Double_t GetHGQx(UInt_t nquad, UInt_t ipoint) { return x[(nquad-2)*nquad_points + ipoint];}
+  Double_t GetHGQw(UInt_t nquad, UInt_t ipoint) { return w[(nquad-2)*nquad_points + ipoint];}
   
 public:
   TMinLkhd();
@@ -282,7 +282,7 @@ public:
   void LastModel_SetEndogenousReg(TString endogvar);
   void LastModel_SetEndogenousMajor(UInt_t modelN);
   void LastModel_SetRankShareVar(TString sharevar);
-
+  
   void AllModel_Detailsim() {for (UInt_t imod = 0 ; imod < models.size() ; imod++) models[imod].DetailSim(1);}
   void SimIncludeData() {simIncData = 1;}
   void SimWithData() {simWithData = 1;}
@@ -291,6 +291,7 @@ public:
   void SetSimModelOrder (std::vector<TString> & modorder);
   
   void SetFactorScores();
+  void SetFactorSpecificQuadPoints(std::vector<UInt_t> quadlist);
   void SetObsIndex(const TString index);
   void UseWeights(const TString weight);
   void PrintMargEffect() {printmargeffect=1;}

@@ -65,7 +65,8 @@ private:
   void ClearSimResult() {simresult = -9999.0;}
 
   //  void SetRankedChoice(UInt_t Nrank; UInt_t rankshare = -9999.0) { if (modtype==3) { numrank = Nrank; ranksharevar = rankshare;} else assert(0) }
-  
+
+  void SetRankShareVar(UInt_t sharevarnum);
   void SetXtileThresholds(std::vector<Double_t> & thresh) {endogXtiles = thresh;}
   void AddEndogenousReg(UInt_t endogvarnum) {endogVarList.push_back(endogvarnum);}
   void SetEndogenousRegs(std::vector<TModel> & models,std::vector<TString> & vartab);

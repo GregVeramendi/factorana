@@ -40,7 +40,7 @@ TModel::TModel(const char *name, const char *title, Int_t modeltype, Int_t model
   printgroup = prntgroup;
   numchoice = nchoice;
   numrank = nrank;
-  rankshare = -9999.0;
+  ranksharevar = -9999.0;
   outcome = moddata[0];
   missing = moddata[1];
   nregressors = moddata.size()-2;
@@ -90,13 +90,13 @@ void TModel::SplitSim(UInt_t ivar) {
 }
 
 
-void SetRankShareVar(UInt_t rankshare) {
+void TModel::SetRankShareVar(UInt_t rankshare) {
   if ((modtype==3) && (numrank>1) && (rankshare >= 0)) {
     ranksharevar = rankshare;
   }
   else {
     cout << "ERROR (TModel::SetRankShareVar): Either incorrect model type or negative varnumber!"
-	 << "\n\t Model type " << modetype << " nrank=" << numrank 
+	 << "\n\t Model type " << modtype << " nrank=" << numrank 
 	 << endl;
     assert(0);
   }
@@ -981,7 +981,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	double dens = 1.0/logitdenom;
 
 	if (obsCat>0) {
-	  dens *=  exp(expres[obsCat-1] + rankedChoiceCorr[icat-1]);
+	  dens *=  exp(expres[obsCat-1] + rankedChoiceCorr[obsCat-1]);
 	}
     
 	modEval[0] += dens;
