@@ -50,6 +50,7 @@ private:
   Int_t GetOutcome() {return outcome;}
   Int_t GetMissing() {return missing;}
   Int_t GetType() {return modtype;}
+  Int_t GetNrank() {return numrank;}
   Int_t GetGroup() {return modgroup;}
   Int_t GetPrintGroup() {return printgroup;}
   //  Int_t * GetReg() {return regressors;}

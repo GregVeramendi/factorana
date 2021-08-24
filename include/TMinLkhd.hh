@@ -145,8 +145,8 @@ private:
   }
 
   //Function to get quadrature points
-  Double_t GetHGQx(UInt_t nquad, UInt_t ipoint) { return x[(nquad-2)*nquad_points + ipoint];}
-  Double_t GetHGQw(UInt_t nquad, UInt_t ipoint) { return w[(nquad-2)*nquad_points + ipoint];}
+  Double_t GetHGQx(UInt_t nquad, UInt_t ipoint) { return x[(nquad-1)*nquad_points + ipoint];}
+  Double_t GetHGQw(UInt_t nquad, UInt_t ipoint) { return w[(nquad-1)*nquad_points + ipoint];}
   
 public:
   TMinLkhd();
@@ -264,7 +264,7 @@ public:
   void PrintParamTab(int pmod = 0);
   void PrintParam_Varlist();
   void SetData(char * filename, char * var_table);
-  void AddModel(const char *name, const char *title, TString modeltype, std::vector<TString> & moddata,Double_t * normfac = NULL, UInt_t nchoice = 2);
+  void AddModel(const char *name, const char *title, TString modeltype, std::vector<TString> & moddata,Double_t * normfac = NULL, UInt_t nchoice = 2, UInt_t nrank = 1);
   void LastModel_Splitsim(TString splitvar);
 
   void ConstrainFactorCorrelations();
@@ -291,7 +291,7 @@ public:
   void SetSimModelOrder (std::vector<TString> & modorder);
   
   void SetFactorScores();
-  void SetFactorSpecificQuadPoints(std::vector<UInt_t> quadlist);
+  void SetFactorSpecificQuadPoints(std::vector<UInt_t> & quadlist);
   void SetObsIndex(const TString index);
   void UseWeights(const TString weight);
   void PrintMargEffect() {printmargeffect=1;}

@@ -943,14 +943,14 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
     // Was state observed? (1,2,...,numchoice)
     // We'll use (0,1,...,numchoice-1) for the variable obsCat
     // First set density to zero so we can sum up the possible ranked choices
-    modEval[0]=0.0;
+    modEval[0]=1.0;
 
-    for (int irank = 0 ; irank <= numrank ; irank++) {
+    for (int irank = 0 ; irank < numrank ; irank++) {
       Int_t obsCat = -1;
       for (int icat = 1 ; icat <= numchoice ; icat++) if (icat == int(data[iobs_offset + outcome + irank])) obsCat = icat-1;
       
       //Individuals may not use all rankings, so we only check the first one:
-      if ((obsCat==-1)&&(irank==0)) {
+      if ((obsCat==-1)&&(numrank==1)) {
 	  cout << "ERROR (TModel::Eval): Found invalid number for logit outcome!"
 	       << " In model " <<  this->GetTitle() << "\n"
 	       << "Looking at outcome #" << outcome 
@@ -984,7 +984,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	  dens *=  exp(expres[obsCat-1] + rankedChoiceCorr[obsCat-1]);
 	}
     
-	modEval[0] += dens;
+	modEval[0] *= dens;
     
 	// Now find the derivatives: 
 	if (flag>=2) {
