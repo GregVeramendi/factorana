@@ -292,6 +292,7 @@ public:
   
   void SetFactorScores();
   void SetFactorSpecificQuadPoints(std::vector<UInt_t> & quadlist);
+  void SetAsymmetricQuadPoints(const int asym);
   void SetObsIndex(const TString index);
   void UseWeights(const TString weight);
   void PrintMargEffect() {printmargeffect=1;}

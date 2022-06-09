@@ -194,6 +194,9 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
 
   // initialize the parameters that describe the factors
   if (nfac>0) {
+
+    //    fac_npoints.resize(nfac,nquad_points);
+    
     if ((fac_corr!=0)&&(nfac!=2)) {
       cout << "***Error in TMinLkhd::TMinLkhd*** Can only estimate correlated factors for nfac=2!!" << endl;
       assert(0);
@@ -571,6 +574,50 @@ void TMinLkhd::SetFactorSpecificQuadPoints(vector<UInt_t> & quadlist)
   }
 }
 
+
+void TMinLkhd::SetAsymmetricQuadPoints(const int asym) {
+
+  
+  if ((nquad_points%2==0) && (abs(asym) < (nquad_points/2)) ) {
+
+    //Create arrays for HGQ function
+    Double_t * getx = new Double_t[nquad_points + 2*abs(asym)];
+    Double_t * getw = new Double_t[nquad_points + 2*abs(asym)];
+    
+    Double_t sqrt2 = sqrt(2.0);
+    printf("*****Getting constants for assymetric %2d GH quadrature points.\n",nquad_points);
+
+
+    // get positive points 
+    calcgausshermitequadrature(nquad_points+2*asym,getx,getw);
+    for (UInt_t ipoint = 0 ; ipoint < (nquad_points/2) + asym ; ipoint++) {
+      x.at((nquad_points-1)*nquad_points + ipoint) = sqrt2*getx[ipoint];
+      w.at((nquad_points-1)*nquad_points + ipoint) = getw[ipoint];
+      printf("Assymetric Quadrature points [%2d]= %22.16g %22.16g\n",nquad_points,GetHGQx(nquad_points, ipoint)/sqrt2,GetHGQw(nquad_points, ipoint));
+    }
+
+    // get positive points 
+    calcgausshermitequadrature(nquad_points-2*asym,getx,getw);
+    int getxoffset = nquad_points/2 - asym;
+    int xoffset = nquad_points/2 + asym;
+    for (UInt_t ipoint = 0 ; ipoint < (nquad_points/2) - asym; ipoint++) {
+      x.at((nquad_points-1)*nquad_points + ipoint + xoffset) = sqrt2*getx[ipoint+getxoffset];
+      w.at((nquad_points-1)*nquad_points + ipoint + xoffset) = getw[ipoint+getxoffset];
+      printf("Assymetric Quadrature points [%2d]= %22.16g %22.16g\n",nquad_points,GetHGQx(nquad_points, ipoint+xoffset)/sqrt2,GetHGQw(nquad_points, ipoint+xoffset));
+    }
+    
+    printf("\n\n");
+
+    delete [] getx;
+    delete [] getw;
+
+  }
+  else {
+      cout << "***Error in TMinLkhd::SetAsymmetricQuadPoints *** Assymetric quadrature point can only be implemented for even number of quadrature points" << endl;
+      assert(0);
+  }
+
+}
 
 void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, vector<TString> & moddata,Double_t * normfac, UInt_t nchoice, UInt_t nrank)
 {
@@ -2578,7 +2625,8 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
       if  (initEstOutcomeLoadings) {
 	cout << "***Estimating loadings using factor scores.\n";
 	for (UInt_t ifac = 0 ; ifac < nfac; ifac++) {
-	  if (norm_models[ifac]>-2) {
+	  //	  if ((norm_models[ifac]>-2)||(fstderr[0][ifac]<0.0)) {
+	  if (fstderr[0][ifac]>0.0) {
 	    ReleasePar(fparam_models[imod] + models[imod].GetNreg() + ifac); 
 	    
 	    if ( (models[imod].GetType()==3) && (models[imod].GetNchoice()>2) ) {
@@ -3078,8 +3126,12 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 	  vector<Double_t> f_draw;
 	  
 	  // Draw from Normal distribution
-	  for (UInt_t i = 0 ; i < nfac; i++) f_draw.push_back(r3->Gaus(0.0,1.0));
-	  
+	  for (UInt_t i = 0 ; i < nfac; i++) {
+	    f_draw.push_back(r3->Gaus(0.0,1.0));
+	    //draw from one of two points if only two quadrature points are used
+	    if ((fac_npoints.size()==nfac) && (fac_npoints.at(i)==2)) f_draw[i] = GetHGQx(2, (f_draw[i]<0) );
+	  }
+
 	  //Select mixture
 	  UInt_t imix = 0;
 	  if (fac_nmix>1) {
