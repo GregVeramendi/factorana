@@ -7,6 +7,8 @@
 #include <vector>
 #include <iostream>
 #include <random>
+#include <list>
+#include <utility>
 
 class TModel : public TNamed {
    
@@ -26,6 +28,8 @@ private:
   Int_t numchoice; // for multivariate models
   Int_t numrank; // for exploded logit model
   Int_t ranksharevar;
+  std::list<std::pair<int,int>  > excludelist; //list of regressors to exclude from certain ranked choices
+
   Bool_t ignore;
 
   Double_t simresult;
@@ -68,6 +72,7 @@ private:
   //  void SetRankedChoice(UInt_t Nrank; UInt_t rankshare = -9999.0) { if (modtype==3) { numrank = Nrank; ranksharevar = rankshare;} else assert(0) }
 
   void SetRankShareVar(UInt_t sharevarnum);
+  void ExcludeRegressorRank(Int_t regnum, Int_t rank) {excludelist.push_back(std::make_pair(regnum,rank));}
   void SetXtileThresholds(std::vector<Double_t> & thresh) {endogXtiles = thresh;}
   void AddEndogenousReg(UInt_t endogvarnum) {endogVarList.push_back(endogvarnum);}
   void SetEndogenousRegs(std::vector<TModel> & models,std::vector<TString> & vartab);
