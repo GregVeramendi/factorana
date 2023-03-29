@@ -28,7 +28,7 @@ using namespace std;
 static std::mt19937_64 mt(7);
 
 TModel::TModel(const char *name, const char *title, Int_t modeltype, Int_t modelgroup, Int_t prntgroup,
-	       std::vector<Int_t> & moddata, Int_t nfac, Double_t * thisnormfac,
+	       std::vector<Int_t> & moddata, Int_t nfac, Int_t ntyp, Double_t * thisnormfac,
 	       UInt_t nchoice, UInt_t nrank)
   : TNamed(name,title)
 {
@@ -71,6 +71,7 @@ TModel::TModel(const char *name, const char *title, Int_t modeltype, Int_t model
   }
 
   numfac=nfac;
+  numtyp=ntyp;
   if (thisnormfac) {
     facnorm.reserve(nfac);
     for (int i = 0 ; i < nfac ; i++) {

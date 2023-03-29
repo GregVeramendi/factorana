@@ -25,6 +25,7 @@ private:
   std::vector<Int_t> regressors;
   std::vector<Double_t> facnorm;
   Int_t numfac;
+  Int_t numtyp;
   Int_t numchoice; // for multivariate models
   Int_t numrank; // for exploded logit model
   Int_t ranksharevar;
@@ -44,7 +45,7 @@ private:
 
   public:
   TModel() {};
-  TModel(const char *name, const char *title, Int_t modeltype, Int_t modelgroup, Int_t prntgroup, std::vector<Int_t> & moddata, Int_t nfac, Double_t * thisnormfac = NULL, UInt_t nchoice = 2, UInt_t nrank = 1);
+  TModel(const char *name, const char *title, Int_t modeltype, Int_t modelgroup, Int_t prntgroup, std::vector<Int_t> & moddata, Int_t nfac, Int_t ntyp, Double_t * thisnormfac = NULL, UInt_t nchoice = 2, UInt_t nrank = 1);
   virtual ~TModel();
 
   void SetIgnore(Bool_t ig) {ignore=ig;}

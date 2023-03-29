@@ -86,6 +86,9 @@ private:
   UInt_t nfac_param;
   std::vector<Int_t> norm_models; 
 
+  UInt_t ntyp;
+  Int_t type_model;
+  
   UInt_t simIncData;
   UInt_t simWithData;
   UInt_t sim_nobs;
@@ -265,6 +268,7 @@ public:
   void PrintParam_Varlist();
   void SetData(char * filename, char * var_table);
   void AddModel(const char *name, const char *title, TString modeltype, std::vector<TString> & moddata,Double_t * normfac = NULL, UInt_t nchoice = 2, UInt_t nrank = 1);
+  void AddTypesModel(std::vector<TString> & moddata, Double_t * normfac = NULL, UInt_t ntypes);
   void LastModel_Splitsim(TString splitvar);
 
   void ConstrainFactorCorrelations();

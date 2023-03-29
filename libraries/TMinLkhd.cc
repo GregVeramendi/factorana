@@ -58,6 +58,8 @@ TMinLkhd::TMinLkhd()
   ClearDataMembers();
   fac_corr =0; 
   nfac=0;
+  ntyp=0;
+  type_model = -1;
   nquad_points=0;
   fac_npoints.clear();
   adapt_int = 0;
@@ -104,7 +106,7 @@ TMinLkhd::TMinLkhd()
 
 
 
-TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t fcorr, Int_t fnmix, Int_t nquad, Int_t thisstage)
+TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t ntypes, Int_t fcorr, Int_t fnmix, Int_t nquad, Int_t thisstage)
   : TNamed(name,title)
 {
 
@@ -114,6 +116,8 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t f
   fac_nmix =fnmix;
   est_nmix = fac_nmix;
   nfac=nfactors;
+  ntyp = ntypes;
+  type_model = -1;
   //  nquad_points=nquad;
   nquad_points=abs(nquad);
   fac_npoints.clear();
@@ -676,9 +680,11 @@ void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, 
     assert(0);
   }
 
+
   UInt_t arraysize = moddata.size();
   vector<Int_t> intdata(arraysize,-9999);
   if (!moddata[0].CompareTo("none")) intdata[0] = -1;
+  if (!moddata[0].CompareTo("type")) intdata[0] = -2;
   if (!moddata[1].CompareTo("none")) intdata[1] = -1;
 
   for (UInt_t i = 0 ; i < arraysize ; i++) {
@@ -699,14 +705,20 @@ void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, 
   //Count up number of parameters for this model:
   // number of regressors:
   nparam_thismodel += arraysize - 2;
-  // number of unnormalized factors:
-  if ((normfac) && (nfac>0)) {
-    for (UInt_t i = 0; i < nfac ; i++) {
+
+  // number of unnormalized unobservables:
+  UInt_t totunobs = nfac;
+
+  // Add type "loadings" to params if this is not the type probability model
+  if (intdata[0]!= -2) totunobs += ntyp;
+  
+  if ((normfac) && ((nfac>0) || (ntyp>0)) ) {
+    for (UInt_t i = 0; i < totunobs ; i++) {
       if (normfac[i]<-9998) nparam_thismodel++;
       //      else if ((norm_models[i]<0)&&(fabs(normfac[i])>0.001)) norm_models[i] = models.size();
     }
   }
-  else nparam_thismodel += nfac;
+  else nparam_thismodel += totunobs;
 
   //Look for first normalization model in measurement system
   //Also set norm_models = -1 if at least one model loads on factor
@@ -725,19 +737,18 @@ void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, 
     }
   }
 
-
   
   // variance of error term
   if (type==1) nparam_thismodel++;
 
   // need to multiply parameters by the number of choices-1 for logit model
-  if (type==3) nparam_thismodel *= (nchoice-1);
+  if (type==3) nparam_thismodel *= (nchoice - 1);
 
   // Choice thresholds for ordered probit model
-  if (type==4) nparam_thismodel += nchoice - 1;
+  if (type==4) nparam_thismodel += (nchoice - 1);
 
   TModel newmodel(name, title, type,current_estimationgroup,
-		  current_printgroup,intdata,nfac,normfac,nchoice,nrank);
+		  current_printgroup,intdata,nfac,ntyp,normfac,nchoice,nrank);
   models.push_back(newmodel);
   nparam_models.push_back(nparam_thismodel);
   fparam_models.push_back(nparam); //first parameter of this model
@@ -748,6 +759,20 @@ void TMinLkhd::AddModel(const char *name, const char *title, TString modeltype, 
   parconstrained.resize(nparam,-1);
   param_fixval.resize(nparam,-9999.0);  
 }
+
+
+void TMinLkhd::AddTypesModel(vector<TString> & typedata, Double_t * typnorm)
+{
+  // Keep track of which model defines the type probablities
+  type_model = models.size();
+
+  //Add type probability model to list of models
+  typedata.insert(typedata.begin(), TString("type"));
+  AddModel("TypeProb", "Type Probability", "logit", typdata, typnorm, ntyp);
+
+}
+
+
 
 void TMinLkhd::ConstrainFactorCorrelations() { 
   for (UInt_t imix = fac_nmix-1 ; imix > 0 ; imix--) {
@@ -760,6 +785,8 @@ void TMinLkhd::ConstrainFactorCorrelations() {
 //   printf("
 // }
 
+
+// This function equalizes factor loadings between two models
 void TMinLkhd::ConstrainLastFactorLoadingToModel(const UInt_t targetmod, UInt_t ifac) {
   // Check that loading is not fixed
   UInt_t imodels[2], ipar[2];
@@ -948,7 +975,7 @@ void TMinLkhd::LastModel_FixParamValue(TString fixvar, double value, int choice)
     assert(0);
   }
 
-  int fixparam = fparam_models[thismodel] + choice_offset*(models[thismodel].GetNreg()+nfac) + modparoffset;
+  int fixparam = fparam_models[thismodel] + choice_offset*(models[thismodel].GetNreg()+nfac+ntyp) + modparoffset;
   FixParamValue(fixparam,value);
 
 }
@@ -1392,6 +1419,22 @@ void TMinLkhd::ResetFitInfo() {
 	  }
 	}
       }
+      // Now set loadings for types
+      for (UInt_t itype = 0 ; itype < ntyp ; itype++) {
+	if (thisnorm.size()==0) {
+	  Setparam(ipar, thismult*loadingMultiplier*0.1);
+	  Setparam_err(ipar, 0.01);
+	  ipar++;
+	}
+	else {
+	  if (thisnorm.at(nfac + itype)<-9998) {
+	    Setparam(ipar, thismult*loadingMultiplier*0.1);
+	    Setparam_err(ipar, 0.01);
+	    ipar++;
+	  }
+	}
+      }
+
       if (models[imod].GetType()==1) {
 	if (initVariance>0) {
 	  Setparam(ipar, initVariance);
@@ -2108,19 +2151,20 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
   
   if (first_outmodel==-1) first_outmodel = models.size();
   
-  //**** NEED TO FIX THIS ALSO
+  //**** NEED TO FIX THIS ALSO  -- Fix what? 27.03.2023
   
   //Make factor loading list (for all models?)
+  // so we can easily scale initial values of loadings. Not used for anything else
   vector<Bool_t> factorloadinglist(num_param,0);
   for (Int_t imod = 0 ; imod < first_outmodel ; imod++) {
     int nchoice = 1; // In this case we don't need to do anything special even if it is logit
     if (models[imod].GetType()==3) nchoice = models[imod].GetNchoice() - 1;
     for (int ichoice = 0 ; ichoice < nchoice ; ichoice++) {
-      Int_t imodFirstLoading = fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac)+ models[imod].GetNreg();
+      Int_t imodFirstLoading = fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac+ntyp)+ models[imod].GetNreg();
       UInt_t nfreefac = nparam_models[imod] - models[imod].GetNreg();
       if (models[imod].GetType()==1) nfreefac--;
       if (models[imod].GetType()==4) nfreefac-= (models[imod].GetNchoice()-1);
-      if (models[imod].GetType()==3) nfreefac = nfac;
+      if (models[imod].GetType()==3) nfreefac = nfac+ntyp;
       
       for (UInt_t ifac = 0; ifac < nfreefac ; ifac++) {
 	factorloadinglist.at(imodFirstLoading+ifac) = 1;
@@ -2191,7 +2235,7 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
       if ( (models[imod].GetType()==3) && (models[imod].GetNchoice()>2) ) {
 	for (int ichoice = 1 ; ichoice < models[imod].GetNchoice()-1 ; ichoice++) {
 	  for (Int_t i =  0; i <  models[imod].GetNreg() ; i++) {
-	    ReleasePar((firstpar + ichoice*(models[imod].GetNreg()+nfac)) + i);
+	    ReleasePar((firstpar + ichoice*(models[imod].GetNreg()+nfac+ntyp)) + i);
 	  }
 	}
       }
@@ -2610,7 +2654,7 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
       if ( (models[imod].GetType()==3) && (models[imod].GetNchoice()>2) ) {
 	for (int ichoice = 1 ; ichoice < models[imod].GetNchoice()-1 ; ichoice++) {
 	  for (Int_t i =  0; i <  models[imod].GetNreg() ; i++) {
-	    ReleasePar((fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac)) + i);
+	    ReleasePar((fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac+ntyp)) + i);
 	  }
 	}
       }
@@ -2631,7 +2675,7 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
 	    
 	    if ( (models[imod].GetType()==3) && (models[imod].GetNchoice()>2) ) {
 	      for (int ichoice = 1 ; ichoice < models[imod].GetNchoice()-1 ; ichoice++) {
-		ReleasePar(fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac) + models[imod].GetNreg() + ifac);
+		ReleasePar(fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac+ntyp) + models[imod].GetNreg() + ifac);
 	      }
 	    }
 	  }
@@ -2897,10 +2941,13 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
   for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
     fprintf(pFile,", sim_fac%d",ifac);
   }
+  for (UInt_t itype = 0; itype < ntyp ; itype++) {
+    fprintf(pFile,", sim_type%d",itype);
+  }
 
   vector<Int_t> varuse;
   varuse.resize(nvar,0);
-  Int_t nsimvar = nfac;
+  Int_t nsimvar = nfac + ntyp;
   for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
 
     UInt_t thismod = imod;
@@ -2931,6 +2978,12 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 	
 	  for (UInt_t ifac = 0; ifac < nfac ; ifac++) {
 	    fprintf(pFile,", %s%d",(TString("sim_").Append(TString(models[thismod].GetName()).Append("_Vfac"))).Data(),ifac);
+	    if ((models[thismod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
+	    nsimvar +=1;
+	  }
+
+	  if (ntyp>0) {
+	    fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()).Append("_Vtyp"))).Data());
 	    if ((models[thismod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
 	    nsimvar +=1;
 	  }
@@ -2982,6 +3035,12 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 	  nsimvar +=1;
 	}
 
+	if (ntyp>0) {
+	  fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()).Append("1_Vtyp"))).Data());
+	  if ((models[thismod].GetType()==3) && (nlogitchoice>2)) fprintf(pFile,"_C%1d",ichoice);
+	  nsimvar +=1;
+	}
+	
 	fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()).Append("1_eps"))).Data());
 	nsimvar +=1;
 
@@ -3220,16 +3279,37 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 
     for (UInt_t ifac = 0 ; ifac < nfac; ifac++) fprintf(pFile,", %10.5f",fac_val.at(ifac));
 
+    //Now draw the type
+    if (type_model>-1) {
+      std::FILE* tmpf = std::tmpfile();
+      models[type_model].Sim(obs_drw*nvar,data,models,param,fparam_models[thismod], fac_val, tmpf, simWithData);
+      Int_t typedraw = Int_t(models[thismod].GetSimResult());
+      for (UInt_t itype = 0 ; itype < ntyp; itype++) {
+	if (itype==typedraw) {
+	  fprintf(pFile,", %10d",1);
+	  fac_val.push_back(1.0);
+	}
+	else {
+	  fprintf(pFile,", %10d",0);
+	  fac_val.push_back(0.0);
+	}
+      }
+    }
+
+    *** CONTINU
     // Now simulate the models:
     for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
 
       UInt_t thismod = imod;
       if (sim_modelorder.size()==models.size()) thismod = sim_modelorder.at(imod);
 
-      // simulation gives: missing, I_obs, I_factor, shock/prob, outcome
-      models[thismod].Sim(obs_drw*nvar,data,models,param,fparam_models[thismod],fac_val, pFile, simWithData);
+      if (thismod != type_model) {
+	// simulation gives: missing, I_obs, I_factor, shock/prob, outcome
+	models[thismod].Sim(obs_drw*nvar,data,models,param,fparam_models[thismod],fac_val, pFile, simWithData);
+      }
     }
-     if (simIncData) for (int ivar = 0 ; ivar < nvarused ; ivar++) fprintf(pFile,", %10.5f",-9999.0);
+
+    if (simIncData) for (int ivar = 0 ; ivar < nvarused ; ivar++) fprintf(pFile,", %10.5f",-9999.0);
     fprintf(pFile,", %10d \n",1);
 
     // Clear outcome data so they aren't used for other observations
