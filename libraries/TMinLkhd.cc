@@ -5259,8 +5259,11 @@ void TMinLkhd::CalcLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 
   //Skip integration over factor distribution if predicting or initializing
   UInt_t nfac_eff = nfac;
-  if ((initializing)||(predicting)) nfac_eff = 0;
-
+  UInt_t ntyp_eff = ntyp;
+  if ((initializing)||(predicting)) {
+    nfac_eff = 0;
+    ntyp_eff = 0;
+  }
   // if (rank>0)   cout << "point 3, rank=" << rank << endl;
   // cout << "point 3\n";
 
@@ -5548,8 +5551,8 @@ void TMinLkhd::CalcLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	
 	//	cout << "*********Finished calculating adaptive integration numbers! " << nint_points << " integration points for obs " << Int_t(data[i*nvar+indexvar]) << ".\n";
 
-	//loop over types
-	for (UInt_t itype = 0; itype < ntyp*(ntyp>1) + (ntyp<1); itype++) {
+	//loop over types (ntyp is number of types - 1)
+	for (UInt_t itype = 0; itype <= ntyp_eff; itype++) {
 
 
 	  //loop over integration points
@@ -5694,13 +5697,10 @@ void TMinLkhd::CalcLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	    }
 	  }
 
-	  if (ntyp>1) {
+	  //Add type to factor array
+	  if (ntyp_eff>0) {
 	    vector<Double_t> type(ntyp,0.0);
-
-	    if ((initializing==0) && (predicting==0)) {
-	      type[itype] = 1.0;
-	    }
-
+	    type[itype] = 1.0;
 	    fac_val.insert(fac_val.end(),type.begin(),type.end());	
 	  }
 	  //	  printf("After importance: prob=%8.5f\n",probilk);
@@ -6462,8 +6462,14 @@ void TMinLkhd::PrintParamTab(int pmod) {
     vector<Int_t> nfacparam(lastmod-firstmod,0);
 
     for (UInt_t ifac = 0 ; ifac < nfac + ntyp; ifac++) {
-      printf("Fac%1d loading       ",ifac);
-      fprintf(pFile,"Fac%1d_loading       ",ifac);
+      if (ifac<nfac) {
+	printf("Fac%1d loading       ",ifac);
+	fprintf(pFile,"Fac%1d_loading       ",ifac);
+      }
+      else {
+	printf("Typ%1d loading       ",ifac-nfac+1);
+	fprintf(pFile,"Typ%1d_loading       ",ifac-nfac+1);
+      }	
       for (UInt_t imod = firstmod ; imod < lastmod ; imod++) {
 	int nchoice = 1;
 	if (models[imod].GetType()==3) nchoice = models[imod].GetNchoice()-1;
@@ -6680,7 +6686,12 @@ void TMinLkhd::PrintParam(int pmod) {
 	  if (fnorm.size()==0) {
 	    if (parconstrained.at(ipar)>-1) constrained = '*';
 	    else constrained=' ';
-	    printf("%3d. Fac%1d loading : %8.3f +/- %8.3f %c \n",ipar,i+1, param[ipar],param_err[ipar], constrained);
+	    if (i<nfac) {
+	      printf("%3d. Fac%1d loading : %8.3f +/- %8.3f %c \n",ipar,i+1, param[ipar],param_err[ipar], constrained);
+	    }
+	    else {
+	      printf("%3d. Typ%1d loading : %8.3f +/- %8.3f %c \n",ipar,i+1-nfac, param[ipar],param_err[ipar], constrained);
+	    }
 	    ipar++;
 	  }
 	  else {
@@ -6688,7 +6699,12 @@ void TMinLkhd::PrintParam(int pmod) {
 	    else {
 	      if (parconstrained.at(ipar)>-1) constrained = '*';
 	      else constrained=' ';
-	      printf("%3d. Fac%1d loading : %8.3f +/- %8.3f %c \n",ipar,i+1, param[ipar],param_err[ipar], constrained);
+	      if (i<nfac) {
+		printf("%3d. Fac%1d loading : %8.3f +/- %8.3f %c \n",ipar,i+1, param[ipar],param_err[ipar], constrained);
+	      }
+	      else {
+		printf("%3d. Typ%1d loading : %8.3f +/- %8.3f %c \n",ipar,i+1-nfac, param[ipar],param_err[ipar], constrained);
+	      }
 	      ipar++;
 	    }
 	  }

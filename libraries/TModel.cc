@@ -75,7 +75,7 @@ TModel::TModel(const char *name, const char *title, Int_t modeltype, Int_t model
   //If this is the type probability model, then types don't enter
   if (outcome==-2) numtyp = 0;
   if (thisnormfac) {
-    facnorm.reserve(nfac);
+    facnorm.reserve(nfac+ntyp);
     for (int i = 0 ; i < nfac+ntyp ; i++) {
       facnorm.push_back(thisnormfac[i]);
     }
@@ -336,26 +336,21 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
   if (flag >= 2) {
 
     //General parameters in gradient
-    // 1 (likelihood) 2*numfac (df/dtheta and df/dalpha) df/dbeta
-    Int_t ngrad = 1+2*numfac+nregressors;
-
-    if (outcome!=-2) ngrad += numtyp;
+    // 1 (likelihood) 2*numfac (df/dtheta and df/dalpha) types (df/dalpha) df/dbeta
+    Int_t ngrad = 1 + 2*numfac + numtyp*(outcome!=-2) + nregressors;
     
     //Model specific parameters:
     if (modtype==1) ngrad += 1; // variance of error term
 
     //for general logits
-    if ((modtype==3)&&(numchoice>2)&(outcome!=-2)) {
-      ngrad = 1 + numfac + (numchoice-1)*(numfac+numtyp+nregressors); // multinomial logit
-    }
-
-    //for logit describing unobserved types
-    if ((modtype==3)&&(numchoice>2)&(outcome==-2)) {
-      ngrad = 1 + numfac + (numchoice-1)*(numfac+nregressors); // multinomial logit describing types
+    if ((modtype==3)&&(numchoice>2)) {
+      ngrad = 1 + numfac + (numchoice-1)*(numfac+numtyp*(outcome!=-2)+nregressors); // multinomial logit
     }
 
     if (modtype==4) ngrad += (numchoice-1); // ordered probit intercepts
+
     modEval.resize(ngrad);
+
     for (int i = 1 ; i < ngrad ; i++) modEval[i] = 0.0;
     if (flag==3) hess.clear();
   }
@@ -376,12 +371,12 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
     numlogitchoice = numchoice;
   }
 
+  //Here we add factor/type terms to expression
+  //And also count the number of parameters for unobserved factors/types (ifreefac)
   UInt_t ifreefac = 0;
-
   for (int ichoice = 0; ichoice < numlogitchoice-1; ichoice++) {
     ifreefac = 0;
-    UInt_t nparamchoice = nregressors + numfac;
-    if (outcome!=-2) nparamchoice += numtyp;
+    UInt_t nparamchoice = nregressors + numfac + numtyp*(outcome!=-2);
       
     for (int i = 0; i < nregressors  ; i++) {
       expres[ichoice] += param[i+firstpar+ichoice*nparamchoice]*data[iobs_offset+regressors[i]];
@@ -404,12 +399,12 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
   } // loop over choices
 
   // nparameters: d/dtheta, d/dbeta, d/dalpha
-  Int_t npar = numfac+numtyp+nregressors+ifreefac;
+  Int_t npar = numfac + nregressors + ifreefac;
 
   // update this if/when we allow factors/types loadings to be normalized
   //for general logits
-  if ((modtype==3)&&(numchoice>2)&(outcome!=-2)) {
-    npar = numfac + (numchoice-1)*(nregressors+numfac+numtyp); // multinomial logit
+  if ((modtype==3)&&(numchoice>2)) {
+    npar = numfac + (numchoice-1)*(nregressors+numfac+numtyp*(outcome!=-2)); // multinomial logit
   }
     
   if (modtype==1) {
@@ -434,7 +429,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
       }
 
       ifreefac = 0;
-      for (int i = 0 ; i < numfac + numtyp; i++) {
+      for (int i = 0 ; i < numfac + numtyp*(outcome!=-2); i++) {
 	if (facnorm.size()==0) {
 	  if (i<numfac) {
 	  // gradient of factor-specific parameters (variance, mean, weights) d/dtheta
@@ -465,9 +460,9 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	}
 	else {
 	  if (facnorm[i]>-9998.0) {
-	    // gradient of factor-specific parameters (variance, mean, weights)
-	    //	    modEval[i+1] = Z*(fac[i]*facnorm[i]/param[i])/(sigma*sigma);
 	    if (i<numfac) {
+	      // gradient of factor-specific parameters (variance, mean, weights) d/dtheta
+	      //	    modEval[i+1] = Z*(fac[i]*facnorm[i]/param[i])/(sigma*sigma);
 	      modEval[i+1] = Z*facnorm[i]/(sigma*sigma);
 	      if (flag==3) {
 		// d/dtheta_i row
@@ -478,7 +473,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	    }
 	  }
 	  else {
-	    // gradient of factor-specific parameters (variance, mean, weights)
+	    // gradient of factor-specific parameters (variance, mean, weights) d/dtheta
 	    //	    modEval[i+1] = Z*(fac[i]*param[ifreefac+firstpar+nregressors]/param[i])/(sigma*sigma);
 	    if (i<numfac) {
 	      modEval[i+1] = Z*param[ifreefac+firstpar+nregressors]/(sigma*sigma);
@@ -587,21 +582,26 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
       }
 
       ifreefac = 0;
-      for (int i = 0 ; i < numfac ; i++) {
+      for (int i = 0 ; i < numfac + numtyp*(outcome!=-2); i++) {
 	if (facnorm.size()==0) {
-	  // gradient of factor-specific parameters (variance, mean, weights)
-	  //	  modEval[i+1] = pdf*(obsSign*fac[i]*param[ifreefac+firstpar+nregressors]/param[i])/cdf; 
-	  modEval[i+1] = pdf*obsSign*param[ifreefac+firstpar+nregressors]/cdf; 
+	  if (i<numfac) {
+	    // gradient of factor-specific parameters (variance, mean, weights)
+	    //	  modEval[i+1] = pdf*(obsSign*fac[i]*param[ifreefac+firstpar+nregressors]/param[i])/cdf; 
+	    modEval[i+1] = pdf*obsSign*param[ifreefac+firstpar+nregressors]/cdf; 
+	  }
+
 	  //gradient of factor loading (alpha)
 	  modEval[1+numfac+nregressors+ifreefac] =  pdf*(obsSign*fac[i])/cdf;
-// 	  if (obsSign*expres[0]<-35.0) modEval[1+numfac+nregressors+ifreefac] = -0.1*param[ifreefac+firstpar+nregressors]*param[ifreefac+firstpar+nregressors]/fabs(param[ifreefac+firstpar+nregressors]);
+	  // 	  if (obsSign*expres[0]<-35.0) modEval[1+numfac+nregressors+ifreefac] = -0.1*param[ifreefac+firstpar+nregressors]*param[ifreefac+firstpar+nregressors]/fabs(param[ifreefac+firstpar+nregressors]);
 
 	  if (flag==3) {
-	    // lambda^L(theta) - lambda^Prob(theta) (row)  
-	    for (int j = i; j < npar ; j++) hess[i*npar+j] *= -Z*obsSign*param[ifreefac+firstpar+nregressors] - modEval[i+1];
-	    // dZ/dtheta_i (col)
-	    for (int j = 0; j <= i ; j++) hess[j*npar+i] *= obsSign*param[ifreefac+firstpar+nregressors];
-
+	    if (i<numfac) {
+	      // lambda^L(theta) - lambda^Prob(theta) (row)  
+	      for (int j = i; j < npar ; j++) hess[i*npar+j] *= -Z*obsSign*param[ifreefac+firstpar+nregressors] - modEval[i+1];
+	      // dZ/dtheta_i (col)
+	      for (int j = 0; j <= i ; j++) hess[j*npar+i] *= obsSign*param[ifreefac+firstpar+nregressors];
+	    }
+	    
 	    // alpha_i index
 	    Int_t index = numfac+nregressors+ifreefac;
 	    // lambda^L(alpha) - lambda^Prob(alpha) (row)
@@ -614,30 +614,37 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	}
 	else {
 	  if (facnorm[i]>-9998.0) {
-	    // gradient of factor-specific parameters (variance, mean, weights)
-	    //	    modEval[i+1] = pdf*(obsSign*fac[i]*facnorm[i]/param[i])/cdf;
-	    modEval[i+1] = pdf*obsSign*facnorm[i]/cdf;
+	    if (i<numfac) {
+	      // gradient of factor-specific parameters (variance, mean, weights)
+	      //	    modEval[i+1] = pdf*(obsSign*fac[i]*facnorm[i]/param[i])/cdf;
+	      modEval[i+1] = pdf*obsSign*facnorm[i]/cdf;
 
-	    if (flag==3) {
-	      // lambda^L(theta) - lambda^Prob(theta) (row)  
-	      for (int j = i; j < npar ; j++) hess[i*npar+j] *= -Z*obsSign*facnorm[i] - modEval[i+1];
-	      // dZ/dtheta_i (col)
-	      for (int j = 0; j <= i ; j++) hess[j*npar+i] *= obsSign*facnorm[i];
+	      if (flag==3) {
+		// lambda^L(theta) - lambda^Prob(theta) (row)  
+		for (int j = i; j < npar ; j++) hess[i*npar+j] *= -Z*obsSign*facnorm[i] - modEval[i+1];
+		// dZ/dtheta_i (col)
+		for (int j = 0; j <= i ; j++) hess[j*npar+i] *= obsSign*facnorm[i];
+	      }
 	    }
 	  }
 	  else {
-	  // gradient of factor-specific parameters (variance, mean, weights)
-	    //	    modEval[i+1] = pdf*(obsSign*fac[i]*param[ifreefac+firstpar+nregressors]/param[i])/cdf; 
-	    modEval[i+1] = pdf*obsSign*param[ifreefac+firstpar+nregressors]/cdf; 
+	    if (i<numfac) {
+	      // gradient of factor-specific parameters (variance, mean, weights)
+	      //	    modEval[i+1] = pdf*(obsSign*fac[i]*param[ifreefac+firstpar+nregressors]/param[i])/cdf; 
+	      modEval[i+1] = pdf*obsSign*param[ifreefac+firstpar+nregressors]/cdf;
+	    }
+	    
 	  //gradient of factor loading (alpha)
 	    modEval[1+numfac+nregressors+ifreefac] = pdf*(obsSign*fac[i])/cdf;
 // 	    if (obsSign*expres[0]<-35.0) modEval[1+numfac+nregressors+ifreefac] = -0.1*param[ifreefac+firstpar+nregressors]*param[ifreefac+firstpar+nregressors]/fabs(param[ifreefac+firstpar+nregressors]);
 
 	    if (flag==3) {
-	      // lambda^L(theta) - lambda^Prob(theta) (row)  
-	      for (int j = i; j < npar ; j++) hess[i*npar+j] *= -Z*obsSign*param[ifreefac+firstpar+nregressors] - modEval[i+1];
-	      // dZ/dtheta_i (col)
-	      for (int j = 0; j <= i ; j++) hess[j*npar+i] *= obsSign*param[ifreefac+firstpar+nregressors];
+	      if (i<numfac) {
+		// lambda^L(theta) - lambda^Prob(theta) (row)  
+		for (int j = i; j < npar ; j++) hess[i*npar+j] *= -Z*obsSign*param[ifreefac+firstpar+nregressors] - modEval[i+1];
+		// dZ/dtheta_i (col)
+		for (int j = 0; j <= i ; j++) hess[j*npar+i] *= obsSign*param[ifreefac+firstpar+nregressors];
+	      }
 	      
 	      // alpha_i index
 	      Int_t index = numfac+nregressors+ifreefac;
@@ -666,7 +673,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
       if (flag==3) {
 	//Need to add dZ/dtheta dalpha
 	ifreefac = 0;
-	for (int i = 0 ; i < numfac ; i++) {
+	for (int i = 0 ; i < numfac; i++) {
 	  if (facnorm.size()==0) {
 	    Int_t index = numfac+nregressors+ifreefac;
 	    hess[i*npar+index] += obsSign;
@@ -675,7 +682,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	  else if (facnorm[i]<-9998.0) {
 	    Int_t index = numfac+nregressors+ifreefac;
 	    hess[i*npar+index] += obsSign;
-	  ifreefac++;
+	    ifreefac++;
 	  }
 	}
 
@@ -786,11 +793,14 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	  
 	  // First do the factor-specific gradient and hessian terms (theta and alpha)
 	  ifreefac = 0;
-	  for (int ifac = 0 ; ifac < numfac ; ifac++) {
+	  for (int ifac = 0 ; ifac < numfac + numtyp*(outcome!=-2); ifac++) {
 	    //No normalizations:
 	    if (facnorm.size()==0) {
-	      // gradient of factor-specific parameters (variance, mean, weights)
-	      tmpgrad[ifac] = (-1.0*param[ifreefac+firstpar+nregressors])*PDF[iterm]/diffCDF; 
+	      if (i<numfac) {
+		// gradient of factor-specific parameters (variance, mean, weights)
+		tmpgrad[ifac] = (-1.0*param[ifreefac+firstpar+nregressors])*PDF[iterm]/diffCDF; 
+	      }
+	      
 	      //gradient of factor loading (alpha)
 	      tmpgrad[numfac+nregressors+ifreefac] = (-1.0*fac[ifac])*PDF[iterm]/diffCDF;
 	      
@@ -798,12 +808,16 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	    }
 	    else {
 	      if (facnorm[ifac]>-9998.0) {
-		// gradient of factor-specific parameters (variance, mean, weights)
-		tmpgrad[ifac] = (-1.0*facnorm[ifac])*PDF[iterm]/diffCDF;
+		if (i<numfac) {
+		  // gradient of factor-specific parameters (variance, mean, weights)
+		  tmpgrad[ifac] = (-1.0*facnorm[ifac])*PDF[iterm]/diffCDF;
+		}
 	      }
 	      else {
-		// gradient of factor-specific parameters (variance, mean, weights)
-		tmpgrad[ifac] = (-1.0*param[ifreefac+firstpar+nregressors])*PDF[iterm]/diffCDF; 
+		if (i<numfac) {
+		  // gradient of factor-specific parameters (variance, mean, weights)
+		  tmpgrad[ifac] = (-1.0*param[ifreefac+firstpar+nregressors])*PDF[iterm]/diffCDF; 
+		}
 		// gradient of factor loading (alpha)
 		tmpgrad[numfac+nregressors+ifreefac] = (-1.0*fac[ifac])*PDF[iterm]/diffCDF;
 		
@@ -812,7 +826,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	    }
 	  }
 	  
-	  // Gradient for X's
+	  // Gradient for beta's
 	  for (int ireg = 0; ireg < nregressors  ; ireg++) {
 	    tmpgrad[ireg+numfac] = (-1.0*data[iobs_offset+regressors[ireg]])*PDF[iterm]/diffCDF;
 	  }
@@ -852,14 +866,15 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 
 	    // First do the factor-specific gradient and hessian terms (theta and alpha)
 	    ifreefac = 0;
-	    for (int ifac = 0 ; ifac < numfac ; ifac++) {
+	    for (int ifac = 0 ; ifac < numfac + numtyp*(outcome!=-2); ifac++) {
 	      //No normalizations:
 	      if (facnorm.size()==0) {
-	      
-		// lambda^L(theta) - lambda^Prob(theta) (row) 
-		for (int j = ifac; j < npar ; j++) tmphess[ifac*npar+j] *= -Z[iterm]*(-1.0*param[ifreefac+firstpar+nregressors]) - modEval[1+ifac];
-		// dZ/dtheta_i (col) 
-		for (int j = 0; j <= ifac ; j++) tmphess[j*npar+ifac] *= -1.0*param[ifreefac+firstpar+nregressors];
+		if (i<numfac) {
+		  // lambda^L(theta) - lambda^Prob(theta) (row) 
+		  for (int j = ifac; j < npar ; j++) tmphess[ifac*npar+j] *= -Z[iterm]*(-1.0*param[ifreefac+firstpar+nregressors]) - modEval[1+ifac];
+		  // dZ/dtheta_i (col) 
+		  for (int j = 0; j <= ifac ; j++) tmphess[j*npar+ifac] *= -1.0*param[ifreefac+firstpar+nregressors];
+		}
 		
 		// alpha_i index
 		Int_t index = numfac+nregressors+ifreefac;
@@ -872,16 +887,20 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	      }
 	      else {
 		if (facnorm[ifac]>-9998.0) {
-		  // lambda^L(theta) - lambda^Prob(theta) (row)  
-		  for (int j = ifac; j < npar ; j++) tmphess[ifac*npar+j] *= -Z[iterm]*(-1.0*facnorm[ifac]) - modEval[1+ifac];
-		  // dZ/dtheta_i (col)
-		  for (int j = 0; j <= ifac ; j++) tmphess[j*npar+ifac] *= -1.0*facnorm[ifac];
+		  if (i<numfac) {
+		    // lambda^L(theta) - lambda^Prob(theta) (row)  
+		    for (int j = ifac; j < npar ; j++) tmphess[ifac*npar+j] *= -Z[iterm]*(-1.0*facnorm[ifac]) - modEval[1+ifac];
+		    // dZ/dtheta_i (col)
+		    for (int j = 0; j <= ifac ; j++) tmphess[j*npar+ifac] *= -1.0*facnorm[ifac];
+		  }
 		}
 		else {
-		  // lambda^L(theta) - lambda^Prob(theta) (row)  
-		  for (int j = ifac; j < npar ; j++) tmphess[ifac*npar+j] *= -Z[iterm]*(-1.0*param[ifreefac+firstpar+nregressors]) - modEval[1+ifac];
-		  // dZ/dtheta_i (col)
-		  for (int j = 0; j <= ifac ; j++) tmphess[j*npar+ifac] *= -1.0*param[ifreefac+firstpar+nregressors];
+		  if (i<numfac) {
+		    // lambda^L(theta) - lambda^Prob(theta) (row)  
+		    for (int j = ifac; j < npar ; j++) tmphess[ifac*npar+j] *= -Z[iterm]*(-1.0*param[ifreefac+firstpar+nregressors]) - modEval[1+ifac];
+		    // dZ/dtheta_i (col)
+		    for (int j = 0; j <= ifac ; j++) tmphess[j*npar+ifac] *= -1.0*param[ifreefac+firstpar+nregressors];
+		  }
 		  
 		  // alpha_i index
 		  Int_t index = numfac+nregressors+ifreefac;
@@ -977,8 +996,13 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 
     for (int irank = 0 ; irank < numrank ; irank++) {
       Int_t obsCat = -1;
-      for (int icat = 1 ; icat <= numchoice ; icat++) if (icat == int(data[iobs_offset + outcome + irank])) obsCat = icat-1;
-      
+      if (outcome!=-2) {
+	for (int icat = 1 ; icat <= numchoice ; icat++) if (icat == int(data[iobs_offset + outcome + irank])) obsCat = icat-1;
+      }
+      else {
+	obsCat = 1;
+	for (int icat = 0 ; icat < numtyp ; icat++) if (int(fac[numfac+icat])>0) obsCat = 2+icat;
+      }
       //Individuals may not use all rankings, so we only check the first one:
       if ((obsCat==-1)&&(numrank==1)) {
 	  cout << "ERROR (TModel::Eval): Found invalid number for logit outcome!"
@@ -992,7 +1016,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
       }
 
       if (obsCat>-1) {
-	UInt_t nparamchoice = nregressors + numfac;
+	UInt_t nparamchoice = nregressors + numfac + numtyp*(outcome!=-2);
 
 	vector<double> rankedChoiceCorr(numchoice - 1, 0.0);
 	if (ranksharevar >= 0 )  {
@@ -1029,24 +1053,26 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	  }
 
 	  // gradient of factor parameters
-	  for (int ifac = 0 ; ifac < numfac ; ifac++) {
-	    
-	    //***************
-	    // gradient of factor-specific parameters (variance, mean, weights, etc)
-	    //obsCat term:
-	    if (obsCat>0) modEval[1+ifac] += param[firstpar+(obsCat-1)*nparamchoice+nregressors+ifac];
-	    if (flag==3) {
-	      for (int jcat = 1 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + ifac] += param[firstpar+(jcat-1)*nparamchoice+nregressors+ifac];
-	    }
-	    
-	    //no parameters for choice=0 (i.e. Z(icat=0) = 0)
-	    for (int icat = 1 ; icat < numchoice ; icat++) {
-	      modEval[1+ifac] += -pdf[icat]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
+	  for (int ifac = 0 ; ifac < numfac + numtyp*(outcome!=-2); ifac++) {
+
+	    if (i<numfac) {
+	      //***************
+	      // gradient of factor-specific parameters (variance, mean, weights, etc)
+	      //obsCat term:
+	      if (obsCat>0) modEval[1+ifac] += param[firstpar+(obsCat-1)*nparamchoice+nregressors+ifac];
 	      if (flag==3) {
-		for (int jcat = 0 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + ifac] += -pdf[icat]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
+		for (int jcat = 1 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + ifac] += param[firstpar+(jcat-1)*nparamchoice+nregressors+ifac];
+	      }
+	    
+	      //no parameters for choice=0 (i.e. Z(icat=0) = 0)
+	      for (int icat = 1 ; icat < numchoice ; icat++) {
+		modEval[1+ifac] += -pdf[icat]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
+		if (flag==3) {
+		  for (int jcat = 0 ; jcat < numchoice ; jcat++) logitgrad[jcat*npar + ifac] += -pdf[icat]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
+		}
 	      }
 	    }
-
+	    
 	    //****************
 	    //gradient of factor loading (alpha) 
 	    //obsCat term:
@@ -1131,7 +1157,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 		for (int jcat = 1 ; jcat < numchoice ; jcat++) {
 		  
 		  //dtheta dalpha
-		  for (int jfac = 0 ; jfac < numfac ; jfac++) {
+		  for (int jfac = 0 ; jfac < numfac + numtyp*(outcome!=-2); jfac++) {
 		    Int_t index = numfac+(jcat-1)*nparamchoice+nregressors+jfac;
 		    hess[ifac*npar+index] += -pdf[icat]*logitgrad[icat*npar + index]*param[firstpar+(icat-1)*nparamchoice+nregressors+ifac];
 		  }
@@ -1162,7 +1188,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 		}
 		//dbeta dalpha
 		for (int ireg = 0; ireg < nregressors  ; ireg++) {
-		  for (int jfac = 0 ; jfac < numfac ; jfac++) {
+		  for (int jfac = 0 ; jfac < numfac + numtyp*(outcome!=-2); jfac++) {
 		    Int_t index1 = numfac+(icat-1)*nparamchoice+ireg;	      
 		    Int_t index2 = numfac+(jcat-1)*nparamchoice+nregressors+jfac;	      
 		    hess[index1*npar+index2] += -pdf[icat]*logitgrad[icat*npar + index2]*data[iobs_offset+regressors[ireg]];
@@ -1171,7 +1197,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 		
 		//dalpha dbeta
 		if (jcat>icat) {
-		  for (int ifac = 0 ; ifac < numfac ; ifac++) {
+		  for (int ifac = 0 ; ifac < numfac + numtyp*(outcome!=-2); ifac++) {
 		    for (int jreg = 0; jreg < nregressors  ; jreg++) {
 		      Int_t index1 = numfac+(icat-1)*nparamchoice+nregressors+ifac;	      
 		      Int_t index2 = numfac+(jcat-1)*nparamchoice+jreg;	      
@@ -1181,8 +1207,8 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 		}
 		
 		//dalpha dalpha
-		for (int ifac = 0 ; ifac < numfac ; ifac++) {
-		  for (int jfac = 0; jfac < numfac  ; jfac++) {
+		for (int ifac = 0 ; ifac < numfac + numtyp*(outcome!=-2); ifac++) {
+		  for (int jfac = 0; jfac < numfac  + numtyp*(outcome!=-2); jfac++) {
 		    if ( (jcat>icat) || (jfac>=ifac) ) {
 		      Int_t index1 = numfac+(icat-1)*nparamchoice+nregressors+ifac;	      
 		      Int_t index2 = numfac+(jcat-1)*nparamchoice+nregressors+jfac;	      
