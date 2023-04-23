@@ -153,7 +153,7 @@ private:
   
 public:
   TMinLkhd();
-  TMinLkhd(const char *name, const char *title, Int_t nfactors, Int_t fcorr = 1, Int_t fnmix=0, Int_t nquad = 8, Int_t thisstage = 0);
+  TMinLkhd(const char *name, const char *title, Int_t nfactors, Int_t ntypes = 1, Int_t fcorr = 1, Int_t fnmix=0, Int_t nquad = 8, Int_t thisstage = 0);
   virtual ~TMinLkhd();
   
 
@@ -268,7 +268,7 @@ public:
   void PrintParam_Varlist();
   void SetData(char * filename, char * var_table);
   void AddModel(const char *name, const char *title, TString modeltype, std::vector<TString> & moddata,Double_t * normfac = NULL, UInt_t nchoice = 2, UInt_t nrank = 1);
-  void AddTypesModel(std::vector<TString> & moddata, Double_t * normfac = NULL, UInt_t ntypes);
+  void AddTypesModel(std::vector<TString> & typedata, Double_t * typenorm = NULL);
   void LastModel_Splitsim(TString splitvar);
 
   void ConstrainFactorCorrelations();

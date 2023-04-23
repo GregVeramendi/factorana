@@ -72,6 +72,8 @@ TModel::TModel(const char *name, const char *title, Int_t modeltype, Int_t model
 
   numfac=nfac;
   numtyp=ntyp;
+  //If this is the type probability model, then types don't enter
+  if (outcome==-2) numtyp = 0;
   if (thisnormfac) {
     facnorm.reserve(nfac);
     for (int i = 0 ; i < nfac+ntyp ; i++) {
@@ -402,21 +404,14 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
   } // loop over choices
 
   // nparameters: d/dtheta, d/dbeta, d/dalpha
-  Int_t npar = numfac+nregressors+ifreefac;
-  if (outcome!=-2) npar += ntype;
+  Int_t npar = numfac+numtyp+nregressors+ifreefac;
 
   // update this if/when we allow factors/types loadings to be normalized
   //for general logits
   if ((modtype==3)&&(numchoice>2)&(outcome!=-2)) {
     npar = numfac + (numchoice-1)*(nregressors+numfac+numtyp); // multinomial logit
   }
-  
-  //for logit describing unobserved types
-  if ((modtype==3)&&(numchoice>2)&(outcome==-2)) {
-    npar = numfac + (numchoice-1)*(nregressors+numfac); // multinomial logit describing types
-  }
-
-  
+    
   if (modtype==1) {
     Double_t Z = 0.0;
     if (outcome>-1) Z = data[iobs_offset+outcome]-expres[0];
@@ -439,7 +434,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
       }
 
       ifreefac = 0;
-      for (int i = 0 ; i < numfac + numtyp*(outcome!=-2); i++) {
+      for (int i = 0 ; i < numfac + numtyp; i++) {
 	if (facnorm.size()==0) {
 	  if (i<numfac) {
 	  // gradient of factor-specific parameters (variance, mean, weights) d/dtheta
@@ -1267,7 +1262,7 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
       //print out detailed variables (Vobs, Vend, Vfac0..VfacN, eps)
       if (detailsim) {
 	// Vobs, eps, Vfac#
-	int ndetailvar = 2 + numfac;
+	int ndetailvar = 2 + numfac + numtyp;
 	if ((endogRegList.size()>0)&&(gof==0)) ndetailvar++;
 	for (int ichoice = 2 ; ichoice <=numlogitchoice; ichoice++) {
 	  for (int i = 0; i < ndetailvar; i++)  fprintf(pFile,", %10d",-9999);
@@ -1295,7 +1290,8 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
       for (int ichoice = 0; ichoice < numlogitchoice-1; ichoice++) {
 	
 	ifreefac = 0;
-	UInt_t nparamchoice = nregressors + numfac;
+	UInt_t nparamchoice = nregressors + numfac + numtyp;
+	
 	
 	for (int ireg = 0; ireg < nregressors  ; ireg++) {
 	  if (regressors[ireg]!=splitsim) {
@@ -1346,7 +1342,7 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
 	  }
 	}      
 	Double_t fac_comp = 0.0;
-	for (int i = 0 ; i < numfac ; i++) {
+	for (int i = 0 ; i < numfac + numtyp; i++) {
 	  if (facnorm.size()==0) {
 	    fac_comp += param[ifreefac+firstpar+ichoice*nparamchoice+nregressors]*fac.at(i);
 	    if (detailsim) fprintf(pFile,", %10.5f",param[ifreefac+firstpar+ichoice*nparamchoice+nregressors]*fac.at(i));
@@ -1549,7 +1545,7 @@ Double_t TModel::GetPdf(UInt_t iobs_offset, const std::vector<Double_t> & data, 
       
       UInt_t ifreefac = 0;
       Double_t fac_comp = 0.0;
-      for (int i = 0 ; i < numfac ; i++) {
+      for (int i = 0 ; i < numfac + numtyp; i++) {
 	if (facnorm.size()==0) {
 	  fac_comp += param[ifreefac+firstpar+nregressors]*fac.at(i);	  
 	  ifreefac++;
