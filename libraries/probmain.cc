@@ -35,7 +35,7 @@ void MinuitLkhdFcn(Int_t &npar, Double_t *gin, Double_t &f,
 void LkhdFcn(Int_t &npar, Double_t *gin, Double_t &f,
 		   Double_t *par, Int_t iflag, Double_t *hess);
 
-int main(int argc,char *argv[]) { 
+int main(int argc, char *argv[]) { 
   init(0);
 
   TString workingdir = mymodel.GetWorkingDir();
@@ -44,7 +44,34 @@ int main(int argc,char *argv[]) {
     mymodel.Minimize(0);
   }
   else if (mymodel.GetNBootSample()>0) {
-    for (UInt_t isample = mymodel.GetBootStrapStartSample() ; isample < mymodel.GetNBootSample() ; isample++) {
+
+    //Check to see if bootstrap sample was passed as command line argument
+    UInt_t bootSampleStart = mymodel.GetBootStrapStartSample();
+    UInt_t bootSampleEnd = mymodel.GetBootStrapStartSample();
+    
+    if (argc>=2) {
+      std::istringstream ss(argv[1]);
+      if (ss >> bootSampleStart)
+	{
+	  printf("Bootstrap sample set at command line to %d\n",bootSampleStart);
+	  bootSampleEnd = bootSampleStart + 1;	  
+	}
+      else printf("*****Error in specifying bootstrap sample using command line. Unable to convert to integer! Argument: %s\n",argv[1]);
+    }
+
+    if (argc>=3) {
+      std::istringstream ss(argv[2]);
+      UInt_t sim_nobs;
+      if (ss >> sim_nobs)
+	{
+	  printf("Simulation size set at command line to %d\n",sim_nobs);
+	  mymodel.SetSimNobs(sim_nobs);
+	}
+      else printf("*****Error in setting simulation size using command line. Unable to convert to integer! Argument: %s\n",argv[2]);
+    }
+    
+    
+    for (UInt_t isample =  bootSampleStart; isample < bootSampleEnd ; isample++) {
 
       Int_t nobs = mymodel.GetNobs();
       Int_t * obslist = new Int_t[nobs];
