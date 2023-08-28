@@ -117,7 +117,7 @@ TMinLkhd::TMinLkhd(const char *name, const char *title,  Int_t nfactors, Int_t n
   est_nmix = fac_nmix;
   nfac=nfactors;
   ntyp = ntypes-1;
-  type_model = -1;
+  type_model = 9999;
   //  nquad_points=nquad;
   nquad_points=abs(nquad);
   fac_npoints.clear();
@@ -468,8 +468,19 @@ void TMinLkhd::SetFactorScores() {
   std::vector<Double_t> initv(nfac,0.0);
   fscore.resize(nobs,initv);
   fstderr.resize(nobs,initv);
-  
-  TString filename = TString("factor_predictions.txt");
+
+  TString filename;
+    if ((nsubsamples==0)&&(nbootsamples==0)) {
+      filename = TString("factor_predictions.txt");
+    }
+    else {
+      std::stringstream out;
+      out << GetCurrentSample();
+      if (GetCurrentSample()>-1) filename = TString("factor_predictions_").Append(out.str()).Append(".txt");
+      else filename = TString("factor_predictions.txt");
+    }
+
+    //  TString filename = TString("factor_predictions.txt");
   filename.Prepend(workingdir);
   
   if (fexist((char *)filename.Data())) {
@@ -858,7 +869,7 @@ void TMinLkhd::LastModel_SetRankShareVar(TString sharevar) {
 void TMinLkhd::SetSimModelOrder(std::vector<TString> & modlist) {
   
   sim_modelorder.clear();
-  if (type_model>=0) sim_modelorder.push_back(type_model);
+  if (type_model<9999) sim_modelorder.push_back(type_model);
 
   for (UInt_t ilist = 0 ; ilist < modlist.size(); ilist++) {
   
@@ -912,10 +923,12 @@ void TMinLkhd::SetSimModelOrder(std::vector<TString> & modlist) {
   }
 
   //Print order of simulating models
-  printf("Simulation order of models set to:\n");
+  if (GetMPRank()==0) {
+    printf("Simulation order of models set to:\n");
 
-  for (UInt_t jmod = 0 ; jmod < sim_modelorder.size() ; jmod++) {
-    printf("%d: %s\n",jmod,models.at(sim_modelorder.at(jmod)).GetName());
+    for (UInt_t jmod = 0 ; jmod < sim_modelorder.size() ; jmod++) {
+      printf("%d: %s\n",jmod,models.at(sim_modelorder.at(jmod)).GetName());
+    }
   }
 }
 
@@ -1015,10 +1028,10 @@ void TMinLkhd::LastModel_Splitsim(TString splitvar) {
 
 void TMinLkhd::ResetFitInfo() {
 
-  printf("Starting TMinLkhd::ResetFitInfo()\n");
+  //  printf("Starting TMinLkhd::ResetFitInfo()\n");
   //Check that type model exists if the number of types is greater than 0
   if (ntyp > 0) {
-    if (type_model==-1) {
+    if (type_model==9999) {
       cout << "ERROR (TMinLkhd::ResetFitInfo): ntyp>0, but the model for types was not specified!" << endl;
       assert(0);
     }    
@@ -1047,7 +1060,7 @@ void TMinLkhd::ResetFitInfo() {
       FixParPerm(ipar);
     }
   }
-  printf("***TMinLkhd::ResetFitInfo() with %d parameters and %d free.\n",param.size(),nfreeparam);
+  if (GetMPRank()==0) printf("***TMinLkhd::ResetFitInfo() with %d parameters and %d free.\n",int(param.size()),nfreeparam);
 
 
   //Remove chains of constraints from parconstrained
@@ -1074,7 +1087,6 @@ void TMinLkhd::ResetFitInfo() {
   }
 
 
-  printf("Check models for bad data first:\n");
   for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
     UInt_t obscounter = 0;
 
@@ -1179,8 +1191,6 @@ void TMinLkhd::ResetFitInfo() {
     }
     nobs_models.push_back(obscounter);
   }
-  printf("Finished checking data for each model\n");
-
 
   // Initialize factor distribution
   // nvariance * nmix
@@ -1279,10 +1289,9 @@ void TMinLkhd::ResetFitInfo() {
   //  printf("\n\n");
 
 
-  printf("Initialize parameters of models\n");
   for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
 
-    printf("Calculating stuff for model %d outcome=%d, missing=%d, type=%d, nchoice=%d\n",imod,models[imod].GetOutcome(), models[imod].GetMissing(), models[imod].GetType(), models[imod].GetNchoice());
+    //    printf("Calculating stuff for model %d outcome=%d, missing=%d, type=%d, nchoice=%d\n",imod,models[imod].GetOutcome(), models[imod].GetMissing(), models[imod].GetType(), models[imod].GetNchoice());
     //Scale initial values differently depending on model
     Double_t thismult = 1.0;
     if (models[imod].GetType()==3) thismult = 0.1;
@@ -1302,7 +1311,8 @@ void TMinLkhd::ResetFitInfo() {
       
       // First get mean and sd of outcome
       UInt_t ncount = 0;
-      Double_t outcome_sd, outcome_mn;
+      Double_t outcome_sd = 1.0;
+      Double_t outcome_mn = 0.0;
       
       if (imod!=type_model) {
 	for (UInt_t iobs = 0 ; iobs < nobs ; iobs++) {
@@ -1348,8 +1358,7 @@ void TMinLkhd::ResetFitInfo() {
 	outcome_mn = sumdt/ncount;
       }
       if (models[imod].GetType()!=1) outcome_sd = 1.0;
-      
-      printf("Outcome SD for model %d = %f, %f, %f, %d\n",imod,outcome_sd, sumdtsq, sumdt,ncount);
+      //      printf("Outcome SD for model %d = %f, %f, %f, %d\n",imod,outcome_sd, sumdtsq, sumdt,ncount);
       
       //Get sign for loading in this model
       vector<Double_t> facloadsign(nfac,0.0);
@@ -1401,7 +1410,7 @@ void TMinLkhd::ResetFitInfo() {
 	  covsign = (sumoutreg/ncount - reg_mn*outcome_mn < 0) ? -1.0 : 1.0;
 	}
 	// Set intercept or beta0
-	if (reg_sd<0.001) {
+	if ((reg_sd<0.001)&&(imod!=type_model)) {
 	  //	printf("Setting par%d=%f\n",ipar,outcome_mn/reg_mn);
 	  if (fabs(reg_mn-1.0) < 0.001) {
 	    if (countconstcovariates==0) {
@@ -1414,7 +1423,6 @@ void TMinLkhd::ResetFitInfo() {
 	      Setparam(ipar, 0.0);
 	      Setparam_err(ipar, -9999.0);
 	      FixParPerm(ipar);
-	      
 	    }
 	  }
 	  else {
@@ -1422,6 +1430,10 @@ void TMinLkhd::ResetFitInfo() {
 	    Setparam_err(ipar, -9999.0);
 	    FixParPerm(ipar);
 	  }
+	}
+	else if (imod==type_model) {
+	  Setparam(ipar, 0.1*loadingMultiplier);
+	  Setparam_err(ipar, 0.1*loadingMultiplier); 
 	}
 	else Setparam(ipar, thismult*loadingMultiplier*covsign*outcome_sd/reg_sd/regs.size());
 	Setparam_err(ipar, 0.5*fabs(param[ipar]));
@@ -1488,8 +1500,14 @@ void TMinLkhd::ResetFitInfo() {
       }
     } // loop over choices of logit
   } // loop over models
-  //   printf("Finished initializing param:\n");
   //   for (int i = 0 ; i < param.size() ; i++) printf("par%d = %f\n",i,param[i]);
+
+  if (fscore.size()==nobs) {
+    SetFactorScores();
+  }
+
+  
+  if (GetMPRank()==0) printf("***TMinLkhd::ResetFitInfo() with %d parameters and %d free.\n",int(param.size()),nfreeparam);
 }
 
 Int_t TMinLkhd::Minimize(Int_t printlevel) {
@@ -1923,7 +1941,13 @@ Int_t TMinLkhd::TestGradient(){
   Int_t num_param = numberparam;
 
   if (predicting==0) {
-    for (UInt_t ipar = 0 ; ipar < numberparam ;ipar++) thisparam[ipar] = param[ipar];
+    Int_t ifreepar = 0;
+    for (UInt_t ipar = 0 ; ipar < numberparam ;ipar++) {
+      if (parfixed[ipar]==0) {
+	thisparam[ifreepar] = param[ifreepar];
+	ifreepar++;
+      }
+    }
   }
   else {
     for (UInt_t ifac = 0 ; ifac < numberparam ;ifac++) thisparam[ifac] = 0.5;
@@ -1932,23 +1956,27 @@ Int_t TMinLkhd::TestGradient(){
 
   cout << "***** Testing gradient *******\n";
 
+  Int_t ifreepar = 0;
   for (UInt_t ipar = 0; ipar < numberparam ; ipar++) {
-    Double_t h = delta*(fabs(thisparam[ipar])+1.0);
-
-    Double_t oldparam = thisparam[ipar];
-
-    thisparam[ipar] = oldparam - h;
-    LkhdFcn(num_param,NULL,fvalue,thisparam,1);
-    Double_t f1 = fvalue;
-
-    thisparam[ipar] = oldparam + h;
-    LkhdFcn(num_param,NULL,fvalue,thisparam,1);
-    thisparam[ipar] = oldparam;
+    if (parfixed[ipar]==0) {
+      Double_t h = delta*(fabs(thisparam[ifreepar])+1.0);
     
-    Double_t thisgrad = (fvalue - f1)/(2.0*h);
-    Double_t diff = (thisgrad - grad[ipar])/thisgrad;
+      Double_t oldparam = thisparam[ifreepar];
+      
+      thisparam[ifreepar] = oldparam - h;
+      LkhdFcn(num_param,NULL,fvalue,thisparam,1);
+      Double_t f1 = fvalue;
+      
+      thisparam[ifreepar] = oldparam + h;
+      LkhdFcn(num_param,NULL,fvalue,thisparam,1);
+      thisparam[ifreepar] = oldparam;
+    
+      Double_t thisgrad = (fvalue - f1)/(2.0*h);
+      Double_t diff = (thisgrad - grad[ifreepar])/thisgrad;
 
-    printf("par %5i: calc grad = %11.4e | finite grad = %11.4e | percent diff = %11.4e\n",ipar, grad[ipar], thisgrad, diff);
+      printf("par %5i: calc grad = %11.4e | finite grad = %11.4e | percent diff = %11.4e\n",ipar, grad[ifreepar], thisgrad, diff);
+      ifreepar++;
+    }
   }
 
   cout << "***** Finished Testing gradient *******\n";
@@ -1973,10 +2001,14 @@ Int_t TMinLkhd::TestHessian(){
   Double_t * hess = new Double_t[numberparam*(numberparam+1)/2];
   Int_t num_param = numberparam;
 
+  Int_t ifreepar = 0;
   for (UInt_t ipar = 0 ; ipar < numberparam ;ipar++) {
     if (predicting==0) {
-      thisparam[ipar] = param[ipar];
-      testparam[ipar] = param[ipar];
+      if (parfixed[ipar]==0) {
+	thisparam[ifreepar] = param[ipar];
+	testparam[ifreepar] = param[ipar];
+	ifreepar++;
+      }
     }
     else {
       thisparam[ipar] = 0.5;
@@ -1991,45 +2023,49 @@ Int_t TMinLkhd::TestHessian(){
 
   cout << "***** Testing Hessian *******\n";
   Int_t hessterm = 0;
+  ifreepar = 0;
+  Int_t jfreepar = 0;
   for (UInt_t ipar = 0; ipar < numberparam ; ipar++) {
-    cout << "Checking row " << ipar << "\n";
-    for (UInt_t jpar = ipar; jpar < numberparam ; jpar++) {
+    if (parfixed[ipar]==0) {
+      cout << "Checking row " << ipar << "\n";
+      jfreepar = 0;
+      for (UInt_t jpar = ipar; jpar < numberparam ; jpar++) {
+	if (parfixed[jpar]==0) {
+	  Double_t origparami = thisparam[ifreepar];
+	  Double_t origparamj = thisparam[jfreepar];
 
-      Double_t origparami = thisparam[ipar];
-      Double_t origparamj = thisparam[jpar];
-
-      // First modify ipar
-      Double_t hig = deltag*(fabs(origparami)+1.0);
-      Double_t hjg = deltag*(fabs(origparamj)+1.0);
+	  // First modify ipar
+	  Double_t hig = deltag*(fabs(origparami)+1.0);
+	  Double_t hjg = deltag*(fabs(origparamj)+1.0);
 
       
-//       thisparam[ipar] = origparami - hig;
-//       LkhdFcn(num_param,grad,fvalue,thisparam,2);
-//       Double_t g1 = grad[jpar];
+	  //       thisparam[ipar] = origparami - hig;
+	  //       LkhdFcn(num_param,grad,fvalue,thisparam,2);
+	  //       Double_t g1 = grad[jpar];
       
-      thisparam[ipar] = origparami + hig;
-      LkhdFcn(num_param,grad,fvalue,thisparam,2);
+	  thisparam[ifreepar] = origparami + hig;
+	  LkhdFcn(num_param,grad,fvalue,thisparam,2);
 
-      thisparam[ipar] = origparami;
+	  thisparam[ifreepar] = origparami;
       
-//      Double_t Hessijgc = (grad[jpar] - g1)/(4.0*hig);
+	  //      Double_t Hessijgc = (grad[jpar] - g1)/(4.0*hig);
 
-      Double_t Hessijgf = (grad[jpar]-defgrad[jpar])/(2.0*hig);
+	  Double_t Hessijgf = (grad[jfreepar]-defgrad[jfreepar])/(2.0*hig);
 
-      // Now modify jpar
+	  // Now modify jpar
+	  
+	  //       thisparam[jpar] = origparamj - hjg;
+	  //       LkhdFcn(num_param,grad,fvalue,thisparam,2);
+	  //       g1 = grad[ipar];
+	  
+	  thisparam[jfreepar] = origparamj + hjg;
+	  LkhdFcn(num_param,grad,fvalue,thisparam,2);
 
-//       thisparam[jpar] = origparamj - hjg;
-//       LkhdFcn(num_param,grad,fvalue,thisparam,2);
-//       g1 = grad[ipar];
-      
-      thisparam[jpar] = origparamj + hjg;
-      LkhdFcn(num_param,grad,fvalue,thisparam,2);
-
-      thisparam[jpar] = origparamj;
+	  thisparam[jfreepar] = origparamj;
       
 //      Hessijgc += (grad[ipar] - g1)/(4.0*hjg);
 
-      Hessijgf += (grad[ipar]-defgrad[ipar])/(2.0*hjg);
+	  Hessijgf += (grad[ifreepar]-defgrad[ifreepar])/(2.0*hjg);
 
 //       // now calculate with function calls
 //       Double_t hif = deltaf*(fabs(origparami)+1.0);
@@ -2114,14 +2150,15 @@ Int_t TMinLkhd::TestHessian(){
 
 //       Hessijff *= 1.0/(hif*hjf);
 
-      Double_t diff;
-      if (fabs(hess[hessterm]) > 1e-7) diff = fabs(Hessijgf - hess[hessterm])/fabs(hess[hessterm]);
-      else if (fabs(Hessijgf)<1e-7)      diff = fabs(Hessijgf - hess[hessterm]);
-      else                             diff = fabs(Hessijgf - hess[hessterm])/fabs(Hessijgf);
-      if (diff < 1e-10) diff = 1e-10;
-
-      if (diff > 1e-4) printf("Hessian[%3i][%3i]: calc = %11.4e | finite = %11.4e | percent diff = %11.4e\n",ipar,jpar, hess[hessterm], Hessijgf, diff);
-      //      printf("Hessian[%3i][%3i]: calc = %11.4e | finite = %11.4e | percent diff = %11.4e\n",ipar,jpar, hess[hessterm], Hessijgf, diff);
+	  Double_t diff;
+	  if (fabs(hess[hessterm]) > 1e-7) diff = fabs(Hessijgf - hess[hessterm])/fabs(hess[hessterm]);
+	  else if (fabs(Hessijgf)<1e-7)      diff = fabs(Hessijgf - hess[hessterm]);
+	  else                             diff = fabs(Hessijgf - hess[hessterm])/fabs(Hessijgf);
+	  if (diff < 1e-10) diff = 1e-10;
+	  
+	  //	  if (diff > 1e-4)
+	    printf("Hessian[%3i][%3i]: calc = %11.4e | finite = %11.4e | percent diff = %11.4e\n",ipar,jpar, hess[hessterm], Hessijgf, diff);
+	  //      printf("Hessian[%3i][%3i]: calc = %11.4e | finite = %11.4e | percent diff = %11.4e\n",ipar,jpar, hess[hessterm], Hessijgf, diff);
       
 //       Double_t diff;
 //       if (fabs(Hessijfc) > 1e-7) diff = (Hessijgc - Hessijfc)/fabs(Hessijfc);
@@ -2135,7 +2172,11 @@ Int_t TMinLkhd::TestHessian(){
 //       else                             diff = (Hessijfc - hess[hessterm])/fabs(Hessijfc);
 //       printf("Hessian[%3i][%3i]: calc = %11.4e | finite = %11.4e | percent diff = %11.4e\n",ipar,jpar, hess[hessterm], Hessijfc, diff);
       
-      hessterm++;
+	  hessterm++;
+	  jfreepar++;
+	}
+      }
+      ifreepar++;
     }
   }
 
@@ -2185,15 +2226,15 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
   //Make factor loading list (for all models?)
   // so we can easily scale initial values of loadings. Not used for anything else
   vector<Bool_t> factorloadinglist(num_param,0);
-  for (Int_t imod = 0 ; imod < first_outmodel ; imod++) {
+  for (UInt_t imod = 0 ; int(imod) < first_outmodel ; imod++) {
     int nchoice = 1; // In this case we don't need to do anything special even if it is logit
     if (models[imod].GetType()==3) nchoice = models[imod].GetNchoice() - 1;
     for (int ichoice = 0 ; ichoice < nchoice ; ichoice++) {
-      Int_t imodFirstLoading = fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac+ntyp)+ models[imod].GetNreg();
-      UInt_t nfreefac = nparam_models[imod] - models[imod].GetNreg();
+      Int_t imodFirstLoading = fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac+ntyp*(imod!=type_model))+ models[imod].GetNreg();
+      UInt_t nfreefac = nparam_models[imod] - models[imod].GetNreg() - ntyp*(imod!=type_model);
       if (models[imod].GetType()==1) nfreefac--;
       if (models[imod].GetType()==4) nfreefac-= (models[imod].GetNchoice()-1);
-      if (models[imod].GetType()==3) nfreefac = nfac+ntyp;
+      if (models[imod].GetType()==3) nfreefac = nfac;
       
       for (UInt_t ifac = 0; ifac < nfreefac ; ifac++) {
 	factorloadinglist.at(imodFirstLoading+ifac) = 1;
@@ -2251,44 +2292,45 @@ Int_t TMinLkhd::Est_measurementsys(Int_t printlevel) {
     for (Int_t imod = 0 ; imod < first_outmodel ; imod++) SetIgnoreMod(imod);
     
     Int_t firstpar = nfac_param;
-    for (Int_t imod = 0 ; imod < first_outmodel ; imod++) {
-      cout << "**************Minimizing Model #" << imod << "\n";
-      RemoveIgnoreMod(imod);
-      
-      for (Int_t i = 0 ; i < num_param ; i++) {
-	if ((i<firstpar) || (i>=firstpar+models[imod].GetNreg())) FixPar(i);// parfixed[i]=1;
-	else ReleasePar(i); //parfixed[i]=0;
-      }
-      if (models[imod].GetType()==1) ReleasePar(firstpar+nparam_models[imod]-1); 
-      
-      if ( (models[imod].GetType()==3) && (models[imod].GetNchoice()>2) ) {
-	for (int ichoice = 1 ; ichoice < models[imod].GetNchoice()-1 ; ichoice++) {
-	  for (Int_t i =  0; i <  models[imod].GetNreg() ; i++) {
-	    ReleasePar((firstpar + ichoice*(models[imod].GetNreg()+nfac+ntyp)) + i);
+    for (UInt_t imod = 0 ; int(imod) < first_outmodel ; imod++) {
+      if (imod!=type_model) {
+	cout << "**************Minimizing Model #" << imod << "\n";
+	RemoveIgnoreMod(imod);
+	
+	for (Int_t i = 0 ; i < num_param ; i++) {
+	  if ((i<firstpar) || (i>=firstpar+models[imod].GetNreg())) FixPar(i);// parfixed[i]=1;
+	  else ReleasePar(i); //parfixed[i]=0;
+	}
+	if (models[imod].GetType()==1) ReleasePar(firstpar+nparam_models[imod]-1); 
+	
+	if ( (models[imod].GetType()==3) && (models[imod].GetNchoice()>2) ) {
+	  for (int ichoice = 1 ; ichoice < models[imod].GetNchoice()-1 ; ichoice++) {
+	    for (Int_t i =  0; i <  models[imod].GetNreg() ; i++) {
+	      ReleasePar((firstpar + ichoice*(models[imod].GetNreg()+nfac+ntyp*(imod!=type_model))) + i);
+	    }
 	  }
 	}
-      }
-      if (models[imod].GetType()==4) {
-	for (Int_t i = 0 ; i < models[imod].GetNchoice()-1 ; i++) {
-	  ReleasePar(firstpar+nparam_models[imod]-1-i); 
+	if (models[imod].GetType()==4) {
+	  for (Int_t i = 0 ; i < models[imod].GetNchoice()-1 ; i++) {
+	    ReleasePar(firstpar+nparam_models[imod]-1-i); 
+	  }
 	}
+	//     ierflg = Min_Minuit(-1);
+	if (printlvl>0) {
+	  PrintParam(imod+1);
+	  ierflg = Min_Ipopt(1);
+	  PrintParam(imod+1);
+	}
+	else ierflg = Min_Ipopt(0);
+	if ((ierflg!=0)&&(nsubsamples==0)&&(nbootsamples==0)) assert(0);
+	
+	SetIgnoreMod(imod);
+	firstpar += nparam_models[imod];
       }
-      //     ierflg = Min_Minuit(-1);
-      if (printlvl>0) {
-	PrintParam(imod+1);
-	ierflg = Min_Ipopt(1);
-	PrintParam(imod+1);
-      }
-      else ierflg = Min_Ipopt(0);
-      if ((ierflg!=0)&&(nsubsamples==0)&&(nbootsamples==0)) assert(0);
-      
-      SetIgnoreMod(imod);
-      firstpar += nparam_models[imod];
     }
     initializing=0;
     for (Int_t imod = 0 ; imod < first_outmodel ; imod++) RemoveIgnoreMod(imod);
     for (Int_t i = 0 ; i < num_param ; i++) ReleasePar(i); //parfixed[i] = 0;
-    
   }
   
   
@@ -2671,53 +2713,55 @@ Int_t TMinLkhd::Est_outcomes(Int_t printlevel) {
     for (UInt_t imod = 0 ; imod < models.size() ; imod++) SetIgnoreMod(imod);
     cout << "**************Running individual regressions" << "\n";
     for (UInt_t imod = first_outmodel ; imod < models.size() ; imod++) {
-      if ((printlvl>0)||(imod%10==0)||(imod == UInt_t(first_outmodel))||(imod+1 == models.size())) cout << "****Minimizing Model #" << imod << "\n";
-      if (printlvl>1) PrintParam(imod+1);
-      RemoveIgnoreMod(imod);
-      for (UInt_t i = 0 ; i < nparam ; i++) {
-	if ((i<fparam_models[imod]) || (i>=fparam_models[imod]+models[imod].GetNreg())) FixPar(i);
-	else ReleasePar(i);
-      }
-      if (models[imod].GetType()==1) ReleasePar(fparam_models[imod]+nparam_models[imod]-1);
-      
-      if ( (models[imod].GetType()==3) && (models[imod].GetNchoice()>2) ) {
-	for (int ichoice = 1 ; ichoice < models[imod].GetNchoice()-1 ; ichoice++) {
-	  for (Int_t i =  0; i <  models[imod].GetNreg() ; i++) {
-	    ReleasePar((fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac+ntyp)) + i);
+      if (imod!=type_model) {
+	if ((printlvl>0)||(imod%10==0)||(imod == UInt_t(first_outmodel))||(imod+1 == models.size())) cout << "****Minimizing Model #" << imod << "\n";
+	if (printlvl>1) PrintParam(imod+1);
+	RemoveIgnoreMod(imod);
+	for (UInt_t i = 0 ; i < nparam ; i++) {
+	  if ((i<fparam_models[imod]) || (i>=fparam_models[imod]+models[imod].GetNreg())) FixPar(i);
+	  else ReleasePar(i);
+	}
+	if (models[imod].GetType()==1) ReleasePar(fparam_models[imod]+nparam_models[imod]-1);
+	
+	if ( (models[imod].GetType()==3) && (models[imod].GetNchoice()>2) ) {
+	  for (int ichoice = 1 ; ichoice < models[imod].GetNchoice()-1 ; ichoice++) {
+	    for (Int_t i =  0; i <  models[imod].GetNreg() ; i++) {
+	    ReleasePar((fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac+ntyp*(imod!=type_model))) + i);
+	    }
 	  }
 	}
-      }
-      if (models[imod].GetType()==4) {
-	for (Int_t i = 0 ; i < models[imod].GetNchoice()-1 ; i++) {
-	  ReleasePar(fparam_models[imod]+nparam_models[imod]-1-i); 
+	if (models[imod].GetType()==4) {
+	  for (Int_t i = 0 ; i < models[imod].GetNchoice()-1 ; i++) {
+	    ReleasePar(fparam_models[imod]+nparam_models[imod]-1-i); 
+	  }
 	}
-      }
 
-      // Only estimate factor loadings for factors that load in the measurment system
-      // In other words, do not estimate random effects
-      if  (initEstOutcomeLoadings) {
-	cout << "***Estimating loadings using factor scores.\n";
-	for (UInt_t ifac = 0 ; ifac < nfac; ifac++) {
-	  //	  if ((norm_models[ifac]>-2)||(fstderr[0][ifac]<0.0)) {
-	  if (fstderr[0][ifac]>0.0) {
-	    ReleasePar(fparam_models[imod] + models[imod].GetNreg() + ifac); 
-	    
-	    if ( (models[imod].GetType()==3) && (models[imod].GetNchoice()>2) ) {
-	      for (int ichoice = 1 ; ichoice < models[imod].GetNchoice()-1 ; ichoice++) {
-		ReleasePar(fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac+ntyp) + models[imod].GetNreg() + ifac);
+	// Only estimate factor loadings for factors that load in the measurment system
+	// In other words, do not estimate random effects
+	if  (initEstOutcomeLoadings) {
+	  cout << "***Estimating loadings using factor scores.\n";
+	  for (UInt_t ifac = 0 ; ifac < nfac; ifac++) {
+	    //	  if ((norm_models[ifac]>-2)||(fstderr[0][ifac]<0.0)) {
+	    if (fstderr[0][ifac]>0.0) {
+	      ReleasePar(fparam_models[imod] + models[imod].GetNreg() + ifac); 
+	      
+	      if ( (models[imod].GetType()==3) && (models[imod].GetNchoice()>2) ) {
+		for (int ichoice = 1 ; ichoice < models[imod].GetNchoice()-1 ; ichoice++) {
+		  ReleasePar(fparam_models[imod] + ichoice*(models[imod].GetNreg()+nfac+ntyp*(imod!=type_model)) + models[imod].GetNreg() + ifac);
+		}
 	      }
 	    }
 	  }
 	}
-      }
 
       
-      //    ierflg = Min_Minuit(-1);
-      ierflg = Min_Ipopt(1);
-      if (printlvl>0) PrintParam(imod+1);
-      if ((ierflg!=0)&&(nsubsamples==0)&&(nbootsamples==0)) assert(0);
+	//    ierflg = Min_Minuit(-1);
+	ierflg = Min_Ipopt(1);
+	if (printlvl>0) PrintParam(imod+1);
+	if ((ierflg!=0)&&(nsubsamples==0)&&(nbootsamples==0)) assert(0);
 
-      SetIgnoreMod(imod);
+	SetIgnoreMod(imod);
+      }
     }
   }
   
@@ -2976,13 +3020,13 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
 
     UInt_t thismod = imod;
     if (sim_modelorder.size()==models.size()) thismod = sim_modelorder.at(imod);  
-    else if (type_model>=0) {
+    else if (type_model<9999) {
       // here we rearrange the order so type_model goes first
       if (imod==0) thismod = type_model;
       else thismod = imod-1*(imod<=type_model);
     }
 
-    printf("Writing header for model %d\n",thismod);
+    //    printf("Writing header for model %d\n",thismod);
     
     // simulation gives: missing, I_obs, I_factor, shock/prob, outcome
     fprintf(pFile,", %s",(TString("sim_").Append(TString(models[thismod].GetName()).Append("_miss"))).Data());
@@ -3195,6 +3239,7 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
   if (simWithData==1) sim_nobs = nobs;
   for (UInt_t igen = 0 ; igen < sim_nobs ; igen++) {
     if (igen%10000==0) printf("Simulating %5d\n",igen);
+    //    printf("Simulating %5d: ",igen);
     
 
     // First draw observation:
@@ -3324,14 +3369,18 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
     }
 
     //Now draw the type
-    char * typemodeldata;
-    if (type_model>-1) {
+    //    char * typemodeldata;
+    if (type_model<9999) {
       // typemodeldata = new char[1200];
       //Need to save output of type model to write to simulation file later
       //      std::FILE* tmpf = fopen("typetmpfile.txt","w");
 	//std::tmpfile();
+      //      printf("Simulating type model\n");
+      //      printf("%5d, ",type_model);
       models[type_model].Sim(obs_drw*nvar,data,models,param,fparam_models[type_model], fac_val, pFile, simWithData);
-//      std::rewind(tmpf);
+
+      //      printf("DONE Simulating type model\n");
+      //      std::rewind(tmpf);
 //      std::fgets(typemodeldata, sizeof(typemodeldata), tmpf);
 //      std::fclose(tmpf);
 //      printf("saved temporary info! %s\n",typemodeldata);
@@ -3352,13 +3401,15 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
       }
     }
 
+    //    printf("Starting loop simulating models\n");
     // Now simulate the models:
     for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
-
-      Int_t thismod = imod;
+      UInt_t thismod = imod;
       if (sim_modelorder.size()==models.size()) thismod = sim_modelorder.at(imod);
 
       if (thismod != type_model) {
+	//	printf("%5d, ",thismod);
+	      
 	// simulation gives: missing, I_obs, I_factor, shock/prob, outcome
 	models[thismod].Sim(obs_drw*nvar,data,models,param,fparam_models[thismod],fac_val, pFile, simWithData);	
       }
@@ -3388,7 +3439,7 @@ Int_t TMinLkhd::Simulate(Int_t printlevel) {
     for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
       models.at(imod).ClearSimResult();
     }
-
+    //    printf("\n");
   }
 
   // Now append data to file
@@ -3419,7 +3470,7 @@ Int_t TMinLkhd::PredictFactors(Int_t printlevel) {
 
   printf("Predicting factors...\n");
 
-  if (type_model>-1) {
+  if (type_model<9999) {
     cout << "ERROR (TMinLkhd::PredictFactors): Not currently possible to predict factors when there are unobserved types." << endl;
     assert(0);
   }
@@ -3529,7 +3580,18 @@ Int_t TMinLkhd::PredictFactors(Int_t printlevel) {
 
 //   // clear file of predictions
   FILE * pFile;
-  filename = TString("factor_predictions.txt");
+
+  //  TString filename;
+  if ((nsubsamples==0)&&(nbootsamples==0)) {
+    filename = TString("factor_predictions.txt");
+  }
+  else {
+    std::stringstream out;
+    out << GetCurrentSample();
+    filename = TString("factor_predictions_").Append(out.str()).Append(".txt");
+  }
+
+  //  filename = TString("factor_predictions.txt");
   filename.Prepend(workingdir);
   pFile = fopen (filename.Data(),"w");
   fclose (pFile);
@@ -4467,6 +4529,7 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
   if (printlevel>0)  {
     timer.Reset();
     timer.Start();
+    printf("Evaluating Likelihood\n");
     LkhdFcn(nparam_min,grad,fvalue,thisparam,1,hess );
     timer.Stop();
     cputime = timer.CpuTime();
@@ -4760,11 +4823,20 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 	  }
 	  
 	  
-	  // print factor predictions for this observation if not bootstrap
-	  if ((nsubsamples==0)&&(nbootsamples==0)) {
+	  // print factor predictions for this observation
 	    FILE * pFile;
 	    TString filename;
-	    filename = TString("factor_predictions.txt");
+
+	    if ((nsubsamples==0)&&(nbootsamples==0)) {
+	      filename = TString("factor_predictions.txt");
+	    }
+	    else {
+	      std::stringstream out;
+	      out << GetCurrentSample();
+	      filename = TString("factor_predictions_").Append(out.str()).Append(".txt");
+	    }
+
+	    //	    filename = TString("factor_predictions.txt");
 	    filename.Prepend(workingdir);
 	    pFile = fopen(filename.Data(),"a");
 	    if (indexvar==-1) {
@@ -4797,7 +4869,7 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
 	    
 	    fprintf(pFile,"\n");
 	    fclose (pFile);
-	  }
+
 	  delete [] Lratio;
 	  delete [] trialparam;
 	}
@@ -5463,7 +5535,7 @@ void TMinLkhd::CalcLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	}
       }
     }
-    if ( (estimate_thisobs==1) && (skipobs[i]==0) && (bootstrapobs[i]>0) ) {
+    if ( (estimate_thisobs==1) && (skipobs[i]==0) &&  ((bootstrapobs[i]>0) | (predicting==1)) ) {
       //   for (UInt_t i = 0 ; i < 1 ; i++) {
       //Reset i quantities
       Double_t totalprob = 0.0;
@@ -5553,7 +5625,6 @@ void TMinLkhd::CalcLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 
 	//loop over types (ntyp is number of types - 1)
 	for (UInt_t itype = 0; itype <= ntyp_eff; itype++) {
-
 
 	  //loop over integration points
 	  vector<UInt_t> facint(nfac,0);
@@ -5698,18 +5769,20 @@ void TMinLkhd::CalcLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	  }
 
 	  //Add type to factor array
-	  if (ntyp_eff>0) {
-	    vector<Double_t> type(ntyp,0.0);
-	    type[itype] = 1.0;
-	    fac_val.insert(fac_val.end(),type.begin(),type.end());	
+	  vector<Double_t> type(ntyp,0.0);
+	  if ((ntyp_eff>0)&&(itype>0))  {
+	    type[itype-1] = 1.0;
 	  }
+	  fac_val.insert(fac_val.end(),type.begin(),type.end());	
+
+	  
 	  //	  printf("After importance: prob=%8.5f\n",probilk);
  	  // // printf("%5d %10d, %3d/%3d: ", i,Int_t(data[i*nvar+indexvar]), intpt, nint_points);
 	  //	  for (UInt_t ifac = 0; ifac < nfac ; ifac++) printf("%4.5f; ", fac_val.at(ifac));
 	  //	  printf("\n");
 
 	  // printf("\n");
-	  // if (i>100) assert(0);
+	  //	  if (i>100) assert(0);
 	  //	  cout << "now calculating actual models\n";
  	  for (UInt_t imod = 0 ; imod < models.size() ; imod++) {
 	    //ADD IF MISSING HERE???
@@ -5724,8 +5797,15 @@ void TMinLkhd::CalcLkhd(Double_t & logLkhd, Double_t * gradL, Double_t * hessL, 
 	      models[imod].Eval(i*nvar,data,param,firstpar,fac_val,modelEval,modhess,thisflag);
 //	      models[imod].Eval(i*nvar,data,param,firstpar,fac_val,modelEval,modhess,2);
  	      probilk = probilk*modelEval[0];
-            
 
+//	      if (imod==type_model) {
+//		printf("Evalulated Type model with prob=%8.4f, where types are:",modelEval[0]);
+//		for (UInt_t it = 0; it < ntyp; it++) {
+//		  printf("%2.1f, ",fac_val[nfac+it]);
+//		}
+//		printf("\n");
+//	      }
+	      
 	      if (thisflag>=2) {
  		//gradients for factor-specific parameters
 		if (nfac_eff>0) {

@@ -87,7 +87,7 @@ private:
   std::vector<Int_t> norm_models; 
 
   UInt_t ntyp;
-  Int_t type_model;
+  UInt_t type_model;
   
   UInt_t simIncData;
   UInt_t simWithData;

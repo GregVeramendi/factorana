@@ -73,7 +73,6 @@ TModel::TModel(const char *name, const char *title, Int_t modeltype, Int_t model
   numfac=nfac;
   numtyp=ntyp;
   //If this is the type probability model, then types don't enter
-  if (outcome==-2) numtyp = 0;
   if (thisnormfac) {
     facnorm.reserve(nfac+ntyp);
     for (int i = 0 ; i < nfac+ntyp ; i++) {
@@ -796,7 +795,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	  for (int ifac = 0 ; ifac < numfac + numtyp*(outcome!=-2); ifac++) {
 	    //No normalizations:
 	    if (facnorm.size()==0) {
-	      if (i<numfac) {
+	      if (ifac<numfac) {
 		// gradient of factor-specific parameters (variance, mean, weights)
 		tmpgrad[ifac] = (-1.0*param[ifreefac+firstpar+nregressors])*PDF[iterm]/diffCDF; 
 	      }
@@ -808,13 +807,13 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	    }
 	    else {
 	      if (facnorm[ifac]>-9998.0) {
-		if (i<numfac) {
+		if (ifac<numfac) {
 		  // gradient of factor-specific parameters (variance, mean, weights)
 		  tmpgrad[ifac] = (-1.0*facnorm[ifac])*PDF[iterm]/diffCDF;
 		}
 	      }
 	      else {
-		if (i<numfac) {
+		if (ifac<numfac) {
 		  // gradient of factor-specific parameters (variance, mean, weights)
 		  tmpgrad[ifac] = (-1.0*param[ifreefac+firstpar+nregressors])*PDF[iterm]/diffCDF; 
 		}
@@ -869,7 +868,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	    for (int ifac = 0 ; ifac < numfac + numtyp*(outcome!=-2); ifac++) {
 	      //No normalizations:
 	      if (facnorm.size()==0) {
-		if (i<numfac) {
+		if (ifac<numfac) {
 		  // lambda^L(theta) - lambda^Prob(theta) (row) 
 		  for (int j = ifac; j < npar ; j++) tmphess[ifac*npar+j] *= -Z[iterm]*(-1.0*param[ifreefac+firstpar+nregressors]) - modEval[1+ifac];
 		  // dZ/dtheta_i (col) 
@@ -887,7 +886,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	      }
 	      else {
 		if (facnorm[ifac]>-9998.0) {
-		  if (i<numfac) {
+		  if (ifac<numfac) {
 		    // lambda^L(theta) - lambda^Prob(theta) (row)  
 		    for (int j = ifac; j < npar ; j++) tmphess[ifac*npar+j] *= -Z[iterm]*(-1.0*facnorm[ifac]) - modEval[1+ifac];
 		    // dZ/dtheta_i (col)
@@ -895,7 +894,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 		  }
 		}
 		else {
-		  if (i<numfac) {
+		  if (ifac<numfac) {
 		    // lambda^L(theta) - lambda^Prob(theta) (row)  
 		    for (int j = ifac; j < npar ; j++) tmphess[ifac*npar+j] *= -Z[iterm]*(-1.0*param[ifreefac+firstpar+nregressors]) - modEval[1+ifac];
 		    // dZ/dtheta_i (col)
@@ -994,15 +993,43 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
     // First set density to zero so we can sum up the possible ranked choices
     modEval[0]=1.0;
 
+    //Calculate weight so that the density is the same for each individual
+    // rather than each choice (only matters if individuals make different numbers of choices)
+    //Not sure how to use this number for estimation. I think we can simply include it as a sample weight? 
+    /*
+    double weight_nrank = 1.0;
+    if (numrank>1) {
+      weight_nrank = 0.0;
+      for (int irank = 0 ; irank < numrank ; irank++) {
+	Int_t obsCat = -1;
+	if (outcome!=-2) {
+	  for (int icat = 1 ; icat <= numchoice ; icat++) if (icat == int(data[iobs_offset + outcome + irank])) obsCat = icat-1;
+	}
+	if (obsCat>-1) weight_nrank += 1.0;
+      }
+    }
+
+    if (weight_nrank<0.5) {
+      cout << "ERROR (TModel::Eval): Found observation with no choice for logit outcome!"
+	   << " In model " <<  this->GetTitle() << "\n"
+	   << "Looking at outcome #" << outcome 
+	   << ", Missing (" << missing << ")=" << data[iobs_offset+missing]
+	   << ", Value=" << weight_nrank << endl;
+      
+      assert(0);
+    }
+    */
+    
     for (int irank = 0 ; irank < numrank ; irank++) {
       Int_t obsCat = -1;
       if (outcome!=-2) {
 	for (int icat = 1 ; icat <= numchoice ; icat++) if (icat == int(data[iobs_offset + outcome + irank])) obsCat = icat-1;
       }
       else {
-	obsCat = 1;
-	for (int icat = 0 ; icat < numtyp ; icat++) if (int(fac[numfac+icat])>0) obsCat = 2+icat;
+	obsCat = 0;
+	for (int icat = 0 ; icat < numtyp ; icat++) if (fac[numfac+icat]>0.5) obsCat = 1+icat;
       }
+      //      printf("numfac=%d, numtype=%d, factors= %2f, %2f; Found type=%d\n",numfac, numtyp, fac[numfac], fac[numfac+1], obsCat);
       //Individuals may not use all rankings, so we only check the first one:
       if ((obsCat==-1)&&(numrank==1)) {
 	  cout << "ERROR (TModel::Eval): Found invalid number for logit outcome!"
@@ -1032,6 +1059,10 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	  logitdenom += exp(expres[icat-1] + rankedChoiceCorr[icat-1]);
 	}
 
+	//down weight density by number of ranks for this individual here
+	// I don't think this is correct, it should be pdf^(1/weight) and not pdf/weight
+	//	logitdenom *= weight_nrank;
+	
 	double dens = 1.0/logitdenom;
 
 	if (obsCat>0) {
@@ -1055,7 +1086,7 @@ void TModel::Eval(UInt_t iobs_offset,const std::vector<Double_t> & data,const st
 	  // gradient of factor parameters
 	  for (int ifac = 0 ; ifac < numfac + numtyp*(outcome!=-2); ifac++) {
 
-	    if (i<numfac) {
+	    if (ifac<numfac) {
 	      //***************
 	      // gradient of factor-specific parameters (variance, mean, weights, etc)
 	      //obsCat term:
@@ -1288,7 +1319,7 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
       //print out detailed variables (Vobs, Vend, Vfac0..VfacN, eps)
       if (detailsim) {
 	// Vobs, eps, Vfac#
-	int ndetailvar = 2 + numfac + numtyp;
+	int ndetailvar = 2 + numfac + numtyp*(outcome!=-2);
 	if ((endogRegList.size()>0)&&(gof==0)) ndetailvar++;
 	for (int ichoice = 2 ; ichoice <=numlogitchoice; ichoice++) {
 	  for (int i = 0; i < ndetailvar; i++)  fprintf(pFile,", %10d",-9999);
@@ -1316,7 +1347,7 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
       for (int ichoice = 0; ichoice < numlogitchoice-1; ichoice++) {
 	
 	ifreefac = 0;
-	UInt_t nparamchoice = nregressors + numfac + numtyp;
+	UInt_t nparamchoice = nregressors + numfac + numtyp*(outcome!=-2);
 	
 	
 	for (int ireg = 0; ireg < nregressors  ; ireg++) {
@@ -1368,7 +1399,7 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
 	  }
 	}      
 	Double_t fac_comp = 0.0;
-	for (int i = 0 ; i < numfac + numtyp; i++) {
+	for (int i = 0 ; i < numfac + numtyp*(outcome!=-2); i++) {
 	  if (facnorm.size()==0) {
 	    fac_comp += param[ifreefac+firstpar+ichoice*nparamchoice+nregressors]*fac.at(i);
 	    if (detailsim) fprintf(pFile,", %10.5f",param[ifreefac+firstpar+ichoice*nparamchoice+nregressors]*fac.at(i));
@@ -1449,8 +1480,10 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
 	// Get value for choice in data for GoF
 	double obsval = 0.0;
         Int_t obsrank = 0;	
-	if (int(data[iobs_offset+outcome])>1) obsval = expres.at(int(data[iobs_offset+outcome])-2);
-	
+	if (gof==1 && outcome!=-2) {
+	  if (int(data[iobs_offset+outcome])>1) obsval = expres.at(int(data[iobs_offset+outcome])-2);
+	}
+
 	// See if any of the other choices are larger
 	for (int icat = 1 ; icat < numchoice; icat++) {
 	  double eps = EV1Dist(mt);
@@ -1461,7 +1494,9 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
 	  double thisval = expres[icat-1] + eps;
 
 	  //Get rank of observed choice according to model
-	  if ( (int(data[iobs_offset+outcome]) != icat+1) && (expres[icat-1] > obsval)) obsrank++;
+	  if (gof==1 && outcome!=-2) {
+	    if ( (int(data[iobs_offset+outcome]) != icat+1) && (expres[icat-1] > obsval)) obsrank++;
+	  }
 	  
 	  if (thisval > maxval ) {
 	    maxval = thisval;
@@ -1479,7 +1514,7 @@ void TModel::Sim(UInt_t iobs_offset, const std::vector<Double_t> & data, std::ve
 	fprintf(pFile,", %10d",thischoice);
 	simresult = Double_t(thischoice);
 
-	if (gof==1) {
+	if (gof==1 && outcome!=-2) {
 	  simresult = Double_t(obsrank);
 	  //	  fprintf(pFile,", %10d",obsrank);
 	}
@@ -1571,7 +1606,7 @@ Double_t TModel::GetPdf(UInt_t iobs_offset, const std::vector<Double_t> & data, 
       
       UInt_t ifreefac = 0;
       Double_t fac_comp = 0.0;
-      for (int i = 0 ; i < numfac + numtyp; i++) {
+      for (int i = 0 ; i < numfac + numtyp*(outcome!=-2); i++) {
 	if (facnorm.size()==0) {
 	  fac_comp += param[ifreefac+firstpar+nregressors]*fac.at(i);	  
 	  ifreefac++;
