@@ -47,7 +47,7 @@ int main(int argc, char *argv[]) {
 
     //Check to see if bootstrap sample was passed as command line argument
     UInt_t bootSampleStart = mymodel.GetBootStrapStartSample();
-    UInt_t bootSampleEnd = mymodel.GetBootStrapStartSample();
+    UInt_t bootSampleEnd = mymodel.GetNBootSample();
     
     if (argc>=2) {
       std::istringstream ss(argv[1]);
@@ -69,7 +69,6 @@ int main(int argc, char *argv[]) {
 	}
       else printf("*****Error in setting simulation size using command line. Unable to convert to integer! Argument: %s\n",argv[2]);
     }
-    
     
     for (UInt_t isample =  bootSampleStart; isample < bootSampleEnd ; isample++) {
 
