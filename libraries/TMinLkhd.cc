@@ -4622,7 +4622,7 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
   // Ask Ipopt to solve the problem
   status = app->OptimizeTNLP(mynlp);
   Int_t badstatuscounter = 0;
-  while ((status != Solve_Succeeded)&&(badstatuscounter<6)) {
+  while ((status != Solve_Succeeded) && (status != Solved_To_Acceptable_Level) && (badstatuscounter<6)) {
 
     printf("IPOPT FAILED WITH STATUS %d, restart %d...\n",status,badstatuscounter);
     Double_t nudge = 0.9;
@@ -4638,7 +4638,7 @@ Int_t TMinLkhd::Min_Ipopt(Int_t printlevel) {
     badstatuscounter++;
   }
 
-  if (status != Solve_Succeeded) {
+  if ((status != Solve_Succeeded) && (status != Solved_To_Acceptable_Level)) {
     std::cout << std::endl << std::endl << "*** Minimization failed with code " << status << std::endl;
     return (int) status;
   }
