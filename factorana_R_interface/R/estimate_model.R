@@ -1,0 +1,291 @@
+#Function: Take all model specs from define_estimation_control, define_factor_model.R, define_model_component.R, and define_model_system.R
+#pass into C++ backend via RCPP wrapper in the same way that Prob.cc currently builds and passes to Tmin.Lkhd
+#get results back from C++ estimation and just write a .csv
+
+#TMinLikelihood.cc Estimation control should mirror the TMinLkhd.cc constructor
+# and also mirror its setters
+#Line 637: R spec must be consistent with those checks
+
+#TModel.cc: define_model_component?
+
+#this weeks goal: have this code be able to produce a .csv file that C++ can read
+
+
+# ------- Helper function: initialize parameters for a single model component ---------
+
+#' Initialize parameters for a single model component
+#'
+#' Runs regression without factors and sets initial parameter values
+#'
+#' @param mc A model_component object
+#'
+#' @return a list of initialized parameters
+
+initialize_parameters <-function(mc) {
+  df0 <- as.data.frame(mc$data)
+  y <- df0[[mc$outcome]] # y <- outcome
+
+  covars <- unlist(mc$covariates, use.names = FALSE)
+  X <- if (length(covars)) df0[, covars, drop = FALSE] else NULL
+  df <- if (is.null(X)) data.frame(y = y) else data.frame(y = y, X, check.names = FALSE)
+
+  #x <- df[unlist(mc$covariates)] #makes sure it doesn't break if mc$covariates is a list
+  #df <- data.frame(y = y, x)
+
+  model_type <- mc$model_type
+
+  init_betas <- NULL
+  init_intercept <- 0
+  init_loading <- NULL
+
+  if (model_type == "linear"){
+    #debug start
+    stopifnot(is.data.frame(df))
+    cat("df cols:", paste(names(df), collapse=", "), "\n")
+    rhs <- setdiff(names(df), "y")
+    cat("RHS cols going into y ~ .:", paste(rhs, collapse=", "), "\n")
+    stopifnot(length(rhs) > 0)   # fails if df accidentally only has 'y'
+    #debug end
+
+    fit <- lm(y ~ ., data = df) #run OLS if linear
+    coefs <- coef(fit)
+    init_intercept <- coefs[1]
+    init_betas <- coefs[-1]
+    init_loading <- 0.1*sd(y)
+
+  }else if (model_type == "probit"){
+    fit <- glm(y ~ ., data = df, family = binomial(link = "probit")) ####probit needs a family
+    coefs <- coef(fit)
+    init_intercept <- coefs[1]
+    init_betas <- coefs[-1]
+    init_loading <- 0.1
+
+  }else if (model_type == "logit"){
+    # multinomial logit (needs nnet package)
+    if (!requireNamespace("nnet", quietly = TRUE)) {
+      stop("Package 'nnet' is required for multinomial logit initialization.") #double check if nnet is the best one/put in install script later
+    }
+    fit <- nnet::multinom(y ~ ., data = cbind(y, X), trace = FALSE)
+    coefs <- coef(fit)
+    init_intercept <- coefs[1]
+    init_betas <- coefs[-1]
+    init_loading <- 0.1 #should be a
+
+  } else {
+    stop("Unsupported model type: ", model_type)
+  }
+
+
+  #set factor defaults
+  init_factor_var <- 1
+  init_factor_corr <- 0.1
+
+  #return a list
+  return(list(
+    intercept = init_intercept,
+    betas = init_betas,
+    loading = init_loading,
+    factor_var = init_factor_var,
+    factor_cor = init_factor_corr
+  ))
+}
+
+# ---- Estimate model (currently just initializes parameters) ----
+
+#' Estimate model
+#'
+#' @param ms an object of class model_system
+#' @param control an object of class estimation_control
+#'
+#' @return description
+
+estimate_model <- function(ms, control){
+
+  stopifnot(inherits(ms, "model_system"))
+  stopifnot(inherits(control, "estimation_control"))
+
+  factor <- ms$factor
+  components <-ms$components
+
+  #initialize parameters for each component
+  inits <- lapply(components, initialize_parameters)
+
+  # Convert to data.frame for inspection
+  init_df <- do.call(rbind, lapply(seq_along(inits), function(i) {
+    comp <- components[[i]]
+    init <- inits[[i]]
+    data.frame(
+      component = comp$name,
+      intercept = init$intercept,
+      betas = paste(init$betas, collapse = ";"),
+      loading = init$loading,
+      factor_var = init$factor_var,
+      factor_cor = init$factor_cor,
+      stringsAsFactors = FALSE
+    )
+  }))
+
+  # Print to console for now
+  print(init_df)
+
+  # Later: write.csv/init_df, pass to optimizer
+  invisible(init_df)
+}
+
+# ---- utilities ----------------------(might need to move this to the utils.R file)
+
+#' @keywords internal
+.to_chr <- function(x) {
+  # Normalize scalars to character for CSV; leave JSON strings alone.
+  if (is.null(x) || length(x) == 0) return("")        # <- fix so can handle NAs
+  if (length(x) > 1) return(paste0(x, collapse = ","))# only used for scalars here, joins multilength values w commas
+  if (is.logical(x)) return(ifelse(x, "TRUE", "FALSE")) #normalize type to string
+  if (is.numeric(x)) return(as.character(x)) #normalize type to string
+  if (is.character(x)) return(x)
+  # fallback for other scalars
+  paste0(x)
+}
+
+#' @keywords internal
+.to_json <- function(x) {
+  if (!requireNamespace("jsonlite", quietly = TRUE)) {
+    # minimal fallback if jsonlite isn't installed
+    return(paste(x, collapse = "|"))
+  }
+  jsonlite::toJSON(x, auto_unbox = TRUE, null = "null")
+}
+
+
+
+
+
+# ---- generic: flatten to key-value rows -----------------------------------
+
+#define an S3 generic
+#When you call as_kv(obj), R will look at class(obj) and dispatch to as_kv.<class>(obj)
+#' @keywords internal
+#' @export
+as_kv <- function(x, ...) UseMethod("as_kv")
+
+
+# which fields define factor-model identity
+.factor_keys <- c("n_factors","n_types","n_quad_points","correlation","n_mixtures","nfac_param")
+
+# ---- estimation_control ----------------------------------------------------
+
+#' @keywords internal
+#' @export
+as_kv.estimation_control <- function(x, ...) {
+  # adjust keys to whatever your estimation_control actually stores in future if change
+  keys   <- c("num_cores")
+  values <- c(.to_chr(x$num_cores))
+  dtype  <- c("int")
+  data.frame(
+    section   = "estimation_control",
+    component = "",
+    key = keys, value = values, dtype = dtype,
+    stringsAsFactors = FALSE
+  )
+}
+
+# ---- factor_model ----------------------------------------------------------
+
+#' @keywords internal
+#' @export
+as_kv.factor_model <- function(x, ...) {
+  keys <- c("n_factors","n_types","n_quad_points","correlation","n_mixtures","nfac_param")
+  vals <- c(.to_chr(x$n_factors),
+            .to_chr(x$n_types),
+            .to_chr(x$n_quad_points),
+            .to_chr(x$correlation),
+            .to_chr(x$n_mixtures),
+            .to_chr(x$nfac_param))
+  dtype <- c("int","int","int","bool","int","int")
+  data.frame(
+    section   = "factor_model",
+    component = "",
+    key = keys, value = vals, dtype = dtype,
+    stringsAsFactors = FALSE
+  )
+}
+
+# ---- model_component -------------------------------------------------------
+
+#' @keywords internal
+#' @export
+as_kv.model_component <- function(x, ...) {
+  comp <- if (!is.null(x$name) && nzchar(x$name) && !is.na(x$name)) x$name else ""
+  rows <- list(
+    data.frame(section="model_component", component=comp, key="name",
+               value=.to_chr(comp), dtype="string"),
+    data.frame(section="model_component", component=comp, key="outcome",
+               value=.to_chr(x$outcome), dtype="string"),
+    data.frame(section="model_component", component=comp, key="model_type",
+               value=.to_chr(x$model_type), dtype="string"),
+    data.frame(section="model_component", component=comp, key="intercept",
+               value=.to_chr(x$intercept), dtype="bool"),
+    data.frame(section="model_component", component=comp, key="factor_normalization",
+               value=.to_chr(x$factor_normalization), dtype="double"),
+    data.frame(section="model_component", component=comp, key="num_choices",
+               value=.to_chr(x$num_choices), dtype="int"),
+    data.frame(section="model_component", component=comp, key="nrank",
+               value=.to_chr(if (is.null(x$nrank)) "" else x$nrank), dtype="int"),
+    data.frame(section="model_component", component=comp, key="evaluation_indicator",
+               value=.to_chr(if (is.null(x$evaluation_indicator)) "" else x$evaluation_indicator), dtype="string"),
+    data.frame(section="model_component", component=comp, key="covariates",
+               value=.to_json(x$covariates), dtype="json"),
+    data.frame(section="model_component", component=comp, key="nparam_model",
+               value=.to_chr(x$nparam_model), dtype="int")
+  )
+  do.call(rbind, rows)
+}
+
+# ---- model_system aggregator + writer -------------------------------------
+
+#' Return KV rows for a model_system (system-level + all components)
+#' @keywords internal
+#' @export
+as_kv.model_system <- function(x, ...) {
+  stopifnot(inherits(x, "model_system"))
+  comps <- x$components
+  comp_names <- names(comps)
+
+  sys_rows <- data.frame(
+    section   = "model_system",
+    component = "",
+    key       = c("n_components", "component_names"),
+    value     = c(.to_chr(length(comps)), .to_json(comp_names)),
+    dtype     = c("int", "json"),
+    stringsAsFactors = FALSE
+  )
+
+  comp_rows <- do.call(
+    rbind,
+    lapply(comps, function(mc) as_kv(mc))
+  )
+
+  # if no components, comp_rows is NULL
+  if (is.null(comp_rows)) return(sys_rows)
+  rbind(sys_rows, comp_rows)
+}
+
+#' Write a single CSV with all configuration rows
+#' @param model_system a model_system object
+#' @param factor_model a factor_model object
+#' @param estimation_control an estimation_control object
+#' @param file path to CSV to write
+#' @export
+write_model_config_csv <- function(model_system, factor_model, estimation_control, file) {
+  stopifnot(inherits(model_system, "model_system"),
+            inherits(factor_model, "factor_model"),
+            inherits(estimation_control, "estimation_control"))
+
+  df <- rbind(
+    as_kv(estimation_control),
+    as_kv(factor_model),
+    as_kv(model_system)
+  )
+  # Write; keep strings as-is
+  utils::write.csv(df, file = file, row.names = FALSE, na = "")
+  invisible(df)
+}

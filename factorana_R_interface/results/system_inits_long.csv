@@ -1,0 +1,14 @@
+"component","param","value"
+"selection","intercept",0.344659463108223
+"selection","beta[Z1]",0.732397790192997
+"selection","loading[f1]",0.1
+"Y1","intercept",1.74037479265123
+"Y1","beta[X1]",0.988631975178141
+"Y1","loading[f1]",0.285553314170152
+"Y0","intercept",1.74037479265123
+"Y0","beta[X1]",0.988631975178141
+"Y0","loading[f1]",0.285553314170152
+"T","intercept",0.989670376622337
+"T","beta[Q1]",0.991470965783801
+"T","loading[f1]",0.174250166436002
+"factor","factor_var[f1]",1
