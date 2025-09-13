@@ -111,12 +111,6 @@ fv_row <- data.frame(component = "factor",
 init_long <- rbind(fv_row, init_long)
 rownames(init_long) <- NULL
 
-# # add factor variance
-# init_long <- rbind(init_long,
-#                    data.frame(component="factor", param="factor_var[f1]", value=1.0)
-# )
-# rownames(init_long) <- NULL
-
 write.csv(init_long, "results/system_inits_long.csv", row.names = FALSE)
 cat("Wrote results/system_inits_long.csv\n")
 

@@ -1,15 +1,3 @@
-#Function: Take all model specs from define_estimation_control, define_factor_model.R, define_model_component.R, and define_model_system.R
-#pass into C++ backend via RCPP wrapper in the same way that Prob.cc currently builds and passes to Tmin.Lkhd
-#get results back from C++ estimation and just write a .csv
-
-#TMinLikelihood.cc Estimation control should mirror the TMinLkhd.cc constructor
-# and also mirror its setters
-#Line 637: R spec must be consistent with those checks
-
-#TModel.cc: define_model_component?
-
-#this weeks goal: have this code be able to produce a .csv file that C++ can read
-
 
 # ------- Helper function: initialize parameters for a single model component ---------
 
@@ -23,14 +11,34 @@
 
 initialize_parameters <-function(mc) {
   df0 <- as.data.frame(mc$data)
+
+  # ---- NEW: condition on eval indicator + non-missing outcome ----
+  if (!is.null(mc$evaluation_indicator)) {
+    ei <- df0[[mc$evaluation_indicator]]
+    if (is.null(ei)) stop("evaluation_indicator '", mc$evaluation_indicator, "' not found in data.")
+    if (is.logical(ei)) {
+      keep <- !is.na(ei) & ei
+    } else if (is.numeric(ei) || is.integer(ei)) {
+      keep <- !is.na(ei) & (ei == 1L)
+    } else {
+      stop("`evaluation_indicator` must be logical or 0/1 numeric.")
+    }
+  } else {
+    keep <- rep(TRUE, nrow(df0))
+  }
+  # also require non-missing outcome
+  if (!mc$outcome %in% names(df0)) stop("Outcome '", mc$outcome, "' not in data.")
+  keep <- keep & !is.na(df0[[mc$outcome]])
+
+  df0 <- df0[keep, , drop = FALSE]
+  if (nrow(df0) == 0) stop("No rows to estimate for ", mc$name, " after conditioning on eval & non-missing outcome.")
+  # ---------------------------------------------------------------
+
   y <- df0[[mc$outcome]] # y <- outcome
 
   covars <- unlist(mc$covariates, use.names = FALSE)
   X <- if (length(covars)) df0[, covars, drop = FALSE] else NULL
   df <- if (is.null(X)) data.frame(y = y) else data.frame(y = y, X, check.names = FALSE)
-
-  #x <- df[unlist(mc$covariates)] #makes sure it doesn't break if mc$covariates is a list
-  #df <- data.frame(y = y, x)
 
   model_type <- mc$model_type
 
@@ -61,11 +69,10 @@ initialize_parameters <-function(mc) {
     init_loading <- 0.1
 
   }else if (model_type == "logit"){
-    # multinomial logit (needs nnet package)
     if (!requireNamespace("nnet", quietly = TRUE)) {
       stop("Package 'nnet' is required for multinomial logit initialization.") #double check if nnet is the best one/put in install script later
     }
-    fit <- nnet::multinom(y ~ ., data = cbind(y, X), trace = FALSE)
+    fit <- nnet::multinom(y ~ ., data = df, trace = FALSE)
     coefs <- coef(fit)
     init_intercept <- coefs[1]
     init_betas <- coefs[-1]
