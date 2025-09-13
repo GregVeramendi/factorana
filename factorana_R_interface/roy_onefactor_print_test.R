@@ -114,7 +114,23 @@ rownames(init_long) <- NULL
 write.csv(init_long, "results/system_inits_long.csv", row.names = FALSE)
 cat("Wrote results/system_inits_long.csv\n")
 
+# ---- Write model_config.csv into results/ ----
+dir.create("results", showWarnings = FALSE, recursive = TRUE)
 
+cfg_path <- file.path("results", "model_config.csv")
+invisible(write_model_config_csv(ms, factor_1, ctrl, cfg_path))
+cat("Wrote", cfg_path, "\n")
+
+# Also write the KV config (optional but requested earlier)
+dir.create("results", showWarnings = FALSE, recursive = TRUE)
+cfg_path <- file.path("results", "model_config.csv")
+invisible(write_model_config_csv(ms, factor_1, ctrl, cfg_path))
+cat("Wrote", cfg_path, "\n")
+
+# Build the numeric parameter file (index value se)
+packed <- pack_values_with_ses(ms, inits, factor_var_first = 1.0)
+mp_path <- write_meas_par(packed$values, packed$ses, path = file.path("results","meas_par.txt"))
+cat("Wrote", mp_path, "\n")
 
 # ---- Sanity stats ----
 cat("\n--- Sanity stats ---\n")

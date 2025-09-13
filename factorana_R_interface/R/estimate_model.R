@@ -57,6 +57,7 @@ initialize_parameters <-function(mc) {
 
     fit <- lm(y ~ ., data = df) #run OLS if linear
     coefs <- coef(fit)
+    #sevec <- summary(fit)$coefficients[, "Std. Error"]
     init_intercept <- coefs[1]
     init_betas <- coefs[-1]
     init_loading <- 0.1*sd(y)
@@ -162,8 +163,97 @@ estimate_model <- function(ms, control){
   jsonlite::toJSON(x, auto_unbox = TRUE, null = "null")
 }
 
+# --- helper: filter rows like in estimation ---
+.eval_keep <- function(df, eval_indicator, outcome) {
+  keep <- if (is.null(eval_indicator)) rep(TRUE, nrow(df)) else {
+    ei <- df[[eval_indicator]]
+    if (is.logical(ei)) !is.na(ei) & ei else (!is.na(ei) & (ei == 1L))
+  }
+  keep & !is.na(df[[outcome]])
+}
 
+# --- compute SEs for ONE component by refitting without factors ---
+compute_se_for_component <- function(mc) {
+  df0 <- as.data.frame(mc$data)
+  keep <- .eval_keep(df0, mc$evaluation_indicator, mc$outcome)
+  df0 <- df0[keep, , drop = FALSE]
+  if (nrow(df0) == 0) return(list(se_intercept = NA_real_, se_betas = numeric(0), se_loading = NA_real_))
 
+  y <- df0[[mc$outcome]]
+  covars <- unlist(mc$covariates, use.names = FALSE)
+  X <- if (length(covars)) df0[, covars, drop = FALSE] else NULL
+  df <- if (is.null(X)) data.frame(y = y) else data.frame(y = y, X, check.names = FALSE)
+
+  mt <- mc$model_type
+  if (mt == "linear") {
+    fit <- stats::lm(y ~ ., data = df)
+    sevec <- summary(fit)$coefficients[, "Std. Error"]
+  } else if (mt == "probit") {
+    fit <- stats::glm(y ~ ., data = df, family = binomial(link = "probit"))
+    sevec <- summary(fit)$coefficients[, "Std. Error"]
+  } else if (mt == "logit") {
+    if (!requireNamespace("nnet", quietly = TRUE)) stop("Need 'nnet' for multinomial logit SEs.")
+    fit <- nnet::multinom(y ~ ., data = df, trace = FALSE)
+    seobj <- summary(fit)$standard.errors
+    sevec <- if (is.matrix(seobj)) seobj[1, ] else as.numeric(seobj)
+  } else {
+    # not implemented here (e.g., oprobit): return NAs
+    return(list(se_intercept = NA_real_, se_betas = numeric(0), se_loading = NA_real_))
+  }
+
+  list(
+    se_intercept = unname(sevec[1]),
+    se_betas     = if (length(sevec) > 1) unname(sevec[-1]) else numeric(0),
+    se_loading   = NA_real_  # loading SE not computed in this simple refit
+  )
+}
+
+# --- pack values + computed SEs; factor variance first ---
+pack_values_with_ses <- function(ms, inits, factor_var_first = 1.0) {
+  vals <- numeric(0); ses <- numeric(0)
+
+  # 1) factor variance first
+  vals <- c(vals, factor_var_first)
+  ses  <- c(ses,  NA_real_)   # no SE for fixed normalization
+
+  # 2) for each component: intercept, betas, loading
+  for (i in seq_along(inits)) {
+    ini <- inits[[i]]
+    mc  <- ms$components[[i]]
+    sei <- compute_se_for_component(mc)
+
+    # intercept
+    vals <- c(vals, unname(ini$intercept))
+    ses  <- c(ses,  sei$se_intercept)
+
+    # betas
+    if (length(ini$betas)) {
+      vals <- c(vals, unname(ini$betas))
+      # align lengths safely
+      if (length(sei$se_betas) == length(ini$betas)) {
+        ses <- c(ses, sei$se_betas)
+      } else {
+        ses <- c(ses, rep(NA_real_, length(ini$betas)))
+      }
+    }
+
+    # loading (SE not computed here)
+    vals <- c(vals, unname(ini$loading))
+    ses  <- c(ses,  sei$se_loading)
+  }
+
+  list(values = vals, ses = ses)
+}
+
+# --- writer unchanged ---
+write_meas_par <- function(values, ses, path = file.path("results","meas_par.txt")) {
+  stopifnot(length(values) == length(ses))
+  dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
+  idx <- seq_along(values) - 1L
+  tab <- data.frame(idx, values = as.numeric(values), se = as.numeric(ses))
+  utils::write.table(tab, file = path, sep = " ", row.names = FALSE, col.names = FALSE, quote = FALSE)
+  invisible(path)
+}
 
 
 # ---- generic: flatten to key-value rows -----------------------------------
