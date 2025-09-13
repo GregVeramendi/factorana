@@ -145,7 +145,7 @@ define_model_component <- function(name,
     factor_normalization = factor_normalization,
     num_choices = num_choices,
     nrank = nrank,
-    nparam_model = length(covariates) + factor$nfactors + factor$n_types - 1 #this function needs to know the number of factors and number of types, need to pass from the factor model (?)
+    nparam_model = length(covariates) + factor$n_factors + factor$n_types - 1 #this function needs to know the number of factors and number of types, need to pass from the factor model (?)
   )
 
   class(out) <- "model_component"

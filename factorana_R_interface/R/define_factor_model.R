@@ -70,6 +70,6 @@ print.factor_model <- function(x, ...) {
   cat("Number of quadrature points:        ", x$n_quad_points, "\n")
   cat("Correlation allowed?:     ", x$correlation, "\n")
   cat("Number of mixtures:       ", x$n_mixtures, "\n")
-  cat("Number of parameters in latent factor distribution:", x$nparam)
+  cat("Number of parameters in latent factor distribution:", x$nfac_param)
 }
 

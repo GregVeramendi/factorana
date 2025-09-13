@@ -62,18 +62,6 @@ mc_y0  <- define_model_component("Y0", dat, "Y", factor_1,
 mc_T   <- define_model_component("T",  dat, "T", factor_1,
                                  covariates = c("Q1"), model_type = "linear")
 
-
-# mc_sel <- define_model_component("selection", dat, "D", factor_1,
-#                                  covariates = c("Z0","Z1"), model_type = "probit")
-# mc_y1  <- define_model_component("Y1", dat, "Y", factor_1,
-#                                  evaluation_indicator = "D",
-#                                  covariates = c("X0","X1"), model_type = "linear")
-# mc_y0  <- define_model_component("Y0", dat, "Y", factor_1,
-#                                  evaluation_indicator = "eval_y0",
-#                                  covariates = c("X0","X1"), model_type = "linear")
-# mc_T   <- define_model_component("T",  dat, "T", factor_1,
-#                                  covariates = c("Q0","Q1"), model_type = "linear")
-
 cat("\n--- Components ---\n")
 print(mc_sel)
 print(mc_y1)
@@ -99,37 +87,7 @@ cat("\n--- Estimate model ---\n")
 out <- estimate_model(ms, ctrl)
 print(out)
 
-
-
-
-
-
-# ---- WIDE FORMAT (human-readable) ----
-init_wide <- do.call(rbind, lapply(seq_along(inits), function(i) {
-  comp <- ms$components[[i]]
-  ini  <- inits[[i]]
-
-  beta_str <- if (length(ini$betas)) {
-    paste(sprintf("%s=%.6f", names(ini$betas), unname(ini$betas)), collapse=";")
-  } else ""
-
-  data.frame(
-    component  = comp$name,
-    intercept  = unname(ini$intercept),
-    betas      = beta_str,
-    loading    = unname(ini$loading),
-    factor_var = unname(ini$factor_var),
-    factor_cor = unname(ini$factor_cor),
-    stringsAsFactors = FALSE
-  )
-}))
-rownames(init_wide) <- NULL
-
-if (!dir.exists("results")) dir.create("results", recursive = TRUE)
-write.csv(init_wide, "results/system_inits_wide.csv", row.names = FALSE)
-cat("\n✅ Wrote results/system_inits_wide.csv\n")
-
-# ---- LONG FORMAT (machine-readable for C++) ----
+# ---- LONG FORMAT ----
 init_long <- do.call(rbind, lapply(seq_along(inits), function(i) {
   comp <- ms$components[[i]]
   ini  <- inits[[i]]
@@ -146,21 +104,23 @@ init_long <- do.call(rbind, lapply(seq_along(inits), function(i) {
   do.call(rbind, rows)
 }))
 
-# add factor variance (fixed at 1 for identification)
-init_long <- rbind(init_long,
-                   data.frame(component="factor", param="factor_var[f1]", value=1.0)
-)
+#prepend factor variance row first
+fv_row <- data.frame(component = "factor",
+                     param = "factor_var[f1]",
+                     value = 1.0)
+init_long <- rbind(fv_row, init_long)
 rownames(init_long) <- NULL
 
-write.csv(init_long, "results/system_inits_long.csv", row.names = FALSE)
-cat("✅ Wrote results/system_inits_long.csv\n")
+# # add factor variance
+# init_long <- rbind(init_long,
+#                    data.frame(component="factor", param="factor_var[f1]", value=1.0)
+# )
+# rownames(init_long) <- NULL
 
-#
-# # ---- Write CSV (if not already written) ----
-# if (!dir.exists("results")) dir.create("results", recursive = TRUE)
-# csv_path <- file.path("results", paste0("system_inits_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv"))
-# utils::write.csv(out, csv_path, row.names = FALSE)
-# cat("CSV written to:", csv_path, "\n")
+write.csv(init_long, "results/system_inits_long.csv", row.names = FALSE)
+cat("Wrote results/system_inits_long.csv\n")
+
+
 
 # ---- Sanity stats ----
 cat("\n--- Sanity stats ---\n")

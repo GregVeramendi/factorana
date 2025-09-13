@@ -64,6 +64,6 @@ define_estimation_control <- function(num_cores = 1) {
 print.estimation_control <- function(x, ...) {
   cat("Estimation Control\n")
   cat("------------------\n")
-  cat("Number of unobserved types:", x$num_types, "\n")
+#  cat("Number of unobserved types:", x$num_types, "\n")
   cat("Number of cores for parallelization:", x$num_cores, "\n")
 }
