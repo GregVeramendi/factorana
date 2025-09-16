@@ -21,7 +21,7 @@ define_model_component <- function(name,
                                    factor,
                                    evaluation_indicator = NULL,
                                    covariates,
-                                   model_type = c("linear", "logit", "probit"),
+                                   model_type = c("linear", "logit", "probit", "oprobit"),
                                    intercept = TRUE,
                                    factor_normalization = 1,
                                    num_choices = 2,
@@ -127,9 +127,33 @@ define_model_component <- function(name,
   if (model_type == "probit" && !all(y %in% c(0, 1))) {
     stop("Outcome for probit must be coded 0/1.")
   }
+
   if (model_type == "logit" && !all(y %in% 0:(max(y)))) {
     stop("Outcome for logit must be integers 0,...,K.")
   }
+
+
+  ###ordered probit checks
+  n_cats <- NULL
+  if (model_type == "oprobit") {
+    y_sub <- data[[outcome]][idx]
+    # Accept integers 1..J, 0..J-1, or an ordered factor; coerce to ordered factor
+    if (is.factor(y_sub)) {
+      if (!is.ordered(y_sub)) y_sub <- ordered(y_sub)
+    } else {
+      if (!is.numeric(y_sub) && !is.integer(y_sub))
+        stop("oprobit outcome must be integer-like or ordered factor.")
+      u <- sort(unique(na.omit(as.integer(y_sub))))
+      # make contiguous levels starting at 1
+      map <- match(as.integer(y_sub), u)
+      y_sub <- ordered(map)
+    }
+    n_cats <- length(levels(y_sub))
+    if (n_cats < 2L) stop("oprobit needs at least 2 ordered categories.")
+    # (Optional) replace in data to keep consistency downstream:
+    data[[outcome]] <- y_sub
+  }
+
 
   #___output___
 

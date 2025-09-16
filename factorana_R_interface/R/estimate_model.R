@@ -79,7 +79,17 @@ initialize_parameters <-function(mc) {
     init_betas <- coefs[-1]
     init_loading <- 0.1 #should be a
 
-  } else {
+  }else if (model_type == "oprobit"){
+    if (!requireNamespace("MASS", quietly = TRUE)) {
+      stop("Ordered probit requires the MASS package. Install with: install.packages('MASS')",
+           call. = FALSE)
+    }
+    # outcome must be ordered
+    if (!is.ordered(df$y)) df$y <- ordered(df$y)
+    fit <- MASS::polr(y ~ ., data = df, method = "probit", Hess = TRUE)
+    # ... extract betas / cutpoints, etc.
+
+  }else {
     stop("Unsupported model type: ", model_type)
   }
 
