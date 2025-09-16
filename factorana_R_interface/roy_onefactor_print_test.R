@@ -152,6 +152,12 @@ write.csv(param_df, csv_path, row.names = FALSE)
 cat("Wrote", csv_path, "\n")
 
 
+# ---- Save simulated dataset ----
+sim_path <- file.path("results", "simulated_data.csv")
+write.csv(dat, sim_path, row.names = FALSE)
+cat("Wrote", sim_path, "\n")
+
+
 # ---- Sanity stats ----
 cat("\n--- Sanity stats ---\n")
 m1 <- mean(dat$Y[dat$D == 1])
