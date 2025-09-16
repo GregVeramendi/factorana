@@ -127,10 +127,30 @@ cfg_path <- file.path("results", "model_config.csv")
 invisible(write_model_config_csv(ms, factor_1, ctrl, cfg_path))
 cat("Wrote", cfg_path, "\n")
 
+# # Build the numeric parameter file (index value se)
+# packed <- pack_values_with_ses(ms, inits, factor_var_first = 1.0)
+# mp_path <- write_meas_par(packed$values, packed$ses, path = file.path("results","meas_par.txt"))
+# cat("Wrote", mp_path, "\n")
+
 # Build the numeric parameter file (index value se)
 packed <- pack_values_with_ses(ms, inits, factor_var_first = 1.0)
-mp_path <- write_meas_par(packed$values, packed$ses, path = file.path("results","meas_par.txt"))
-cat("Wrote", mp_path, "\n")
+
+# Combine into a data.frame for export
+param_df <- data.frame(
+  index = seq_along(packed$values),
+  value = packed$values,
+  se    = packed$ses
+)
+
+# Replace NA standard error with 1
+param_df$se[is.na(param_df$se)] <- 1
+
+# Write CSV instead of text
+csv_path <- file.path("results", "meas_par.csv")
+write.csv(param_df, csv_path, row.names = FALSE)
+
+cat("Wrote", csv_path, "\n")
+
 
 # ---- Sanity stats ----
 cat("\n--- Sanity stats ---\n")
