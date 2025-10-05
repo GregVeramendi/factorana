@@ -96,6 +96,38 @@ define_model_component <- function(name,
     }
   }
 
+  # *** FIX: subset the ENTIRE data frame here ***
+  data <- data[idx, , drop = FALSE]
+  rownames(data) <- NULL
+
+
+  if (nrow(data) == 0L) stop("Evaluation subset has zero rows")
+
+  idx <- rep(TRUE, nrow(data))
+
+  # 2) If ordered probit, coerce OUTCOME to ordered factor *now* (post-subset)
+  if (model_type == "oprobit") {
+    y_sub <- data[[outcome]]
+
+    if (is.factor(y_sub)) {
+      # Make sure it is 'ordered'
+      if (!is.ordered(y_sub)) y_sub <- ordered(y_sub)
+    } else {
+      # Accept integer-like labels (1..J or 0..J-1), otherwise error
+      if (!is.numeric(y_sub) && !is.integer(y_sub))
+        stop("oprobit outcome must be integer-like or an ordered factor.")
+      # map to contiguous 1..J and mark ordered
+      u   <- sort(unique(na.omit(as.integer(y_sub))))
+      map <- match(as.integer(y_sub), u)
+      y_sub <- ordered(map)
+    }
+
+    if (nlevels(y_sub) < 3L)
+      stop("Ordered probit requires an outcome with ≥ 3 ordered categories.")
+
+    data[[outcome]] <- y_sub
+  }
+
   # Check outcome missingness on the subset
   if (anyNA(data[[outcome]][idx])) {
     stop("Missing values in outcome variable within evaluation subset.")
@@ -139,10 +171,11 @@ define_model_component <- function(name,
     y_sub <- data[[outcome]][idx]
     # Accept integers 1..J, 0..J-1, or an ordered factor; coerce to ordered factor
     if (is.factor(y_sub)) {
-      if (!is.ordered(y_sub)) y_sub <- ordered(y_sub)
+      if (!is.ordered(y_sub)) y_sub <- ordered(y_sub) #coerce to an ordered factor here.
     } else {
       if (!is.numeric(y_sub) && !is.integer(y_sub))
         stop("oprobit outcome must be integer-like or ordered factor.")
+
       u <- sort(unique(na.omit(as.integer(y_sub))))
       # make contiguous levels starting at 1
       map <- match(as.integer(y_sub), u)

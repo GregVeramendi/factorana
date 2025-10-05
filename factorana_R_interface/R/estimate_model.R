@@ -9,10 +9,10 @@
 #'
 #' @return a list of initialized parameters
 
-initialize_parameters <-function(mc) {
+initialize_parameters <- function(mc) {
   df0 <- as.data.frame(mc$data)
 
-  # ---- NEW: condition on eval indicator + non-missing outcome ----
+  # ---- condition on eval indicator + non-missing outcome ----
   if (!is.null(mc$evaluation_indicator)) {
     ei <- df0[[mc$evaluation_indicator]]
     if (is.null(ei)) stop("evaluation_indicator '", mc$evaluation_indicator, "' not found in data.")
@@ -26,87 +26,85 @@ initialize_parameters <-function(mc) {
   } else {
     keep <- rep(TRUE, nrow(df0))
   }
-  # also require non-missing outcome
   if (!mc$outcome %in% names(df0)) stop("Outcome '", mc$outcome, "' not in data.")
   keep <- keep & !is.na(df0[[mc$outcome]])
-
   df0 <- df0[keep, , drop = FALSE]
   if (nrow(df0) == 0) stop("No rows to estimate for ", mc$name, " after conditioning on eval & non-missing outcome.")
-  # ---------------------------------------------------------------
+  # -----------------------------------------------------------
 
-  y <- df0[[mc$outcome]] # y <- outcome
-
+  y <- df0[[mc$outcome]]
   covars <- unlist(mc$covariates, use.names = FALSE)
   X <- if (length(covars)) df0[, covars, drop = FALSE] else NULL
   df <- if (is.null(X)) data.frame(y = y) else data.frame(y = y, X, check.names = FALSE)
 
   model_type <- mc$model_type
 
-  init_betas <- NULL
-  init_intercept <- 0
-  init_loading <- NULL
+  # we'll build 'out' in the branches and append common fields at the end
+  out <- NULL
 
-  if (model_type == "linear"){
-    #debug start
-    stopifnot(is.data.frame(df))
-    cat("df cols:", paste(names(df), collapse=", "), "\n")
-    rhs <- setdiff(names(df), "y")
-    cat("RHS cols going into y ~ .:", paste(rhs, collapse=", "), "\n")
-    stopifnot(length(rhs) > 0)   # fails if df accidentally only has 'y'
-    #debug end
-
-    fit <- lm(y ~ ., data = df) #run OLS if linear
+  if (model_type == "linear") {
+    fit <- lm(y ~ ., data = df)
     coefs <- coef(fit)
-    #sevec <- summary(fit)$coefficients[, "Std. Error"]
-    init_intercept <- coefs[1]
-    init_betas <- coefs[-1]
-    init_loading <- 0.1*sd(y)
+    out <- list(
+      intercept = unname(coefs[1]),
+      betas     = unname(coefs[-1]),
+      loading   = 0.1 * sd(y)
+    )
 
-  }else if (model_type == "probit"){
-    fit <- glm(y ~ ., data = df, family = binomial(link = "probit")) ####probit needs a family
+  } else if (model_type == "probit") {
+    fit <- glm(y ~ ., data = df, family = binomial(link = "probit"))
     coefs <- coef(fit)
-    init_intercept <- coefs[1]
-    init_betas <- coefs[-1]
-    init_loading <- 0.1
+    out <- list(
+      intercept = unname(coefs[1]),
+      betas     = unname(coefs[-1]),
+      loading   = 0.1
+    )
 
-  }else if (model_type == "logit"){
+  } else if (model_type == "logit") {
+    # (If this is truly binary logit, glm(binomial(link="logit")) is more typical.)
     if (!requireNamespace("nnet", quietly = TRUE)) {
-      stop("Package 'nnet' is required for multinomial logit initialization.") #double check if nnet is the best one/put in install script later
+      stop("Package 'nnet' is required for multinomial logit initialization.")
     }
     fit <- nnet::multinom(y ~ ., data = df, trace = FALSE)
     coefs <- coef(fit)
-    init_intercept <- coefs[1]
-    init_betas <- coefs[-1]
-    init_loading <- 0.1 #should be a
+    out <- list(
+      intercept = unname(coefs[1]),
+      betas     = unname(coefs[-1]),
+      loading   = 0.1
+    )
 
-  }else if (model_type == "oprobit"){
-    if (!requireNamespace("MASS", quietly = TRUE)) {
-      stop("Ordered probit requires the MASS package. Install with: install.packages('MASS')",
-           call. = FALSE)
+  } else if (model_type == "oprobit") {
+    # use df0 (conditioned), not mc$data
+    y_op <- df0[[ mc$outcome ]]
+    if (!is.ordered(y_op)) {
+      stop("initialize_parameters(oprobit): outcome must be an ordered factor. Got: ",
+           paste(class(y_op), collapse = "/"))
     }
-    # outcome must be ordered
-    if (!is.ordered(df$y)) df$y <- ordered(df$y)
-    fit <- MASS::polr(y ~ ., data = df, method = "probit", Hess = TRUE)
-    # ... extract betas / cutpoints, etc.
+    n_cats <- nlevels(y_op)
+    if (n_cats < 3L) {
+      stop("Ordered probit needs >= 3 categories; got ", n_cats,
+           ". Did the evaluation subset collapse categories?")
+    }
+    n_thresh <- n_cats - 1L
 
-  }else {
+    out <- list(
+      intercept  = 0,
+      betas      = rep(0, length(mc$covariates)),
+      loading    = 1.0,
+      thresholds = seq(-1, 1, length.out = n_thresh)
+      # cutpoints = seq(-1, 1, length.out = n_thresh)  # optional alias
+    )
+
+  } else {
     stop("Unsupported model type: ", model_type)
   }
 
-
-  #set factor defaults
-  init_factor_var <- 1
-  init_factor_corr <- 0.1
-
-  #return a list
-  return(list(
-    intercept = init_intercept,
-    betas = init_betas,
-    loading = init_loading,
-    factor_var = init_factor_var,
-    factor_cor = init_factor_corr
-  ))
+  # ---- common defaults appended to whatever branch built 'out' ----
+  out$factor_var <- 1
+  out$factor_cor <- 0.1
+  return(out)
 }
+
 
 # ---- Estimate model (currently just initializes parameters) ----
 

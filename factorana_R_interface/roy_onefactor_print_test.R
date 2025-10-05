@@ -127,12 +127,7 @@ cfg_path <- file.path("results", "model_config.csv")
 invisible(write_model_config_csv(ms, factor_1, ctrl, cfg_path))
 cat("Wrote", cfg_path, "\n")
 
-# # Build the numeric parameter file (index value se)
-# packed <- pack_values_with_ses(ms, inits, factor_var_first = 1.0)
-# mp_path <- write_meas_par(packed$values, packed$ses, path = file.path("results","meas_par.txt"))
-# cat("Wrote", mp_path, "\n")
-
-# Build the numeric parameter file (index value se)
+#------ Build the numeric parameter file (index value se)------
 packed <- pack_values_with_ses(ms, inits, factor_var_first = 1.0)
 
 # Combine into a data.frame for export
