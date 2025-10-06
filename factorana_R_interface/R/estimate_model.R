@@ -140,27 +140,49 @@ estimate_model <- function(ms, control){
   #initialize parameters for each component
   inits <- lapply(components, initialize_parameters)
 
-  #safely handle missing fields version
+  #NEW: flatten matrices
   init_df <- do.call(rbind, lapply(seq_along(inits), function(i) {
     comp <- components[[i]]
     init <- inits[[i]]
 
-    intercept <- if (!is.null(init$intercept)) init$intercept else NA
-    betas_str <- if (!is.null(init$betas)) paste(init$betas, collapse = ";") else ""
-    loading   <- if (!is.null(init$loading)) init$loading else NA
-    factor_var <- if (!is.null(init$factor_var)) init$factor_var else NA
-    factor_cor <- if (!is.null(init$factor_cor)) init$factor_cor else NA
+    intercept   <- if (!is.null(init$intercept)) init$intercept else NA
+    betas_str   <- if (!is.null(init$betas)) paste(init$betas, collapse = ";") else ""
+    loading_str <- if (!is.null(init$loading)) paste(init$loading, collapse = ";") else ""
+    fvar_str    <- if (!is.null(init$factor_var)) paste(init$factor_var, collapse = ";") else ""
+    fcor_str    <- if (!is.null(init$factor_cor)) paste(as.vector(init$factor_cor), collapse = ";") else ""
 
     data.frame(
       component = comp$name,
       intercept = intercept,
-      betas = betas_str,
-      loading = loading,
-      factor_var = factor_var,
-      factor_cor = factor_cor,
+      betas     = betas_str,
+      loading   = loading_str,
+      factor_var = fvar_str,
+      factor_cor = fcor_str,
       stringsAsFactors = FALSE
     )
   }))
+  #
+  # #safely handle missing fields version
+  # init_df <- do.call(rbind, lapply(seq_along(inits), function(i) {
+  #   comp <- components[[i]]
+  #   init <- inits[[i]]
+  #
+  #   intercept <- if (!is.null(init$intercept)) init$intercept else NA
+  #   betas_str <- if (!is.null(init$betas)) paste(init$betas, collapse = ";") else ""
+  #   loading   <- if (!is.null(init$loading)) init$loading else NA
+  #   factor_var <- if (!is.null(init$factor_var)) init$factor_var else NA
+  #   factor_cor <- if (!is.null(init$factor_cor)) init$factor_cor else NA
+  #
+  #   data.frame(
+  #     component = comp$name,
+  #     intercept = intercept,
+  #     betas = betas_str,
+  #     loading = loading,
+  #     factor_var = factor_var,
+  #     factor_cor = factor_cor,
+  #     stringsAsFactors = FALSE
+  #   )
+  # }))
 
   #
   # # Convert to data.frame for inspection
