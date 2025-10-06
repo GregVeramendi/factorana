@@ -104,9 +104,8 @@ initialize_parameters <- function(mc) {
     out <- list(
       intercept  = 0,
       betas      = rep(0, length(mc$covariates)),
-      loading    = 1.0,
+ #     loading    = 1.0,
       thresholds = seq(-1, 1, length.out = n_thresh)
-      # cutpoints = seq(-1, 1, length.out = n_thresh)  # optional alias
     )
 
   } else {
@@ -115,8 +114,8 @@ initialize_parameters <- function(mc) {
 
   # ---- common defaults appended to whatever branch built 'out' ----
   out$loading <- init_loading
-  out$factor_var <- rep(1, k)
-  out$factor_cor <- diag(k)
+  out$factor_var <- 1
+  out$factor_cor <- 0
   return(out)
 }
 
@@ -141,20 +140,43 @@ estimate_model <- function(ms, control){
   #initialize parameters for each component
   inits <- lapply(components, initialize_parameters)
 
-  # Convert to data.frame for inspection
+  #safely handle missing fields version
   init_df <- do.call(rbind, lapply(seq_along(inits), function(i) {
     comp <- components[[i]]
     init <- inits[[i]]
+
+    intercept <- if (!is.null(init$intercept)) init$intercept else NA
+    betas_str <- if (!is.null(init$betas)) paste(init$betas, collapse = ";") else ""
+    loading   <- if (!is.null(init$loading)) init$loading else NA
+    factor_var <- if (!is.null(init$factor_var)) init$factor_var else NA
+    factor_cor <- if (!is.null(init$factor_cor)) init$factor_cor else NA
+
     data.frame(
       component = comp$name,
-      intercept = init$intercept,
-      betas = paste(init$betas, collapse = ";"),
-      loading    = paste(init$loading, collapse = ";"),
-      factor_var = paste(init$factor_var, collapse = ";"),
-      factor_cor = paste(as.vector(init$factor_cor), collapse = ";"),
+      intercept = intercept,
+      betas = betas_str,
+      loading = loading,
+      factor_var = factor_var,
+      factor_cor = factor_cor,
       stringsAsFactors = FALSE
     )
   }))
+
+  #
+  # # Convert to data.frame for inspection
+  # init_df <- do.call(rbind, lapply(seq_along(inits), function(i) {
+  #   comp <- components[[i]]
+  #   init <- inits[[i]]
+  #   data.frame(
+  #     component = comp$name,
+  #     intercept = init$intercept,
+  #     betas = paste(init$betas, collapse = ";"),
+  #     loading    = paste(init$loading, collapse = ";"),
+  #     factor_var = paste(init$factor_var, collapse = ";"),
+  #     factor_cor = paste(as.vector(init$factor_cor), collapse = ";"),
+  #     stringsAsFactors = FALSE
+  #   )
+  # }))
 
   # Print to console for now
   print(init_df)
