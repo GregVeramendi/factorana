@@ -12,7 +12,9 @@
 initialize_parameters <- function(mc) {
   df0 <- as.data.frame(mc$data)
 
-  # ---- condition on eval indicator + non-missing outcome ----
+  # ---- 1. Apply evaluation indicator & drop missing outcomes ----
+  # Keep only rows where evaluation_indicator == TRUE / 1, and drop rows with missing outcome.
+
   if (!is.null(mc$evaluation_indicator)) {
     ei <- df0[[mc$evaluation_indicator]]
     if (is.null(ei)) stop("evaluation_indicator '", mc$evaluation_indicator, "' not found in data.")
@@ -26,22 +28,31 @@ initialize_parameters <- function(mc) {
   } else {
     keep <- rep(TRUE, nrow(df0))
   }
+
+  # Check that the outcome exists and is non-missing
   if (!mc$outcome %in% names(df0)) stop("Outcome '", mc$outcome, "' not in data.")
   keep <- keep & !is.na(df0[[mc$outcome]])
   df0 <- df0[keep, , drop = FALSE]
   if (nrow(df0) == 0) stop("No rows to estimate for ", mc$name, " after conditioning on eval & non-missing outcome.")
   # -----------------------------------------------------------
 
+  # ---- 2. Prepare regression data ----
+  # Build y and X matrices, combining into a clean df for fitting
+
   y <- df0[[mc$outcome]]
   covars <- unlist(mc$covariates, use.names = FALSE)
   X <- if (length(covars)) df0[, covars, drop = FALSE] else NULL
   df <- if (is.null(X)) data.frame(y = y) else data.frame(y = y, X, check.names = FALSE)
 
+  # ---- 3. Retrieve model & factor information ----
   model_type <- mc$model_type
 
-  ## --- NEW: factor dimension and normalization ---
   k <- if (!is.null(mc$k)) mc$k else as.integer(mc$factor$n_factors)
   if (is.na(k) || k < 1L) stop("initialize_parameters: invalid k (number of factors).")
+
+  # ---- 4. Normalize factor loadings ----
+  # Apply normalization constraints: NA = free, numeric = fixed value.
+
   norm_vec <- mc$factor$loading_normalization
   if (!is.numeric(norm_vec) || length(norm_vec) != k) {
     stop("initialize_parameters: factor$loading_normalization must be numeric length k.")
@@ -53,7 +64,8 @@ initialize_parameters <- function(mc) {
   if (length(fixed_idx)) init_loading[fixed_idx] <- norm_vec[fixed_idx]
 
 
-  # we'll build 'out' in the branches and append common fields at the end
+  # ---- 5. Fit model-type specific regression ----
+  # Estimate initial intercepts/betas via simple models, ignoring latent factors.
   out <- NULL
 
   if (model_type == "linear") {
@@ -89,6 +101,7 @@ initialize_parameters <- function(mc) {
 
   } else if (model_type == "oprobit") {
     # use df0 (conditioned), not mc$data
+    # create threshold vector evenly spaced in [-1, 1]
     y_op <- df0[[ mc$outcome ]]
     if (!is.ordered(y_op)) {
       stop("initialize_parameters(oprobit): outcome must be an ordered factor. Got: ",
@@ -112,10 +125,13 @@ initialize_parameters <- function(mc) {
     stop("Unsupported model type: ", model_type)
   }
 
-  # ---- common defaults appended to whatever branch built 'out' ----
+  # ---- 6. Append defaults common to all components ----
+  # Add initialized loadings, factor variance, and correlation placeholders.
   out$loading <- init_loading
   out$factor_var <- 1
   out$factor_cor <- 0
+
+
   return(out)
 }
 
@@ -140,7 +156,7 @@ estimate_model <- function(ms, control){
   #initialize parameters for each component
   inits <- lapply(components, initialize_parameters)
 
-  #NEW: flatten matrices
+  #EDIT: flatten matrices
   init_df <- do.call(rbind, lapply(seq_along(inits), function(i) {
     comp <- components[[i]]
     init <- inits[[i]]
@@ -161,44 +177,6 @@ estimate_model <- function(ms, control){
       stringsAsFactors = FALSE
     )
   }))
-  #
-  # #safely handle missing fields version
-  # init_df <- do.call(rbind, lapply(seq_along(inits), function(i) {
-  #   comp <- components[[i]]
-  #   init <- inits[[i]]
-  #
-  #   intercept <- if (!is.null(init$intercept)) init$intercept else NA
-  #   betas_str <- if (!is.null(init$betas)) paste(init$betas, collapse = ";") else ""
-  #   loading   <- if (!is.null(init$loading)) init$loading else NA
-  #   factor_var <- if (!is.null(init$factor_var)) init$factor_var else NA
-  #   factor_cor <- if (!is.null(init$factor_cor)) init$factor_cor else NA
-  #
-  #   data.frame(
-  #     component = comp$name,
-  #     intercept = intercept,
-  #     betas = betas_str,
-  #     loading = loading,
-  #     factor_var = factor_var,
-  #     factor_cor = factor_cor,
-  #     stringsAsFactors = FALSE
-  #   )
-  # }))
-
-  #
-  # # Convert to data.frame for inspection
-  # init_df <- do.call(rbind, lapply(seq_along(inits), function(i) {
-  #   comp <- components[[i]]
-  #   init <- inits[[i]]
-  #   data.frame(
-  #     component = comp$name,
-  #     intercept = init$intercept,
-  #     betas = paste(init$betas, collapse = ";"),
-  #     loading    = paste(init$loading, collapse = ";"),
-  #     factor_var = paste(init$factor_var, collapse = ";"),
-  #     factor_cor = paste(as.vector(init$factor_cor), collapse = ";"),
-  #     stringsAsFactors = FALSE
-  #   )
-  # }))
 
   # Print to console for now
   print(init_df)

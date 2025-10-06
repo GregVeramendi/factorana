@@ -24,7 +24,9 @@ define_model_component <- function(name,
                                    intercept = TRUE,
                                    num_choices = 2,
                                    nrank = NULL) {
-  #_____Basic checks____
+  # ---- 1. Basic argument checks ----
+  # Confirm data types and presence of required columns/objects
+
   #is the data a dataframe?
   if (!is.data.frame(data)) stop("`data` must be a data.frame.")
 
@@ -39,6 +41,9 @@ define_model_component <- function(name,
     stop("`factor` must be an object of class 'factor_model'.")
   }
 
+  # ---- 2. Validate factor model and normalization ----
+  # Pull number of factors and ensure valid loading_normalization setup
+
   k <- as.integer(factor$n_factors)
   if (is.na(k) || k < 1L) stop("factor$n_factors must be a positive integer")
 
@@ -52,8 +57,9 @@ define_model_component <- function(name,
     }
   }
 
+  # ---- 3. Validate evaluation indicator ----
+  # Ensure indicator is a valid single logical/numeric variable if provided
 
-  #evaluation indicator?
   if (!is.null(evaluation_indicator)) {
     if (!is.character(evaluation_indicator) || length(evaluation_indicator) != 1L)
       stop("`evaluation_indicator` must be a single column name (character).")
@@ -61,9 +67,9 @@ define_model_component <- function(name,
       stop("`evaluation_indicator` not found in `data`.")
   }
 
-  #covariates existence:
+  # ---- 4. Validate covariates ----
+  # Check all covariate names exist and are non-missing
 
-  # covariates must be a non-empty character vector
   if (!is.character(covariates) || length(covariates) < 1L) {
     stop("`covariates` must be a non-empty character vector of column names.")
   }
@@ -73,7 +79,8 @@ define_model_component <- function(name,
     stop("Covariates not found in `data`: ", paste(missing, collapse = ", "))
   }
 
-  #do the model types match? e.g. not "linnnear"
+  # ---- 5. Validate model configuration arguments ----
+  # model_type, intercept, num_choices, nrank
   model_type <- match.arg(model_type)
 
   #intercept: is it a boolean?
@@ -94,11 +101,9 @@ define_model_component <- function(name,
   }
 
 
+  # ---- 6. Evaluation subset conditioning ----
+  # Restrict data to rows where evaluation_indicator = TRUE/1 and non-missing outcomes
 
-
-  ## ---- Data validity checks ----
-
-  # outcome must not have missing when evaluation_indicator is 1
   idx <- rep(TRUE, nrow(data))  # default: check all rows
   if (!is.null(evaluation_indicator)) {
     ei <- data[[evaluation_indicator]]
@@ -111,7 +116,6 @@ define_model_component <- function(name,
     }
   }
 
-  # *** FIX: subset the ENTIRE data frame here ***
   data <- data[idx, , drop = FALSE]
   rownames(data) <- NULL
 
@@ -120,7 +124,8 @@ define_model_component <- function(name,
 
   idx <- rep(TRUE, nrow(data))
 
-  # 2) If ordered probit, coerce OUTCOME to ordered factor *now* (post-subset)
+  # ---- 7. Ordered probit handling ----
+  # Convert numeric or unordered factor outcomes to ordered factor with ≥3 categories
   if (model_type == "oprobit") {
     y_sub <- data[[outcome]]
 
@@ -143,7 +148,9 @@ define_model_component <- function(name,
     data[[outcome]] <- y_sub
   }
 
-  # Check outcome missingness on the subset
+  # ---- 8. Missing value checks ----
+  # Ensure no NAs remain in the outcome or covariates within the evaluation subset
+
   if (anyNA(data[[outcome]][idx])) {
     stop("Missing values in outcome variable within evaluation subset.")
   }
@@ -156,20 +163,7 @@ define_model_component <- function(name,
   }
 
 
-  # outcome must not have missing when evaluation_indicator is 1
-#
-#   if (any(is.na(data[outcome]))){
-#     stop("Missing values in outcome variable")
-#   }
-#
-#   # covariates must not have missing
-#   for (cov in covariates) {
-#     if (any(is.na(data[cov]))){
-#       stop("Missing values found in covariate:", cov)
-#     }
-#   }
-
-  # outcome must match model_type (checks for probit and logit)
+  # ---- 9. Model-type specific validity checks ----
   y <- data[[outcome]]
   if (model_type == "probit" && !all(y %in% c(0, 1))) {
     stop("Outcome for probit must be coded 0/1.")
@@ -180,7 +174,9 @@ define_model_component <- function(name,
   }
 
 
-  ###ordered probit checks
+  # ---- 10. Final consistency for ordered probit ----
+  # (Recheck contiguous ordered categories)
+
   n_cats <- NULL
   if (model_type == "oprobit") {
     y_sub <- data[[outcome]][idx]
@@ -202,9 +198,10 @@ define_model_component <- function(name,
     data[[outcome]] <- y_sub
   }
 
-  factor_normalization <- factor$loading_normalization
+  # ---- 11. Build output object ----
+  # Assemble metadata, settings, and derived quantities into list
 
-  #___output___
+  factor_normalization <- factor$loading_normalization
 
   out <- list(
     name = name,
@@ -226,7 +223,9 @@ define_model_component <- function(name,
   return(out)
 }
 
-#  Getter for name(S3 generic + method)
+# ---- S3 methods: getters and printers ----
+
+
 #' @export
 get_component_name <- function(x, ...) UseMethod("get_component_name") #this is the S3 generic
 
@@ -244,7 +243,6 @@ get_factor <- function(x, ...) UseMethod("get_factor") #S3 generic
 get_factor.model_component <- function(x, ...) {
   return(x$factor)
 }
-
 
 
 #' Print method for model_component objects
