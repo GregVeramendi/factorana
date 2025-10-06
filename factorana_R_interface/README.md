@@ -111,6 +111,7 @@ stopifnot(is.numeric(ini$thresholds), length(ini$thresholds) == 3,
 ---
 
 ## API (R)
+More detailed explanations within functions.
 
 ### `define_factor_model(n_factors, n_types, n_quad_points, correlation = FALSE, n_mixtures = 1, loading_normalization = NULL)`
 - `n_factors` (int ≥1): number of latent factors \(k\)
