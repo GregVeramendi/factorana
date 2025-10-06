@@ -253,9 +253,9 @@ compute_se_for_component <- function(mc) {
   )
 }
 
-# --- pack values + computed SEs; factor variance first ---
 pack_values_with_ses <- function(ms, inits, factor_var_first = 1.0) {
-  vals <- numeric(0); ses <- numeric(0)
+  vals <- numeric(0)
+  ses  <- numeric(0)
 
   # 1) factor variance first
   vals <- c(vals, factor_var_first)
@@ -263,32 +263,80 @@ pack_values_with_ses <- function(ms, inits, factor_var_first = 1.0) {
 
   # 2) for each component: intercept, betas, loading
   for (i in seq_along(inits)) {
-    ini <- inits[[i]]
-    mc  <- ms$components[[i]]
-    sei <- compute_se_for_component(mc)
+    init <- inits[[i]]
+    mc   <- ms$components[[i]]
+    sei  <- compute_se_for_component(mc)
 
     # intercept
-    vals <- c(vals, unname(ini$intercept))
+    vals <- c(vals, unname(init$intercept))
     ses  <- c(ses,  sei$se_intercept)
 
     # betas
-    if (length(ini$betas)) {
-      vals <- c(vals, unname(ini$betas))
+    if (length(init$betas)) {
+      vals <- c(vals, unname(init$betas))
       # align lengths safely
-      if (length(sei$se_betas) == length(ini$betas)) {
+      if (length(sei$se_betas) == length(init$betas)) {
         ses <- c(ses, sei$se_betas)
       } else {
-        ses <- c(ses, rep(NA_real_, length(ini$betas)))
+        ses <- c(ses, rep(NA_real_, length(init$betas)))
       }
     }
 
     # loading (SE not computed here)
-    vals <- c(vals, unname(ini$loading))
-    ses  <- c(ses,  sei$se_loading)
+    vals <- c(vals, unname(init$loading))
+    ses  <- c(ses, rep(sei$se_loading, length(init$loading)))
+  }
+
+  # --- sanity check ---
+  if (length(vals) != length(ses)) {
+    stop("pack_values_with_ses: mismatch between values (", length(vals),
+         ") and ses (", length(ses), ")")
   }
 
   list(values = vals, ses = ses)
 }
+
+#
+# # --- pack values + computed SEs; factor variance first ---
+# pack_values_with_ses <- function(ms, inits, factor_var_first = 1.0) {
+#   vals <- numeric(0); ses <- numeric(0)
+#
+#   # 1) factor variance first
+#
+#   vals <- c(vals, unname(ini$loading))
+#   ses  <- c(ses, rep(sei$se_loading, length(ini$loading)))
+#
+#   # vals <- c(vals, factor_var_first)
+#   # ses  <- c(ses,  NA_real_)   # no SE for fixed normalization
+#
+#   # 2) for each component: intercept, betas, loading
+#   for (i in seq_along(inits)) {
+#     ini <- inits[[i]]
+#     mc  <- ms$components[[i]]
+#     sei <- compute_se_for_component(mc)
+#
+#     # intercept
+#     vals <- c(vals, unname(ini$intercept))
+#     ses  <- c(ses,  sei$se_intercept)
+#
+#     # betas
+#     if (length(ini$betas)) {
+#       vals <- c(vals, unname(ini$betas))
+#       # align lengths safely
+#       if (length(sei$se_betas) == length(ini$betas)) {
+#         ses <- c(ses, sei$se_betas)
+#       } else {
+#         ses <- c(ses, rep(NA_real_, length(ini$betas)))
+#       }
+#     }
+#
+#     # loading (SE not computed here)
+#     vals <- c(vals, unname(ini$loading))
+#     ses  <- c(ses,  sei$se_loading)
+#   }
+#
+#   list(values = vals, ses = ses)
+# }
 
 # --- writer unchanged ---
 write_meas_par <- function(values, ses, path = file.path("results","meas_par.txt")) {
