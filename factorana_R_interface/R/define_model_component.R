@@ -8,7 +8,6 @@
 #' @param covariates List of Character vectors. Names of covariates.
 #' @param model_type Character. Type of model (e.g., "linear", "logit", "probit").
 #' @param intercept Logical. Whether to include an intercept (default = TRUE).
-#' @param factor_normalization Numeric. Factor loading normalization constant (default = 1).
 #' @param num_choices Integer. Number of choices (for multinomial models).
 #' @param nrank Integer (optional). Rank for exploded multinomial logit.
 #'
@@ -23,7 +22,6 @@ define_model_component <- function(name,
                                    covariates,
                                    model_type = c("linear", "logit", "probit", "oprobit"),
                                    intercept = TRUE,
-                                   factor_normalization = 1,
                                    num_choices = 2,
                                    nrank = NULL) {
   #_____Basic checks____
@@ -35,6 +33,25 @@ define_model_component <- function(name,
 
   #is the factor model a list?
   if (!is.list(factor)) stop("`factor` must be a list.") #should it be a list or object of S3 class???
+
+  # factor model class + derive k and normalization
+  if (!inherits(factor, "factor_model")) {
+    stop("`factor` must be an object of class 'factor_model'.")
+  }
+
+  k <- as.integer(factor$n_factors)
+  if (is.na(k) || k < 1L) stop("factor$n_factors must be a positive integer")
+
+  # normalization lives on the factor model: length k, NA = free, numeric = fixed
+  if (is.null(factor$loading_normalization)) {
+    factor$loading_normalization <- rep(NA_real_, k)
+  } else {
+    if (!is.numeric(factor$loading_normalization) ||
+        length(factor$loading_normalization) != k) {
+      stop("`factor$loading_normalization` must be numeric and length ", k, ".")
+    }
+  }
+
 
   #evaluation indicator?
   if (!is.null(evaluation_indicator)) {
@@ -64,11 +81,6 @@ define_model_component <- function(name,
     stop("`intercept` must be a single TRUE/FALSE.")
   }
 
-  #factor_normalization: is it a constant?
-  if (!is.numeric(factor_normalization) || length(factor_normalization) != 1L) {
-    stop("`factor_normalization` must be a single numeric value.")
-  }
-
   #num_choices: is it within X? (speciy X later)
   num_choices <- as.integer(num_choices)
   if (model_type %in% c("logit", "probit") && num_choices != 2L) {
@@ -80,6 +92,9 @@ define_model_component <- function(name,
     nrank <- as.integer(nrank)
     if (!is.finite(nrank) || nrank < 1L) stop("`nrank` must be a positive integer when provided.")
   }
+
+
+
 
   ## ---- Data validity checks ----
 
@@ -187,6 +202,7 @@ define_model_component <- function(name,
     data[[outcome]] <- y_sub
   }
 
+  factor_normalization <- factor$loading_normalization
 
   #___output___
 
@@ -199,10 +215,11 @@ define_model_component <- function(name,
     covariates = covariates,
     model_type = model_type,
     intercept = intercept,
-    factor_normalization = factor_normalization,
     num_choices = num_choices,
     nrank = nrank,
-    nparam_model = length(covariates) + factor$n_factors + factor$n_types - 1 #this function needs to know the number of factors and number of types, need to pass from the factor model (?)
+    nparam_model = length(covariates) + factor$n_factors + factor$n_types - 1, #this function needs to know the number of factors and number of types, need to pass from the factor model (?)
+    k = k,
+    loading = rep(NA_real_, k)
   )
 
   class(out) <- "model_component"
@@ -229,6 +246,7 @@ get_factor.model_component <- function(x, ...) {
 }
 
 
+
 #' Print method for model_component objects
 #'
 #' @param x An object of class "model_component".
@@ -241,7 +259,8 @@ print.model_component <- function(x, ...) {
   cat("Outcome variable:        ", x$outcome, "\n")
   cat("Model type:              ", x$model_type, "\n")
   cat("Intercept:               ", ifelse(x$intercept, "Yes", "No"), "\n")
-  cat("Factor normalization:    ", x$factor_normalization, "\n")
+  cat("Loading normalization:   ",
+      paste0(x$factor$loading_normalization, collapse = ", "), "\n")
   cat("Number of choices:       ", x$num_choices, "\n")
   if (!is.null(x$nrank)) {
     cat("Rank (nrank):            ", x$nrank, "\n")

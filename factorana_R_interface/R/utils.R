@@ -32,3 +32,15 @@ high_na_cols <- function(df, threshold = 0.5) {
 
 # Safe NULL default operator (like `%||%` in rlang)
 `%||%` <- function(a, b) if (is.null(a)) b else a
+
+
+#' Apply loading constraints (internal)
+#' @keywords internal
+#' @noRd
+apply_loading_constraints <- function(loading, normalization) {
+  stopifnot(length(loading) == length(normalization))
+  fixed <- which(!is.na(normalization))
+  if (length(fixed)) loading[fixed] <- normalization[fixed]
+  loading
+}
+

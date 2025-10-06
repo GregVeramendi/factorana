@@ -39,6 +39,20 @@ initialize_parameters <- function(mc) {
 
   model_type <- mc$model_type
 
+  ## --- NEW: factor dimension and normalization ---
+  k <- if (!is.null(mc$k)) mc$k else as.integer(mc$factor$n_factors)
+  if (is.na(k) || k < 1L) stop("initialize_parameters: invalid k (number of factors).")
+  norm_vec <- mc$factor$loading_normalization
+  if (!is.numeric(norm_vec) || length(norm_vec) != k) {
+    stop("initialize_parameters: factor$loading_normalization must be numeric length k.")
+  }
+
+  # k-length default loadings, then apply constraints (NA = free; numeric = fixed)
+  init_loading <- rep(0.3, k)
+  fixed_idx <- which(!is.na(norm_vec))
+  if (length(fixed_idx)) init_loading[fixed_idx] <- norm_vec[fixed_idx]
+
+
   # we'll build 'out' in the branches and append common fields at the end
   out <- NULL
 
@@ -47,8 +61,8 @@ initialize_parameters <- function(mc) {
     coefs <- coef(fit)
     out <- list(
       intercept = unname(coefs[1]),
-      betas     = unname(coefs[-1]),
-      loading   = 0.1 * sd(y)
+      betas     = unname(coefs[-1])
+#      loading   = 0.1 * sd(y)
     )
 
   } else if (model_type == "probit") {
@@ -56,8 +70,8 @@ initialize_parameters <- function(mc) {
     coefs <- coef(fit)
     out <- list(
       intercept = unname(coefs[1]),
-      betas     = unname(coefs[-1]),
-      loading   = 0.1
+      betas     = unname(coefs[-1])
+ #     loading   = 0.1
     )
 
   } else if (model_type == "logit") {
@@ -69,8 +83,8 @@ initialize_parameters <- function(mc) {
     coefs <- coef(fit)
     out <- list(
       intercept = unname(coefs[1]),
-      betas     = unname(coefs[-1]),
-      loading   = 0.1
+      betas     = unname(coefs[-1])
+ #     loading   = 0.1
     )
 
   } else if (model_type == "oprobit") {
@@ -100,8 +114,9 @@ initialize_parameters <- function(mc) {
   }
 
   # ---- common defaults appended to whatever branch built 'out' ----
-  out$factor_var <- 1
-  out$factor_cor <- 0.1
+  out$loading <- init_loading
+  out$factor_var <- rep(1, k)
+  out$factor_cor <- diag(k)
   return(out)
 }
 
@@ -134,9 +149,9 @@ estimate_model <- function(ms, control){
       component = comp$name,
       intercept = init$intercept,
       betas = paste(init$betas, collapse = ";"),
-      loading = init$loading,
-      factor_var = init$factor_var,
-      factor_cor = init$factor_cor,
+      loading    = paste(init$loading, collapse = ";"),
+      factor_var = paste(init$factor_var, collapse = ";"),
+      factor_cor = paste(as.vector(init$factor_cor), collapse = ";"),
       stringsAsFactors = FALSE
     )
   }))
@@ -329,8 +344,6 @@ as_kv.model_component <- function(x, ...) {
                value=.to_chr(x$model_type), dtype="string"),
     data.frame(section="model_component", component=comp, key="intercept",
                value=.to_chr(x$intercept), dtype="bool"),
-    data.frame(section="model_component", component=comp, key="factor_normalization",
-               value=.to_chr(x$factor_normalization), dtype="double"),
     data.frame(section="model_component", component=comp, key="num_choices",
                value=.to_chr(x$num_choices), dtype="int"),
     data.frame(section="model_component", component=comp, key="nrank",
