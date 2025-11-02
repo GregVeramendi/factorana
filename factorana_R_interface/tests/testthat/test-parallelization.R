@@ -135,7 +135,7 @@ test_that("Parallelization: Roy model with 1, 2, and 4 cores produces identical 
         init_params = NULL,  # Use automatic initialization
         control = ctrl,
         parallel = (nc > 1),
-        optimizer = "nloptr",
+        optimizer = "nlminb",  # Fast with analytical Hessian
         verbose = FALSE
       )
     })["elapsed"]
@@ -164,6 +164,27 @@ test_that("Parallelization: Roy model with 1, 2, and 4 cores produces identical 
     cat(sprintf("4 core log-likelihood: %.6f\n", loglik_4core))
     cat(sprintf("Difference (1 vs 2 cores): %.2e\n", diff_2core))
     cat(sprintf("Difference (1 vs 4 cores): %.2e\n\n", diff_4core))
+  }
+
+  # Check parameter recovery (using 1-core result)
+  estimates_1core <- results[[1]]$estimates
+  param_errors <- abs(estimates_1core - true_params)
+  max_error <- max(param_errors)
+  mean_error <- mean(param_errors)
+
+  if (VERBOSE) {
+    cat("========================================\n")
+    cat("Parameter Recovery (1 core)\n")
+    cat("========================================\n")
+    cat(sprintf("Max absolute error: %.4f\n", max_error))
+    cat(sprintf("Mean absolute error: %.4f\n", mean_error))
+    cat("\nLargest errors:\n")
+    top_errors <- order(param_errors, decreasing = TRUE)[1:5]
+    for (i in top_errors) {
+      cat(sprintf("  Param %2d: true=%.4f, est=%.4f, error=%.4f\n",
+                  i, true_params[i], estimates_1core[i], param_errors[i]))
+    }
+    cat("\n")
   }
 
   # Performance metrics
@@ -196,7 +217,9 @@ test_that("Parallelization: Roy model with 1, 2, and 4 cores produces identical 
     loglik_2core = loglik_2core,
     loglik_4core = loglik_4core,
     diff_2core = diff_2core,
-    diff_4core = diff_4core
+    diff_4core = diff_4core,
+    max_param_error = max_error,
+    mean_param_error = mean_error
   )
 
   # Save log
@@ -215,6 +238,13 @@ test_that("Parallelization: Roy model with 1, 2, and 4 cores produces identical 
   # On some systems parallelization overhead may be high, so we only require >1.2x
   expect_true(speedup_4core > 1.2,
               info = sprintf("Expected speedup >1.2x with 4 cores, got %.2fx", speedup_4core))
+
+  # Parameter recovery checks
+  # With n=10,000, we expect reasonable recovery (max error < 0.3 is generous)
+  expect_true(max_error < 0.3,
+              info = sprintf("Parameter recovery failed: max error = %.4f", max_error))
+  expect_true(mean_error < 0.1,
+              info = sprintf("Parameter recovery failed: mean error = %.4f", mean_error))
 
   if (VERBOSE) cat("✓ All parallelization tests passed!\n\n")
 })
