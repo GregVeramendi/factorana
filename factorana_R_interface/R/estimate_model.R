@@ -53,9 +53,9 @@ initialize_parameters <- function(mc) {
   # ---- 4. Normalize factor loadings ----
   # Apply normalization constraints: NA = free, numeric = fixed value.
 
-  norm_vec <- mc$factor$loading_normalization
+  norm_vec <- mc$loading_normalization
   if (!is.numeric(norm_vec) || length(norm_vec) != k) {
-    stop("initialize_parameters: factor$loading_normalization must be numeric length k.")
+    stop("initialize_parameters: loading_normalization must be numeric length k.")
   }
 
   # k-length default loadings, then apply constraints (NA = free; numeric = fixed)

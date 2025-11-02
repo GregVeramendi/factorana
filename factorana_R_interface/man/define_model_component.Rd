@@ -5,21 +5,21 @@
 \title{Define a model component}
 \usage{
 define_model_component(
-  name = NULL,
+  name,
   data,
   outcome,
   factor,
   evaluation_indicator = NULL,
   covariates,
-  model_type = c("linear", "logit", "probit"),
+  model_type = c("linear", "logit", "probit", "oprobit"),
   intercept = TRUE,
-  factor_normalization = 1,
   num_choices = 2,
-  nrank = NULL
+  nrank = NULL,
+  loading_normalization = NULL
 )
 }
 \arguments{
-\item{name}{name of model component (Optional)}
+\item{name}{name of model component ####Long name and s name (like in the C++)}
 
 \item{data}{data.frame for validation}
 
@@ -35,11 +35,17 @@ define_model_component(
 
 \item{intercept}{Logical. Whether to include an intercept (default = TRUE).}
 
-\item{factor_normalization}{Numeric. Factor loading normalization constant (default = 1).}
-
 \item{num_choices}{Integer. Number of choices (for multinomial models).}
 
 \item{nrank}{Integer (optional). Rank for exploded multinomial logit.}
+
+\item{loading_normalization}{Numeric vector of length \code{n_factors} (optional).
+Component-specific loading constraints. Overrides factor model normalization.
+\itemize{
+\item \code{NA} → loading is free (estimated).
+\item numeric value → loading is fixed at that value (e.g. \code{1} for identification).
+If NULL, uses the factor model's default normalization.
+}}
 }
 \value{
 An object of class "model_component". A list representing the model component

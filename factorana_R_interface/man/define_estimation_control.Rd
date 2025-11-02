@@ -12,7 +12,7 @@ define_estimation_control(num_cores = 1)
 \item{model_system}{Object of class model_system.}
 }
 \value{
-An object of class \code{"estimation_control"} containing control settings
+An object of class estimation_control containing control settings
 }
 \description{
 Define estimation control settings

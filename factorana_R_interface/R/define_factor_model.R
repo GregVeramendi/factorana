@@ -2,17 +2,14 @@
 #'
 #' Creates an object of class `"factor_model"` that specifies the structure of the
 #' unobserved latent factors. This includes the number of factors, mixture components,
-#' quadrature points for numerical integration, and any fixed loading constraints.
+#' and quadrature points for numerical integration. Loading constraints are now
+#' specified at the component level via `define_model_component()`.
 #'
 #' @param n_factors Integer. Number of latent factors (>=1)
 #' @param n_types Integer. Number of types (>=1)
 #' @param n_quad_points Integer. Number of Gauss-Hermite quadrature points (>=1)
 #' @param correlation Logical. Whether to allow correlation between two factors (default = FALSE)
 #' @param n_mixtures Integer. Number of discrete mixtures (default = 1, allowed: 1-3)
-#' @param loading_normalization Numeric vector of length `n_factors`.
-#'   Specifies which loadings are fixed or free:
-#'   - `NA` → loading is free (estimated later).
-#'   - numeric value → loading is fixed at that value (e.g. `1` to normalize a factor).
 #'
 #' @return An object of class "factor_model"
 #' @export
@@ -20,8 +17,7 @@ define_factor_model <- function(n_factors,
                                 n_types,
                                 n_quad_points,
                                 correlation = FALSE,
-                                n_mixtures = 1,
-                                loading_normalization = NULL) {
+                                n_mixtures = 1) {
 
   # ---- 1. Input validation ----
   # Check all arguments are the correct type and within supported range.
@@ -44,20 +40,7 @@ define_factor_model <- function(n_factors,
                              (n_mixtures - 1L) * n_factors +
                              (n_mixtures - 1L))
 
-  k <- as.integer(n_factors)
-
-  # ---- 4. Handle loading normalization vector ----
-  # loading_normalization controls which loadings are fixed/free.
-  # Default: all NA = free parameters to be estimated.
-
-  if (is.null(loading_normalization)) {
-    loading_normalization <- rep(NA_real_, k)
-  } else {
-    stopifnot(is.numeric(loading_normalization),
-              length(loading_normalization) == k)
-  }
-
-  # ---- 5. Construct the factor_model object ----
+  # ---- 4. Construct the factor_model object ----
   # Bundle all parameters and metadata into a list, and assign class.
 
   out <- list(
@@ -66,9 +49,8 @@ define_factor_model <- function(n_factors,
     n_quad_points = as.integer(n_quad_points),
     correlation = correlation,
     n_mixtures = as.integer(n_mixtures),
-    nfac_param = nfac_param, #replaced with lines 36-38
-    params = rep(0.0, nfac_param),
-    loading_normalization = as.numeric(loading_normalization)
+    nfac_param = nfac_param,
+    params = rep(0.0, nfac_param)
   )
 
   class(out) <- "factor_model"
@@ -82,10 +64,10 @@ print.factor_model <- function(x, ...) {
   cat("------------\n")
   cat("Number of latent factors:", x$n_factors, "\n")
   cat("Number of types:", x$n_types, "\n")
-  cat("Number of quadrature points:        ", x$n_quad_points, "\n")
-  cat("Correlation allowed?:     ", x$correlation, "\n")
-  cat("Number of mixtures:       ", x$n_mixtures, "\n")
+  cat("Number of quadrature points:", x$n_quad_points, "\n")
+  cat("Correlation allowed?:", x$correlation, "\n")
+  cat("Number of mixtures:", x$n_mixtures, "\n")
   cat("Number of parameters in latent factor distribution:", x$nfac_param, "\n")
-  cat("Loading Normalization:", x$loading_normalization)
+  invisible(x)
 }
 

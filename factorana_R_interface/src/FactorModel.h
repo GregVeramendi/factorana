@@ -1,0 +1,103 @@
+#ifndef FACTORMODEL_H
+#define FACTORMODEL_H
+
+#include "Model.h"
+#include <vector>
+#include <memory>
+#include <Rcpp.h>
+#include <RcppEigen.h>
+
+class FactorModel {
+private:
+    // Data
+    int nobs;                          // Number of observations
+    int nvar;                          // Number of variables per observation
+    std::vector<double> data;          // Flattened data (nobs * nvar)
+
+    // Model components
+    std::vector<std::shared_ptr<Model>> models;  // Vector of model pointers
+
+    // Parameters
+    std::vector<double> param;         // Full parameter vector
+    std::vector<bool> param_fixed;     // Which parameters are fixed
+    int nparam;                        // Total number of parameters
+    int nparam_free;                   // Number of free parameters
+
+    // Factor structure
+    int nfac;                          // Number of factors
+    int ntyp;                          // Number of types
+    int nmix;                          // Number of mixture components (default 1)
+    bool fac_corr;                     // Whether factors are correlated
+
+    // Quadrature
+    int nquad_points;                  // Number of quadrature points per dimension
+    std::vector<double> quad_nodes;    // GH quadrature nodes (scaled for different npoints)
+    std::vector<double> quad_weights;  // GH quadrature weights
+
+    // Parameter organization
+    std::vector<int> param_model_start;  // Starting index for each model's parameters
+    std::vector<int> param_model_count;  // Number of parameters per model
+
+public:
+    // Constructor
+    FactorModel(int n_obs, int n_var, int n_fac, int n_typ = 0,
+                int n_mix = 1, bool correlated = false, int n_quad = 8);
+
+    // Add a model component
+    void AddModel(std::shared_ptr<Model> model, int nparams);
+
+    // Set data (flattened vector)
+    void SetData(const std::vector<double>& dat);
+    void SetData(const Eigen::MatrixXd& dat);  // Alternative: matrix form
+
+    // Set quadrature nodes and weights (computed in R)
+    void SetQuadrature(const std::vector<double>& nodes,
+                      const std::vector<double>& weights);
+
+    // Set which parameters are fixed
+    void SetParameterConstraints(const std::vector<bool>& fixed);
+
+    // Main likelihood calculation
+    // Computes likelihood, gradient, and Hessian for current parameter values
+    //
+    // Parameters:
+    //   free_params - Vector of free parameters only
+    //   logLkhd - Output: log-likelihood value
+    //   gradL - Output: gradient vector (size nparam_free)
+    //   hessL - Output: Hessian upper triangle (size nparam_free*(nparam_free+1)/2)
+    //   iflag - 1=likelihood only, 2=+gradient, 3=+Hessian
+    void CalcLkhd(const std::vector<double>& free_params,
+                  double& logLkhd,
+                  std::vector<double>& gradL,
+                  std::vector<double>& hessL,
+                  int iflag);
+
+    // Convenience wrapper that returns likelihood only
+    double CalcLogLikelihood(const std::vector<double>& free_params);
+
+    // Accessors
+    int GetNObs() const { return nobs; }
+    int GetNVar() const { return nvar; }
+    int GetNFac() const { return nfac; }
+    int GetNParam() const { return nparam; }
+    int GetNParamFree() const { return nparam_free; }
+
+private:
+    // Helper: Map free parameters to full parameter vector
+    void MapFreeToFull(const std::vector<double>& free_params);
+
+    // Helper: Extract gradient of free parameters from full gradient
+    void ExtractFreeGradient(const std::vector<double>& full_grad,
+                            std::vector<double>& free_grad);
+
+    // Helper: Extract Hessian of free parameters from full Hessian
+    void ExtractFreeHessian(const std::vector<double>& full_hess,
+                           std::vector<double>& free_hess);
+
+    // Helper: Get factor parameter indices
+    int GetFactorVarianceIndex(int imix, int ifac);
+    int GetFactorMeanIndex(int imix, int ifac);
+    int GetMixtureWeightIndex(int imix);
+};
+
+#endif // FACTORMODEL_H

@@ -4,13 +4,13 @@
 \alias{define_model_system}
 \title{Define a model system}
 \usage{
-define_model_system(components)
+define_model_system(components, factor)
 }
 \arguments{
 \item{components}{A named list of model_component objects}
 }
 \value{
-An object of class "model_system". A list of lists.
+An object of class "model_system". A list of model_component objects and one factor_model object.
 }
 \description{
 Define a model system

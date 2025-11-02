@@ -1,0 +1,88 @@
+
+R version 4.4.3 (2025-02-28) -- "Trophy Case"
+Copyright (C) 2025 The R Foundation for Statistical Computing
+Platform: aarch64-apple-darwin20
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+[Previously saved workspace restored]
+
+> #!/usr/bin/env Rscript
+> # Test multinomial logit implementation
+> # Demonstrates: discrete choice with 3+ unordered categories
+> 
+> library(factorana)
+
+Attaching package: ‘factorana’
+
+The following objects are masked _by_ ‘.GlobalEnv’:
+
+    as_kv, define_estimation_control, define_factor_model,
+    define_model_component, define_model_system, get_component_name,
+    get_factor, initialize_parameters, write_model_config_csv
+
+> 
+> cat("========================================\n")
+========================================
+> cat("Multinomial Logit Model Test\n")
+Multinomial Logit Model Test
+> cat("========================================\n\n")
+========================================
+
+> 
+> # ===== Generate multinomial choice data =====
+> cat("Generating synthetic data with 3 unordered choices...\n")
+Generating synthetic data with 3 unordered choices...
+> set.seed(42)
+> n <- 150
+> 
+> # Latent utilities for 3 choices (choice 0 is reference)
+> f1 <- rnorm(n)
+> x1 <- rnorm(n)
+> intercept <- rep(1, n)
+> 
+> # Utilities for choice 1 and choice 2 (choice 0 has utility 0)
+> U1 <- 0.5*intercept + 0.3*x1 + 0.4*f1 + rnorm(n)
+> U2 <- -0.3*intercept + 0.5*x1 + 0.6*f1 + rnorm(n)
+> 
+> # Observed choice = arg max utility
+> Y_choice <- rep(1, n)  # Default to choice 1 (reference)
+> Y_choice[U1 > 0 & U1 > U2] <- 2  # Choice 1
+> Y_choice[U2 > 0 & U2 > U1] <- 3  # Choice 2
+> 
+> # Category distribution
+> cat("  Sample size:", n, "\n")
+  Sample size: 150 
+> cat("  Choice counts:\n")
+  Choice counts:
+> print(table(Y_choice))
+Y_choice
+ 1  2  3 
+36 83 31 
+> cat("\n")
+
+> 
+> dat <- data.frame(Y = Y_choice, intercept = intercept, x1 = x1, eval = 1)
+> 
+> # ===== Define multinomial logit model =====
+> cat("Defining multinomial logit factor model...\n")
+Defining multinomial logit factor model...
+> fm <- define_factor_model(
++   n_factors = 1,
++   n_types = 1,
++   n_quad = 8,
++   loading_normalization = NA_real_
++ )
+Error in define_factor_model(n_factors = 1, n_types = 1, n_quad = 8, loading_normalization = NA_real_) : 
+  unused argument (loading_normalization = NA)
+Execution halted

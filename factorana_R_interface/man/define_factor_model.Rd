@@ -9,7 +9,8 @@ define_factor_model(
   n_types,
   n_quad_points,
   correlation = FALSE,
-  n_mixtures = 1
+  n_mixtures = 1,
+  loading_normalization = NULL
 )
 }
 \arguments{
@@ -22,10 +23,19 @@ define_factor_model(
 \item{correlation}{Logical. Whether to allow correlation between two factors (default = FALSE)}
 
 \item{n_mixtures}{Integer. Number of discrete mixtures (default = 1, allowed: 1-3)}
+
+\item{loading_normalization}{Numeric vector of length \code{n_factors}.
+Specifies which loadings are fixed or free:
+\itemize{
+\item \code{NA} → loading is free (estimated later).
+\item numeric value → loading is fixed at that value (e.g. \code{1} to normalize a factor).
+}}
 }
 \value{
 An object of class "factor_model"
 }
 \description{
-Define latent factor model structure
+Creates an object of class \code{"factor_model"} that specifies the structure of the
+unobserved latent factors. This includes the number of factors, mixture components,
+quadrature points for numerical integration, and any fixed loading constraints.
 }

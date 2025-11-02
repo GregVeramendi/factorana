@@ -10,6 +10,11 @@
 #' @param intercept Logical. Whether to include an intercept (default = TRUE).
 #' @param num_choices Integer. Number of choices (for multinomial models).
 #' @param nrank Integer (optional). Rank for exploded multinomial logit.
+#' @param loading_normalization Numeric vector of length `n_factors` (optional).
+#'   Component-specific loading constraints. Overrides factor model normalization.
+#'   - `NA` → loading is free (estimated).
+#'   - numeric value → loading is fixed at that value (e.g. `1` for identification).
+#'   If NULL, uses the factor model's default normalization.
 #'
 #' @return An object of class "model_component". A list representing the model component
 #' @export
@@ -23,7 +28,8 @@ define_model_component <- function(name,
                                    model_type = c("linear", "logit", "probit", "oprobit"),
                                    intercept = TRUE,
                                    num_choices = 2,
-                                   nrank = NULL) {
+                                   nrank = NULL,
+                                   loading_normalization = NULL) {
   # ---- 1. Basic argument checks ----
   # Confirm data types and presence of required columns/objects
 
@@ -47,13 +53,15 @@ define_model_component <- function(name,
   k <- as.integer(factor$n_factors)
   if (is.na(k) || k < 1L) stop("factor$n_factors must be a positive integer")
 
-  # normalization lives on the factor model: length k, NA = free, numeric = fixed
-  if (is.null(factor$loading_normalization)) {
-    factor$loading_normalization <- rep(NA_real_, k)
+  # Component-specific normalization (defaults to all free)
+  if (is.null(loading_normalization)) {
+    # Default: all loadings are free (NA)
+    loading_normalization <- rep(NA_real_, k)
   } else {
-    if (!is.numeric(factor$loading_normalization) ||
-        length(factor$loading_normalization) != k) {
-      stop("`factor$loading_normalization` must be numeric and length ", k, ".")
+    # Validate component-specific normalization
+    if (!is.numeric(loading_normalization) ||
+        length(loading_normalization) != k) {
+      stop("`loading_normalization` must be numeric and length ", k, ".")
     }
   }
 
@@ -90,8 +98,11 @@ define_model_component <- function(name,
 
   #num_choices: is it within X? (speciy X later)
   num_choices <- as.integer(num_choices)
-  if (model_type %in% c("logit", "probit") && num_choices != 2L) {
+  if (model_type == "probit" && num_choices != 2L) {
     stop("For binary ", model_type, ", `num_choices` must be 2.")
+  }
+  if (model_type == "logit" && num_choices < 2L) {
+    stop("For logit, `num_choices` must be >= 2.")
   }
 
   #n_rank: is it either NULL or > 1
@@ -201,7 +212,22 @@ define_model_component <- function(name,
   # ---- 11. Build output object ----
   # Assemble metadata, settings, and derived quantities into list
 
-  factor_normalization <- factor$loading_normalization
+  # Calculate number of FREE factor loadings (not fixed)
+  n_free_loadings <- sum(is.na(loading_normalization))
+
+  # Calculate number of model parameters based on model type
+  if (model_type == "logit" && num_choices > 2) {
+    # Multinomial logit: each non-reference choice has its own parameters
+    nparamchoice <- length(covariates) + n_free_loadings
+    nparam_model <- (num_choices - 1) * nparamchoice
+  } else if (model_type == "oprobit") {
+    # Ordered probit: shared coefficients + (num_choices - 1) thresholds
+    nparam_model <- length(covariates) + n_free_loadings + (num_choices - 1)
+  } else {
+    # Binary models (linear, probit, binary logit)
+    nparam_model <- length(covariates) + n_free_loadings
+    if (model_type == "linear") nparam_model <- nparam_model + 1  # Add sigma
+  }
 
   out <- list(
     name = name,
@@ -214,9 +240,10 @@ define_model_component <- function(name,
     intercept = intercept,
     num_choices = num_choices,
     nrank = nrank,
-    nparam_model = length(covariates) + factor$n_factors + factor$n_types - 1, #this function needs to know the number of factors and number of types, need to pass from the factor model (?)
+    nparam_model = nparam_model,
     k = k,
-    loading = rep(NA_real_, k)
+    loading = rep(NA_real_, k),
+    loading_normalization = loading_normalization
   )
 
   class(out) <- "model_component"
@@ -258,7 +285,7 @@ print.model_component <- function(x, ...) {
   cat("Model type:              ", x$model_type, "\n")
   cat("Intercept:               ", ifelse(x$intercept, "Yes", "No"), "\n")
   cat("Loading normalization:   ",
-      paste0(x$factor$loading_normalization, collapse = ", "), "\n")
+      paste0(x$loading_normalization, collapse = ", "), "\n")
   cat("Number of choices:       ", x$num_choices, "\n")
   if (!is.null(x$nrank)) {
     cat("Rank (nrank):            ", x$nrank, "\n")
