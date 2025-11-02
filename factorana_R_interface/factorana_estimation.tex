@@ -1,0 +1,623 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{natbib}
+
+\geometry{margin=1in}
+
+\newtheorem{definition}{Definition}
+\newtheorem{proposition}{Proposition}
+
+\title{Mathematical Documentation of the Factorana Package:\\Factor-Analytic Models with Mixed Outcome Types}
+\author{Factor Model Estimation Framework}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document provides comprehensive mathematical documentation for the \texttt{factorana} package, which implements maximum likelihood estimation of factor-analytic models with mixed outcome types. We describe the general factor model framework, specify the likelihood functions for linear, probit, multinomial logit, and ordered probit models, and derive the analytical gradients and Hessians used for optimization. The implementation uses Gauss-Hermite quadrature for numerical integration over latent factors and employs analytical derivatives for computational efficiency.
+\end{abstract}
+
+\tableofcontents
+
+\section{Introduction}
+
+The \texttt{factorana} package implements a flexible framework for estimating factor-analytic models where multiple observed outcomes depend on common latent factors. The framework accommodates mixed outcome types including continuous (linear), binary (probit), multinomial (logit), and ordered categorical (ordered probit) variables.
+
+The key features of the implementation include:
+\begin{itemize}
+\item Multiple latent factors with flexible identification strategies
+\item Integration over latent factor distributions via Gauss-Hermite quadrature
+\item Analytical gradients and Hessians for all model types
+\item Support for parameter constraints and normalization
+\item Efficient C++ implementation with R interface
+\end{itemize}
+
+\section{General Factor Model Structure}
+
+\subsection{Latent Factors}
+
+Consider a model with $K$ latent factors denoted $\mathbf{f} = (f_1, f_2, \ldots, f_K)'$. Each factor follows a normal distribution:
+\begin{equation}
+f_k \sim N(\mu_k, \sigma_k^2), \quad k = 1, \ldots, K
+\end{equation}
+
+In the standard specification, factors are centered ($\mu_k = 0$) and the variances $\sigma_k^2$ are either estimated or fixed for identification. The package supports independent factors by default, though the framework can be extended to allow factor correlations.
+
+\subsection{Model Components}
+
+The model consists of $M$ components, where each component $m$ represents an observed outcome $Y_m$ that depends on:
+\begin{itemize}
+\item Observed covariates $\mathbf{x}_m$
+\item Latent factors $\mathbf{f}$ through factor loadings $\boldsymbol{\lambda}_m$
+\item Component-specific parameters (regression coefficients, error variances, or thresholds)
+\end{itemize}
+
+\subsection{Linear Predictor}
+
+For each component $m$, the linear predictor is:
+\begin{equation}
+Z_m = \beta_{0m} + \sum_{j=1}^{p_m} \beta_{jm} x_{jm} + \sum_{k=1}^{K} \lambda_{km} f_k
+\label{eq:linear_predictor}
+\end{equation}
+
+where:
+\begin{itemize}
+\item $\beta_{0m}$ is the intercept
+\item $\beta_{jm}$ are regression coefficients for covariates
+\item $\lambda_{km}$ are factor loadings
+\end{itemize}
+
+\subsection{Parameter Vector}
+
+The complete parameter vector is organized as:
+\begin{equation}
+\boldsymbol{\theta} = \left[\sigma_1^2, \sigma_2^2, \ldots, \sigma_K^2 \mid \boldsymbol{\theta}_1 \mid \boldsymbol{\theta}_2 \mid \cdots \mid \boldsymbol{\theta}_M \right]
+\end{equation}
+
+where the first $K$ elements are factor variances and $\boldsymbol{\theta}_m$ contains the parameters specific to component $m$ (intercepts, regression coefficients, factor loadings, and model-specific parameters).
+
+\section{Likelihood Functions}
+
+\subsection{Component-Specific Likelihoods}
+
+We define the conditional likelihood contribution for component $m$ given observed data $Y_m$, covariates $\mathbf{x}_m$, and latent factors $\mathbf{f}$.
+
+\subsubsection{Linear Model}
+
+The linear model assumes:
+\begin{equation}
+Y_m = Z_m + \varepsilon_m, \quad \varepsilon_m \sim N(0, \sigma_m^2)
+\end{equation}
+
+The conditional likelihood contribution is:
+\begin{equation}
+L_m(\boldsymbol{\theta} \mid Y_m, \mathbf{x}_m, \mathbf{f}) = \frac{1}{\sigma_m} \phi\left(\frac{Y_m - Z_m}{\sigma_m}\right)
+\end{equation}
+
+where $\phi(\cdot)$ is the standard normal PDF. The log-likelihood contribution is:
+\begin{equation}
+\ell_m = -\log(\sigma_m) - \frac{(Y_m - Z_m)^2}{2\sigma_m^2}
+\label{eq:linear_loglik}
+\end{equation}
+
+\subsubsection{Binary Probit Model}
+
+For a binary outcome $Y_m \in \{0, 1\}$, the probit model specifies:
+\begin{equation}
+P(Y_m = 1 \mid \mathbf{x}_m, \mathbf{f}) = \Phi(Z_m)
+\end{equation}
+
+where $\Phi(\cdot)$ is the standard normal CDF. The conditional likelihood is:
+\begin{equation}
+L_m(\boldsymbol{\theta} \mid Y_m, \mathbf{x}_m, \mathbf{f}) = \Phi(s_m \cdot Z_m)
+\end{equation}
+
+where $s_m = 2Y_m - 1$ (i.e., $s_m = 1$ if $Y_m = 1$ and $s_m = -1$ if $Y_m = 0$).
+
+The log-likelihood contribution is:
+\begin{equation}
+\ell_m = \log \Phi(s_m \cdot Z_m)
+\label{eq:probit_loglik}
+\end{equation}
+
+\subsubsection{Multinomial Logit Model}
+
+For a categorical outcome $Y_m \in \{0, 1, \ldots, C-1\}$ with $C$ choices, we use choice 0 as the reference category. For each non-reference choice $c \geq 1$, define:
+\begin{equation}
+Z_{mc} = \beta_{0mc} + \sum_{j=1}^{p_m} \beta_{jmc} x_{jm} + \sum_{k=1}^{K} \lambda_{kmc} f_k
+\end{equation}
+
+The choice probabilities follow the multinomial logit specification:
+\begin{align}
+P(Y_m = c \mid \mathbf{x}_m, \mathbf{f}) &= \frac{\exp(Z_{mc})}{1 + \sum_{c'=1}^{C-1} \exp(Z_{mc'})}, \quad c = 1, \ldots, C-1 \\
+P(Y_m = 0 \mid \mathbf{x}_m, \mathbf{f}) &= \frac{1}{1 + \sum_{c'=1}^{C-1} \exp(Z_{mc'})}
+\end{align}
+
+The conditional likelihood is:
+\begin{equation}
+L_m(\boldsymbol{\theta} \mid Y_m, \mathbf{x}_m, \mathbf{f}) = P(Y_m = y_m \mid \mathbf{x}_m, \mathbf{f})
+\end{equation}
+
+Equivalently, using softmax notation with $Z_{m0} = 0$:
+\begin{equation}
+\pi_{mc} = \frac{\exp(Z_{mc})}{\sum_{c'=0}^{C-1} \exp(Z_{mc'})}, \quad c = 0, 1, \ldots, C-1
+\label{eq:mlogit_prob}
+\end{equation}
+
+The log-likelihood contribution is:
+\begin{equation}
+\ell_m = \log \pi_{m,y_m}
+\label{eq:mlogit_loglik}
+\end{equation}
+
+\subsubsection{Ordered Probit Model}
+
+For an ordered categorical outcome $Y_m \in \{1, 2, \ldots, C\}$ with $C$ ordered categories, define $C-1$ threshold parameters $\tau_1 < \tau_2 < \cdots < \tau_{C-1}$. Let:
+\begin{equation}
+Z_m = \beta_{0m} + \sum_{j=1}^{p_m} \beta_{jm} x_{jm} + \sum_{k=1}^{K} \lambda_{km} f_k
+\end{equation}
+
+The probability of observing category $c$ is:
+\begin{equation}
+P(Y_m = c \mid \mathbf{x}_m, \mathbf{f}) = \Phi(\tau_c - Z_m) - \Phi(\tau_{c-1} - Z_m)
+\end{equation}
+
+where $\tau_0 = -\infty$ and $\tau_C = +\infty$.
+
+The conditional likelihood is:
+\begin{equation}
+L_m(\boldsymbol{\theta} \mid Y_m, \mathbf{x}_m, \mathbf{f}) = \Phi(\tau_{y_m} - Z_m) - \Phi(\tau_{y_m-1} - Z_m)
+\label{eq:oprobit_lik}
+\end{equation}
+
+To ensure monotonicity $\tau_1 < \tau_2 < \cdots < \tau_{C-1}$, we parameterize:
+\begin{equation}
+\tau_1 = \theta_1, \quad \tau_c = \tau_{c-1} + |\theta_c|, \quad c = 2, \ldots, C-1
+\label{eq:threshold_param}
+\end{equation}
+
+The log-likelihood contribution is:
+\begin{equation}
+\ell_m = \log\left[\Phi(\tau_{y_m} - Z_m) - \Phi(\tau_{y_m-1} - Z_m)\right]
+\label{eq:oprobit_loglik}
+\end{equation}
+
+\subsection{Integrated Likelihood}
+
+For observation $i$, the marginal likelihood integrates over the latent factor distribution:
+\begin{equation}
+L(\boldsymbol{\theta} \mid \mathbf{Y}_i, \mathbf{X}_i) = \int \prod_{m=1}^{M} L_m(\boldsymbol{\theta} \mid Y_{im}, \mathbf{x}_{im}, \mathbf{f}) \cdot \prod_{k=1}^{K} \phi(f_k; \mu_k, \sigma_k^2) \, d\mathbf{f}
+\label{eq:marginal_lik}
+\end{equation}
+
+where $\mathbf{Y}_i$ and $\mathbf{X}_i$ denote the observed outcomes and covariates for observation $i$ across all components.
+
+The full sample log-likelihood is:
+\begin{equation}
+\ell(\boldsymbol{\theta}) = \sum_{i=1}^{N} \log L(\boldsymbol{\theta} \mid \mathbf{Y}_i, \mathbf{X}_i)
+\label{eq:full_loglik}
+\end{equation}
+
+\section{Gauss-Hermite Quadrature Integration}
+
+\subsection{One-Dimensional Gauss-Hermite Quadrature}
+
+Standard Gauss-Hermite quadrature approximates integrals of the form:
+\begin{equation}
+\int_{-\infty}^{\infty} g(x) e^{-x^2} \, dx \approx \sum_{q=1}^{Q} w_q \cdot g(x_q)
+\end{equation}
+
+where $\{x_q, w_q\}_{q=1}^Q$ are the Gauss-Hermite nodes and weights.
+
+To integrate against a standard normal density $\phi(f) = \frac{1}{\sqrt{2\pi}} e^{-f^2/2}$, we use:
+\begin{equation}
+\int_{-\infty}^{\infty} g(f) \phi(f) \, df \approx \sum_{q=1}^{Q} \tilde{w}_q \cdot g(\tilde{f}_q)
+\end{equation}
+
+where $\tilde{f}_q = \sqrt{2} x_q$ and $\tilde{w}_q = \frac{w_q}{\sqrt{\pi}}$.
+
+For a general normal distribution $N(\mu, \sigma^2)$, the transformation is:
+\begin{equation}
+f = \sigma \cdot \tilde{f}_q + \mu
+\label{eq:factor_transform}
+\end{equation}
+
+\subsection{Multi-Dimensional Integration}
+
+For $K$ independent factors, we use the tensor product of one-dimensional quadrature rules:
+\begin{equation}
+\int \cdots \int g(\mathbf{f}) \prod_{k=1}^{K} \phi(f_k; \mu_k, \sigma_k^2) \, d\mathbf{f} \approx \sum_{q_1=1}^{Q} \cdots \sum_{q_K=1}^{Q} \left(\prod_{k=1}^{K} \tilde{w}_{q_k}\right) \cdot g(\mathbf{f}_{q_1 \ldots q_K})
+\end{equation}
+
+where $\mathbf{f}_{q_1 \ldots q_K} = (\sigma_1 \tilde{f}_{q_1} + \mu_1, \ldots, \sigma_K \tilde{f}_{q_K} + \mu_K)'$.
+
+This requires $Q^K$ function evaluations. The implementation uses an ``odometer'' approach to iterate through all $Q^K$ integration points.
+
+\subsection{Approximated Marginal Likelihood}
+
+Applying Gauss-Hermite quadrature to equation~\eqref{eq:marginal_lik}:
+\begin{equation}
+L(\boldsymbol{\theta} \mid \mathbf{Y}_i, \mathbf{X}_i) \approx \sum_{q_1=1}^{Q} \cdots \sum_{q_K=1}^{Q} W_{\mathbf{q}} \cdot \prod_{m=1}^{M} L_m(\boldsymbol{\theta} \mid Y_{im}, \mathbf{x}_{im}, \mathbf{f}_{\mathbf{q}})
+\label{eq:approx_lik}
+\end{equation}
+
+where $W_{\mathbf{q}} = \prod_{k=1}^{K} \tilde{w}_{q_k}$ and $\mathbf{q} = (q_1, \ldots, q_K)$.
+
+\section{Gradient Derivations}
+
+The gradient of the log-likelihood combines chain rule derivatives through the integrated likelihood. For each observation $i$:
+\begin{equation}
+\frac{\partial \ell_i}{\partial \theta_j} = \frac{1}{L_i} \cdot \frac{\partial L_i}{\partial \theta_j}
+\label{eq:grad_general}
+\end{equation}
+
+where:
+\begin{equation}
+\frac{\partial L_i}{\partial \theta_j} = \sum_{\mathbf{q}} W_{\mathbf{q}} \cdot \prod_{m=1}^{M} L_{im}(\mathbf{f}_{\mathbf{q}}) \cdot \sum_{m'=1}^{M} \frac{1}{L_{im'}(\mathbf{f}_{\mathbf{q}})} \cdot \frac{\partial L_{im'}(\mathbf{f}_{\mathbf{q}})}{\partial \theta_j}
+\label{eq:grad_integrated}
+\end{equation}
+
+and $L_{im}(\mathbf{f}_{\mathbf{q}}) = L_m(\boldsymbol{\theta} \mid Y_{im}, \mathbf{x}_{im}, \mathbf{f}_{\mathbf{q}})$.
+
+Equivalently:
+\begin{equation}
+\frac{\partial L_i}{\partial \theta_j} = \sum_{\mathbf{q}} W_{\mathbf{q}} \cdot L_{i}(\mathbf{f}_{\mathbf{q}}) \cdot \sum_{m=1}^{M} \frac{\partial \log L_{im}(\mathbf{f}_{\mathbf{q}})}{\partial \theta_j}
+\end{equation}
+
+where $L_i(\mathbf{f}_{\mathbf{q}}) = \prod_{m=1}^{M} L_{im}(\mathbf{f}_{\mathbf{q}})$.
+
+\subsection{Factor Variance Gradient}
+
+For parameters related to factor variances, the chain rule introduces an additional term:
+\begin{equation}
+\frac{\partial f_k}{\partial \sigma_k^2} = \frac{x_q}{2\sigma_k}
+\label{eq:factor_deriv}
+\end{equation}
+
+where $x_q$ is the Gauss-Hermite node at the current integration point.
+
+\subsection{Linear Model Gradients}
+
+Let $\tilde{Z}_m = Y_m - Z_m$. From equation~\eqref{eq:linear_loglik}:
+
+\paragraph{w.r.t. factor variance $\sigma_k^2$:}
+\begin{equation}
+\frac{\partial \ell_m}{\partial \sigma_k^2} = \frac{\tilde{Z}_m \cdot \lambda_{km}}{\sigma_m^2} \cdot \frac{x_q}{2\sigma_k}
+\end{equation}
+
+\paragraph{w.r.t. factor loading $\lambda_{km}$:}
+\begin{equation}
+\frac{\partial \ell_m}{\partial \lambda_{km}} = \frac{\tilde{Z}_m \cdot f_k}{\sigma_m^2}
+\end{equation}
+
+\paragraph{w.r.t. regression coefficient $\beta_{jm}$:}
+\begin{equation}
+\frac{\partial \ell_m}{\partial \beta_{jm}} = \frac{\tilde{Z}_m \cdot x_{jm}}{\sigma_m^2}
+\end{equation}
+
+\paragraph{w.r.t. error standard deviation $\sigma_m$:}
+\begin{equation}
+\frac{\partial \ell_m}{\partial \sigma_m} = \frac{\tilde{Z}_m^2 - \sigma_m^2}{\sigma_m^3}
+\end{equation}
+
+\subsection{Probit Model Gradients}
+
+Define the inverse Mills ratio (also called the lambda function):
+\begin{equation}
+\lambda(z) = \frac{\phi(z)}{\Phi(z)}
+\label{eq:mills_ratio}
+\end{equation}
+
+From equation~\eqref{eq:probit_loglik}:
+\begin{equation}
+\frac{\partial \log \Phi(s_m Z_m)}{\partial Z_m} = s_m \cdot \lambda(s_m Z_m)
+\end{equation}
+
+\paragraph{w.r.t. factor variance $\sigma_k^2$:}
+\begin{equation}
+\frac{\partial \ell_m}{\partial \sigma_k^2} = \lambda(s_m Z_m) \cdot s_m \cdot \lambda_{km} \cdot \frac{x_q}{2\sigma_k}
+\end{equation}
+
+\paragraph{w.r.t. factor loading $\lambda_{km}$:}
+\begin{equation}
+\frac{\partial \ell_m}{\partial \lambda_{km}} = \lambda(s_m Z_m) \cdot s_m \cdot f_k
+\end{equation}
+
+\paragraph{w.r.t. regression coefficient $\beta_{jm}$:}
+\begin{equation}
+\frac{\partial \ell_m}{\partial \beta_{jm}} = \lambda(s_m Z_m) \cdot s_m \cdot x_{jm}
+\end{equation}
+
+\subsection{Multinomial Logit Gradients}
+
+Let $\pi_{mc}$ be the probability from equation~\eqref{eq:mlogit_prob} and let $\mathbb{I}[Y_m = c]$ be an indicator function.
+
+The gradient of the log-likelihood w.r.t. $Z_{mc}$ is:
+\begin{equation}
+\frac{\partial \ell_m}{\partial Z_{mc}} = \mathbb{I}[Y_m = c] - \pi_{mc}
+\end{equation}
+
+\paragraph{w.r.t. choice-specific regression coefficient $\beta_{jmc}$:}
+\begin{equation}
+\frac{\partial \ell_m}{\partial \beta_{jmc}} = (\mathbb{I}[Y_m = c] - \pi_{mc}) \cdot x_{jm}
+\end{equation}
+
+\paragraph{w.r.t. choice-specific factor loading $\lambda_{kmc}$:}
+\begin{equation}
+\frac{\partial \ell_m}{\partial \lambda_{kmc}} = (\mathbb{I}[Y_m = c] - \pi_{mc}) \cdot f_k
+\end{equation}
+
+\paragraph{w.r.t. factor variance $\sigma_k^2$:}
+\begin{equation}
+\frac{\partial \ell_m}{\partial \sigma_k^2} = \sum_{c=1}^{C-1} \lambda_{kmc} \cdot (\mathbb{I}[Y_m = c] - \pi_{mc}) \cdot \frac{x_q}{2\sigma_k}
+\end{equation}
+
+\subsection{Ordered Probit Gradients}
+
+Let $l = y_m - 1$ and $u = y_m$ denote the lower and upper thresholds for the observed category. Define:
+\begin{align}
+\text{PDF}_l &= \phi(\tau_l - Z_m) \\
+\text{PDF}_u &= \phi(\tau_u - Z_m) \\
+\text{CDF} &= \Phi(\tau_u - Z_m) - \Phi(\tau_l - Z_m)
+\end{align}
+
+From equation~\eqref{eq:oprobit_loglik}:
+\begin{equation}
+\frac{\partial \ell_m}{\partial Z_m} = -\frac{\text{PDF}_u - \text{PDF}_l}{\text{CDF}}
+\end{equation}
+
+\paragraph{w.r.t. factor variance $\sigma_k^2$:}
+\begin{equation}
+\frac{\partial \ell_m}{\partial \sigma_k^2} = -\frac{\text{PDF}_u - \text{PDF}_l}{\text{CDF}} \cdot \lambda_{km} \cdot \frac{x_q}{2\sigma_k}
+\end{equation}
+
+\paragraph{w.r.t. factor loading $\lambda_{km}$:}
+\begin{equation}
+\frac{\partial \ell_m}{\partial \lambda_{km}} = -\frac{\text{PDF}_u - \text{PDF}_l}{\text{CDF}} \cdot f_k
+\end{equation}
+
+\paragraph{w.r.t. regression coefficient $\beta_{jm}$:}
+\begin{equation}
+\frac{\partial \ell_m}{\partial \beta_{jm}} = -\frac{\text{PDF}_u - \text{PDF}_l}{\text{CDF}} \cdot x_{jm}
+\end{equation}
+
+\paragraph{w.r.t. threshold parameter $\tau_c$:}
+\begin{equation}
+\frac{\partial \ell_m}{\partial \tau_c} = \begin{cases}
+\frac{\text{PDF}_u - \text{PDF}_l}{\text{CDF}} & \text{if } l < c \leq u \\
+0 & \text{otherwise}
+\end{cases}
+\end{equation}
+
+Due to the parameterization in equation~\eqref{eq:threshold_param}, additional chain rule terms apply when computing derivatives w.r.t. $\theta_c$.
+
+\section{Hessian Derivations}
+
+The Hessian of the log-likelihood requires second derivatives through the integrated likelihood:
+\begin{equation}
+\frac{\partial^2 \ell_i}{\partial \theta_j \partial \theta_k} = \frac{1}{L_i} \cdot \frac{\partial^2 L_i}{\partial \theta_j \partial \theta_k} - \frac{1}{L_i^2} \cdot \frac{\partial L_i}{\partial \theta_j} \cdot \frac{\partial L_i}{\partial \theta_k}
+\label{eq:hess_general}
+\end{equation}
+
+The second term in equation~\eqref{eq:hess_general} is the outer product of gradients (OPG). The first term involves:
+\begin{multline}
+\frac{\partial^2 L_i}{\partial \theta_j \partial \theta_k} = \sum_{\mathbf{q}} W_{\mathbf{q}} \cdot L_i(\mathbf{f}_{\mathbf{q}}) \cdot \\
+\left[\sum_{m=1}^{M} \frac{\partial^2 \log L_{im}(\mathbf{f}_{\mathbf{q}})}{\partial \theta_j \partial \theta_k} + \sum_{m=1}^{M} \frac{\partial \log L_{im}(\mathbf{f}_{\mathbf{q}})}{\partial \theta_j} \cdot \sum_{m'=1}^{M} \frac{\partial \log L_{im'}(\mathbf{f}_{\mathbf{q}})}{\partial \theta_k}\right]
+\label{eq:hess_integrated}
+\end{multline}
+
+\subsection{Factor Variance Hessian Terms}
+
+For cross-derivatives involving factor variances, the chain rule from equation~\eqref{eq:factor_deriv} gives:
+\begin{equation}
+\frac{\partial^2}{\partial \sigma_i^2 \partial \sigma_j^2} = \frac{\partial^2}{\partial f_i \partial f_j} \cdot \frac{\partial f_i}{\partial \sigma_i^2} \cdot \frac{\partial f_j}{\partial \sigma_j^2} = \frac{\partial^2}{\partial f_i \partial f_j} \cdot \frac{x_{q_i}}{2\sigma_i} \cdot \frac{x_{q_j}}{2\sigma_j}
+\label{eq:factor_hess_chain}
+\end{equation}
+
+This chain rule factor must be applied to all Hessian elements involving factor variance parameters.
+
+\subsection{Linear Model Hessian}
+
+The base Hessian for the linear model (before applying chain rule factors) is:
+\begin{equation}
+\frac{\partial^2 \ell_m}{\partial \theta_i \partial \theta_j} = -\frac{1}{\sigma_m^2} \cdot \frac{\partial Z_m}{\partial \theta_i} \cdot \frac{\partial Z_m}{\partial \theta_j}
+\end{equation}
+
+for parameters affecting the linear predictor $Z_m$.
+
+\paragraph{Cross-derivative (factor variance $\times$ loading):}
+\begin{equation}
+\frac{\partial^2 \ell_m}{\partial \sigma_k^2 \partial \lambda_{km}} = \frac{\tilde{Z}_m}{\sigma_m^2}
+\end{equation}
+
+after applying the chain rule factor $\frac{x_q}{2\sigma_k}$ to the row for $\sigma_k^2$.
+
+\paragraph{w.r.t. error standard deviation $\sigma_m$:}
+\begin{equation}
+\frac{\partial^2 \ell_m}{\partial \sigma_m^2} = \frac{1}{\sigma_m^2} - \frac{3\tilde{Z}_m^2}{\sigma_m^4}
+\end{equation}
+
+\begin{equation}
+\frac{\partial^2 \ell_m}{\partial \theta_i \partial \sigma_m} = \frac{2\tilde{Z}_m}{\sigma_m} \cdot \frac{\partial \tilde{Z}_m}{\partial \theta_i}
+\end{equation}
+
+\subsection{Probit Model Hessian}
+
+Define:
+\begin{equation}
+\lambda(z) = \frac{\phi(z)}{\Phi(z)}, \quad z = s_m Z_m
+\end{equation}
+
+The second derivative structure is:
+\begin{equation}
+\frac{\partial^2 \log \Phi(z)}{\partial \theta_i \partial \theta_j} = -\left[z \cdot \lambda(z) + \lambda^2(z)\right] \cdot \frac{\partial z}{\partial \theta_i} \cdot \frac{\partial z}{\partial \theta_j} \cdot \frac{\phi(z)}{\Phi(z)}
+\end{equation}
+
+The Hessian is computed by:
+\begin{enumerate}
+\item Initialize base Hessian to 1.0
+\item Multiply rows by gradient terms: $-[z \lambda + \lambda^2]$
+\item Multiply columns by gradient terms
+\item Add cross-derivative corrections (e.g., for factor variance $\times$ loading: add $s_m$)
+\item Multiply all elements by $\phi(z)/\Phi(z)$
+\end{enumerate}
+
+\subsection{Multinomial Logit Hessian}
+
+The Hessian for multinomial logit uses the Jacobian of the softmax function:
+\begin{equation}
+\frac{\partial^2 \ell_m}{\partial Z_{mc} \partial Z_{mc'}} = \begin{cases}
+-\pi_{mc}(1 - \pi_{mc}) & \text{if } c = c' \\
+\pi_{mc} \pi_{mc'} & \text{if } c \neq c'
+\end{cases}
+\end{equation}
+
+For choice-specific parameters:
+\begin{equation}
+\frac{\partial^2 \ell_m}{\partial \theta_{ic} \partial \theta_{jc'}} = -\pi_{mc} \pi_{mc'} \cdot \frac{\partial Z_{mc}}{\partial \theta_{ic}} \cdot \frac{\partial Z_{mc'}}{\partial \theta_{jc'}}
+\end{equation}
+
+when $c \neq c'$, with an additional $\pi_{mc}$ term when $c = c'$.
+
+\paragraph{Cross-derivative (factor variance $\times$ loading):}
+\begin{equation}
+\frac{\partial^2 \ell_m}{\partial \sigma_k^2 \partial \lambda_{kmc}} = \mathbb{I}[Y_m = c] - \pi_{mc}
+\end{equation}
+
+after applying chain rule factors.
+
+\subsection{Ordered Probit Hessian}
+
+The Hessian for ordered probit combines contributions from both thresholds. For each threshold $t \in \{l, u\}$ with sign $s_t$ ($s_l = -1$, $s_u = +1$):
+\begin{equation}
+\frac{\partial^2 \log \phi(\tau_t - Z_m)}{\partial \theta_i \partial \theta_j} = -\left[(\tau_t - Z_m) \cdot \lambda_t + \lambda_t^2\right] \cdot \frac{\partial Z_m}{\partial \theta_i} \cdot \frac{\partial Z_m}{\partial \theta_j} \cdot \frac{\text{PDF}_t}{\text{CDF}}
+\end{equation}
+
+where $\lambda_t$ is the gradient contribution at threshold $t$.
+
+The full Hessian is:
+\begin{equation}
+\frac{\partial^2 \ell_m}{\partial \theta_i \partial \theta_j} = \sum_{t \in \{l,u\}} s_t \cdot \frac{\partial^2 \log \phi(\tau_t - Z_m)}{\partial \theta_i \partial \theta_j}
+\end{equation}
+
+Additional terms arise for derivatives involving threshold parameters themselves.
+
+\section{Implementation Notes}
+
+\subsection{Parameter Constraints}
+
+The implementation supports:
+\begin{itemize}
+\item Fixed parameters (excluded from optimization): $\theta_j = c$ (constant)
+\item Box constraints: $\theta_j \in [l_j, u_j]$
+\item Default sigma constraint: $\sigma_m \geq 0.01$
+\item Factor variance constraints for identification
+\end{itemize}
+
+Only free parameters are included in the optimization vector, with gradients and Hessians extracted for the free parameter subset.
+
+\subsection{Loading Normalization}
+
+Factor loadings can be:
+\begin{itemize}
+\item Fixed to a specific value (e.g., 0 or 1) for identification
+\item Estimated freely
+\end{itemize}
+
+The normalization strategy determines which loadings are fixed and which factor variances are estimated.
+
+\subsection{Numerical Stability}
+
+Several numerical safeguards are implemented:
+\begin{itemize}
+\item CDF and PDF values below $10^{-50}$ are replaced with $10^{-50}$
+\item Log-likelihood returns $-10^{10}$ for numerical underflow
+\item Threshold parameterization uses absolute values to ensure monotonicity
+\item Hessian is stored as upper triangle only to reduce memory
+\end{itemize}
+
+\subsection{Computation of Gauss-Hermite Nodes and Weights}
+
+The nodes $x_q$ are the roots of the Hermite polynomial $H_Q(x)$, computed using Newton iteration with the recurrence relation:
+\begin{align}
+H_0(x) &= 1 \\
+H_1(x) &= 2x \\
+H_{n+1}(x) &= 2x H_n(x) - 2n H_{n-1}(x)
+\end{align}
+
+The weights are:
+\begin{equation}
+w_q = \frac{2^{Q-1} Q! \sqrt{\pi}}{Q^2 [H_{Q-1}(x_q)]^2}
+\end{equation}
+
+\subsection{Hessian Storage}
+
+The Hessian matrix is symmetric and is stored as the upper triangle only. For a parameter vector of length $p$, the Hessian is stored as a flattened vector of length $p(p+1)/2$ with index mapping:
+\begin{equation}
+\text{index}(i,j) = i \cdot p + j, \quad i \leq j
+\end{equation}
+
+The R interface converts this to a full symmetric matrix.
+
+\section{Optimization}
+
+The package supports multiple optimizers:
+\begin{itemize}
+\item \texttt{nlminb}: Uses gradient and Hessian
+\item \texttt{optim} (L-BFGS-B): Uses gradient only
+\item \texttt{nloptr}: Supports various algorithms with gradient
+\item \texttt{trust}: Trust region method using Hessian
+\end{itemize}
+
+All optimizers work with the free parameter vector and use analytical gradients. The Hessian is available for methods that can exploit second-order information.
+
+\section{Conclusion}
+
+The \texttt{factorana} package implements a comprehensive framework for factor-analytic models with mixed outcome types. The analytical gradients and Hessians enable efficient optimization, while Gauss-Hermite quadrature provides accurate numerical integration over latent factors. The flexible implementation supports various identification strategies, parameter constraints, and model specifications.
+
+\appendix
+
+\section{Notation Summary}
+
+\begin{tabular}{ll}
+$K$ & Number of latent factors \\
+$M$ & Number of model components (outcomes) \\
+$N$ & Sample size \\
+$\mathbf{f} = (f_1, \ldots, f_K)'$ & Latent factor vector \\
+$\sigma_k^2$ & Variance of factor $k$ \\
+$Y_m$ & Outcome for component $m$ \\
+$\mathbf{x}_m$ & Covariates for component $m$ \\
+$\beta_{jm}$ & Regression coefficient for covariate $j$ in component $m$ \\
+$\lambda_{km}$ & Loading of factor $k$ in component $m$ \\
+$Z_m$ & Linear predictor for component $m$ \\
+$\sigma_m$ & Error standard deviation (linear model) \\
+$\tau_c$ & Threshold parameter (ordered probit) \\
+$\phi(\cdot)$ & Standard normal PDF \\
+$\Phi(\cdot)$ & Standard normal CDF \\
+$Q$ & Number of quadrature points per dimension \\
+$x_q, w_q$ & Gauss-Hermite nodes and weights \\
+$\boldsymbol{\theta}$ & Full parameter vector \\
+$\ell(\boldsymbol{\theta})$ & Log-likelihood function \\
+\end{tabular}
+
+\section{Code Reference}
+
+Implementation locations in the C++ source code:
+\begin{itemize}
+\item Factor model structure: \texttt{src/FactorModel.h}, \texttt{src/FactorModel.cpp}
+\item Model components: \texttt{src/Model.h}, \texttt{src/Model.cpp}
+\item Gauss-Hermite quadrature: \texttt{src/gauss\_hermite.h}, \texttt{src/gauss\_hermite.cpp}
+\item Linear model: lines 123--250 in \texttt{src/Model.cpp}
+\item Probit model: lines 252--382 in \texttt{src/Model.cpp}
+\item Multinomial logit: lines 384--670 in \texttt{src/Model.cpp}
+\item Ordered probit: lines 672--883 in \texttt{src/Model.cpp}
+\item R interface: \texttt{R/estimate\_model.R}, \texttt{R/optimize\_model.R}
+\end{itemize}
+
+\end{document}

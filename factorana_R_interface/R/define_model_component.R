@@ -51,17 +51,21 @@ define_model_component <- function(name,
   # Pull number of factors and ensure valid loading_normalization setup
 
   k <- as.integer(factor$n_factors)
-  if (is.na(k) || k < 1L) stop("factor$n_factors must be a positive integer")
+  if (is.na(k) || k < 0L) stop("factor$n_factors must be a non-negative integer")
 
   # Component-specific normalization (defaults to all free)
   if (is.null(loading_normalization)) {
-    # Default: all loadings are free (NA)
-    loading_normalization <- rep(NA_real_, k)
+    # Default: all loadings are free (NA) if k > 0, empty vector if k = 0
+    loading_normalization <- if (k > 0) rep(NA_real_, k) else numeric(0)
   } else {
     # Validate component-specific normalization
     if (!is.numeric(loading_normalization) ||
         length(loading_normalization) != k) {
-      stop("`loading_normalization` must be numeric and length ", k, ".")
+      if (k == 0) {
+        stop("`loading_normalization` must be numeric(0) when n_factors = 0.")
+      } else {
+        stop("`loading_normalization` must be numeric and length ", k, ".")
+      }
     }
   }
 

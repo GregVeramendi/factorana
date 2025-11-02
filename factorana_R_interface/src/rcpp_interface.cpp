@@ -95,14 +95,21 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8) {
 
     // Compute and set quadrature
     std::vector<double> nodes, weights;
-    calcgausshermitequadrature(n_quad, nodes, weights);
 
-    // Scale for standard normal: x_scaled = sqrt(2) * x, w_scaled = w / sqrt(pi)
-    double sqrt2 = std::sqrt(2.0);
-    double sqrt_pi = std::sqrt(M_PI);
-    for (int i = 0; i < n_quad; i++) {
-        nodes[i] *= sqrt2;
-        weights[i] /= sqrt_pi;
+    // Special case: if n_fac == 0, use single integration point at 0 with weight 1
+    if (n_fac == 0) {
+        nodes.push_back(0.0);
+        weights.push_back(1.0);
+    } else {
+        calcgausshermitequadrature(n_quad, nodes, weights);
+
+        // Scale for standard normal: x_scaled = sqrt(2) * x, w_scaled = w / sqrt(pi)
+        double sqrt2 = std::sqrt(2.0);
+        double sqrt_pi = std::sqrt(M_PI);
+        for (int i = 0; i < n_quad; i++) {
+            nodes[i] *= sqrt2;
+            weights[i] /= sqrt_pi;
+        }
     }
 
     fm->SetQuadrature(nodes, weights);

@@ -5,7 +5,7 @@
 #' and quadrature points for numerical integration. Loading constraints are now
 #' specified at the component level via `define_model_component()`.
 #'
-#' @param n_factors Integer. Number of latent factors (>=1)
+#' @param n_factors Integer. Number of latent factors (>=0). Use 0 for models without latent factors.
 #' @param n_types Integer. Number of types (>=1)
 #' @param n_quad_points Integer. Number of Gauss-Hermite quadrature points (>=1)
 #' @param correlation Logical. Whether to allow correlation between two factors (default = FALSE)
@@ -22,7 +22,7 @@ define_factor_model <- function(n_factors,
   # ---- 1. Input validation ----
   # Check all arguments are the correct type and within supported range.
 
-  if (!is.numeric(n_factors) || n_factors < 1) stop("n_factors must be a positive integer.")
+  if (!is.numeric(n_factors) || n_factors < 0) stop("n_factors must be a non-negative integer.")
   if (!is.numeric(n_types) || n_types < 1) stop("n_types must be a positive integer")
   if (!is.numeric(n_quad_points) || n_quad_points < 1) stop("n_quad_points must be a positive integer.")
   if (!is.logical(correlation)) stop("correlation must be either TRUE or FALSE")
