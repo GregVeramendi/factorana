@@ -4,25 +4,40 @@ test_that("Gauss-Hermite quadrature accuracy", {
   set.seed(888)
   n <- 500
 
-  # Generate data without √2 factor (our corrected implementation)
+  # Generate measurement system with three tests (like Roy model)
   f <- rnorm(n, 0, 1)
-  Y <- 1.0 + 1.0*f + rnorm(n, 0, 0.5)
+  T1 <- 2.0 + 1.0*f + rnorm(n, 0, 0.5)  # Loading fixed to 1.0
+  T2 <- 1.5 + 1.2*f + rnorm(n, 0, 0.6)  # Loading ~1.2
+  T3 <- 1.0 + 0.8*f + rnorm(n, 0, 0.4)  # Loading ~0.8
 
-  dat <- data.frame(intercept=1, Y=Y, eval=1)
+  dat <- data.frame(
+    intercept = 1,
+    T1 = T1, T2 = T2, T3 = T3,
+    eval = 1
+  )
 
   # Test with different quadrature points
   for (n_quad in c(8, 16)) {
     fm <- define_factor_model(n_factors=1, n_types=1, n_quad=n_quad)
-    mc <- define_model_component(name="Y", data=dat, outcome="Y", factor=fm,
+
+    # Define three measurement components
+    mc1 <- define_model_component(name="T1", data=dat, outcome="T1", factor=fm,
+      covariates="intercept", model_type="linear",
+      loading_normalization=1.0, evaluation_indicator="eval")
+
+    mc2 <- define_model_component(name="T2", data=dat, outcome="T2", factor=fm,
       covariates="intercept", model_type="linear",
       loading_normalization=NA_real_, evaluation_indicator="eval")
 
-    ms <- define_model_system(components=list(mc), factor=fm)
+    mc3 <- define_model_component(name="T3", data=dat, outcome="T3", factor=fm,
+      covariates="intercept", model_type="linear",
+      loading_normalization=NA_real_, evaluation_indicator="eval")
 
-    init_params <- c(1.0, 1.0, 1.0, 0.5)
+    ms <- define_model_system(components=list(mc1, mc2, mc3), factor=fm)
+
     result <- estimate_model_rcpp(
       ms, dat,
-      init_params = init_params,
+      init_params = NULL,
       optimizer = "nlminb",
       parallel = FALSE,
       verbose = FALSE
@@ -30,9 +45,21 @@ test_that("Gauss-Hermite quadrature accuracy", {
 
     # Check that estimation completed
     expect_true(!is.null(result$loglik))
+    expect_equal(result$convergence, 0)
 
-    # Check that loading is reasonably recovered (within 20%)
-    expect_true(abs(result$estimates[3] - 1.0) < 0.2)
+    # Check that loadings are reasonably recovered (within 20%)
+    # Parameters: factor_var, T1_intercept, T1_sigma,
+    #             T2_intercept, T2_loading, T2_sigma,
+    #             T3_intercept, T3_loading, T3_sigma
+    T2_loading_idx <- 5
+    T3_loading_idx <- 8
+
+    expect_true(abs(result$estimates[T2_loading_idx] - 1.2) < 0.24,
+                info=sprintf("T2 loading: %.3f vs true 1.2 (n_quad=%d)",
+                           result$estimates[T2_loading_idx], n_quad))
+    expect_true(abs(result$estimates[T3_loading_idx] - 0.8) < 0.16,
+                info=sprintf("T3 loading: %.3f vs true 0.8 (n_quad=%d)",
+                           result$estimates[T3_loading_idx], n_quad))
   }
 })
 

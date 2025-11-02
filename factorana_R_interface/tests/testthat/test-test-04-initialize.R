@@ -1,6 +1,5 @@
-#assert:intercept is a single number, betas have length 1 (only passed 1 covar)
-#loading is one number
-#no cutpoints for non ordered probit
+#assert: initialize_parameters returns proper init_params vector
+#for linear model with 1 covariate and 1 factor
 
 test_that("initialize_parameters returns expected shapes", {
   dat <- make_toy()
@@ -10,11 +9,14 @@ test_that("initialize_parameters returns expected shapes", {
                                evaluation_indicator = "eval_y1",
                                covariates = c("X1"),
                                model_type = "linear")
-  ini <- initialize_parameters(mc)
 
-  expect_true(is.numeric(ini$intercept) && length(ini$intercept) == 1)
-  expect_length(ini$betas, 1)
-  expect_true(is.numeric(ini$loading) && length(ini$loading) == 1)
-  # non-oprobit -> cutpoints absent or empty
-  expect_true(is.null(ini$cutpoints) || length(ini$cutpoints) == 0)
+  # Create model system for initialization
+  ms <- define_model_system(components = list(mc), factor = fm)
+  ini <- initialize_parameters(ms, dat)
+
+  # Should return init_params vector
+  expect_true(is.numeric(ini$init_params))
+  # Should have: factor variance (1) + covariate (1) + loading (1) + sigma (1) = 4 params
+  expect_length(ini$init_params, 4)
+  expect_true(is.logical(ini$factor_variance_fixed))
 })

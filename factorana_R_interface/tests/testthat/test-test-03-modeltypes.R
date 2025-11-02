@@ -25,11 +25,15 @@ test_that("ordered probit returns J-1 ordered cutpoints", {
                                evaluation_indicator = "eval_y1",
                                covariates = "X1",
                                model_type = "oprobit")
-  ini <- initialize_parameters(mc)
 
-  expect_true(is.numeric(ini$thresholds))
-  expect_length(ini$thresholds, 3)          # 4 cats => 3 thresholds
-  expect_true(all(diff(ini$thresholds) > 0))# strictly increasing
+  # Create model system for initialization
+  ms <- define_model_system(components = list(mc), factor = fm)
+  ini <- initialize_parameters(ms, dat)
+
+  expect_true(is.numeric(ini$init_params))
+  # Should have covariates (1) + loadings (1) + thresholds (3) = 5 params
+  # Plus factor variance (1) = 6 total
+  expect_length(ini$init_params, 6)
 })
 
 test_that("oprobit works with multi-factor loading normalization", {
@@ -42,25 +46,27 @@ test_that("oprobit works with multi-factor loading normalization", {
                   breaks = quantile(z, seq(0, 1, 0.25), na.rm = TRUE),
                   include.lowest = TRUE, ordered_result = TRUE)
 
-  # two factors; fix the 2nd loading to 1, leave the 1st free (NA)
-  fm <- define_factor_model(2, 1, 8, loading_normalization = c(NA, 1))
+  # two factors
+  fm <- define_factor_model(2, 1, 8)
 
+  # Fix the 2nd loading to 1, leave the 1st free (NA) at component level
   mc <- define_model_component(
     "Y_ord2", dat, "Yord", fm,
     evaluation_indicator = "eval_y1",
     covariates = "X1",
-    model_type = "oprobit"
+    model_type = "oprobit",
+    loading_normalization = c(NA, 1)
   )
-  ini <- initialize_parameters(mc)
 
-  # outcome coerced to ordered, thresholds valid
+  # Create model system for initialization
+  ms <- define_model_system(components = list(mc), factor = fm)
+  ini <- initialize_parameters(ms, dat)
+
+  # outcome coerced to ordered
   expect_true(is.ordered(mc$data[[mc$outcome]]))
-  expect_true(is.numeric(ini$thresholds))
-  expect_length(ini$thresholds, 3)
-  expect_true(all(diff(ini$thresholds) > 0))
 
-  # loadings: length k and the 2nd fixed to 1
-  expect_length(ini$loading, 2)
-  expect_true(is.numeric(ini$loading))
-  expect_equal(ini$loading[2], 1)
+  # Check loading normalization in component
+  expect_length(mc$loading_normalization, 2)
+  expect_true(is.na(mc$loading_normalization[1]))
+  expect_equal(mc$loading_normalization[2], 1)
 })

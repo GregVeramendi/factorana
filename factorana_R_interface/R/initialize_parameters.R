@@ -175,8 +175,11 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       }
 
       # Fit model without intercept
+      # Suppress MASS::polr warning about intercept (it's expected for ordered models)
       if (ncol(X_no_int) > 0) {
-        fit <- MASS::polr(as.ordered(outcome) ~ X_no_int - 1, method = "probit")
+        fit <- suppressWarnings(
+          MASS::polr(as.ordered(outcome) ~ X_no_int - 1, method = "probit")
+        )
         coefs_no_int <- coef(fit)
       } else {
         coefs_no_int <- numeric(0)
