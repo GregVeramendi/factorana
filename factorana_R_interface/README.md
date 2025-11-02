@@ -4,8 +4,6 @@
 <!-- badges: start -->
 <!-- badges: end -->
 
-usethis::use_readme_md()
-
 # factorana (R interface)
 
 R front-end for specifying model components (linear/logit/probit/ordered probit), defining latent factor structures (with any number of factors), and producing initialization values before passing to C++ for estimation.
@@ -16,8 +14,9 @@ R front-end for specifying model components (linear/logit/probit/ordered probit)
 ## Features
 - Define any number of latent factors with flexible loading normalization
 - Specify model components independently (linear, logit, probit, oprobit)
-- Automatically initialize parameters and compute approximate standard errors
-- Export files for C++ back-end estimation.
+- Automatically initialize parameters using component-by-component estimation
+- Fast C++ backend with R-level parallelization for large datasets
+- Analytical Hessian for fast convergence and accurate standard errors
 
 ## Quick start: Roy model example
 
@@ -65,7 +64,7 @@ dat <- data.frame(
 )
 
 # Define factor model (1 latent ability factor)
-fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad = 16)
+fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 16)
 
 # Define model components
 # Test 1: Normalize loading to 1.0 for identification
@@ -178,7 +177,7 @@ print(result_parallel$loglik)
 Examples:
 ```r
 # Single factor model
-fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad = 16)
+fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 16)
 
 # First component: fix loading to 1.0 for identification
 mc1 <- define_model_component(
@@ -197,15 +196,11 @@ mc2 <- define_model_component(
 
 ### Ordered probit (OProbit)
 
-- Outcome **must be** an **ordered factor**.  
+- Outcome **must be** an **ordered factor**.
   If you pass integers, `define_model_component()` will coerce to an ordered factor with contiguous labels.
-- With \(J\) categories, initialization returns \(J-1\) strictly increasing **thresholds**.
-
-```r
-# 4 categories -> 3 thresholds
-stopifnot(is.numeric(ini$thresholds), length(ini$thresholds) == 3,
-          all(diff(ini$thresholds) > 0))
-```
+- With \(J\) categories, the model estimates \(J-1\) **threshold increments**.
+- The first threshold can be any value, subsequent thresholds are positive increments.
+- During likelihood evaluation, thresholds are accumulated: thresh_k = thresh_1 + |incr_2| + ... + |incr_k|
 
 ---
 
@@ -221,10 +216,11 @@ More detailed explanations within functions.
 - Returns an object of class `"factor_model"`
 - **Note**: Loading normalization is now specified at the component level via `define_model_component()`
 
-### `define_model_component(name, data, outcome, factor, evaluation_indicator = NULL, covariates, model_type, intercept = TRUE, num_choices = 2, nrank = NULL)`
+### `define_model_component(name, data, outcome, factor, evaluation_indicator = NULL, covariates, model_type, loading_normalization = NA_real_, intercept = TRUE, num_choices = 2, nrank = NULL)`
 - Validates data (no missing in eval subset), coerces outcome for `oprobit` to ordered factors if needed.
 - `model_type`: `"linear"`, `"probit"`, `"logit"`, `"oprobit"`.
-- Returns a `"model_component"` with pointers to `factor` (includes normalization).
+- `loading_normalization`: Normalization for factor loadings (NA or NA_real_ = free, numeric = fixed)
+- Returns a `"model_component"` with pointers to `factor`.
 
 ### `define_model_system(components, factor)`
 - Bundles components and the shared factor model into a `"model_system"`.
@@ -285,7 +281,7 @@ y <- as.integer(runif(n) < pnorm(z))
 dat <- data.frame(y=y, x1=x1, x2=x2, eval=1L)
 
 # Define factor and component
-fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad = 8)
+fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 8)
 mc_probit <- define_model_component(
   name = "choice", data = dat, outcome = "y", factor = fm,
   evaluation_indicator = "eval", covariates = c("x1", "x2"),
@@ -310,7 +306,7 @@ Y5 <- cut(z, breaks = quantile(z, probs = seq(0,1,by=0.2)),
 df5 <- data.frame(Y=Y5, x1=x1, eval=1L)
 
 # Define factor and component
-fm1 <- define_factor_model(n_factors = 1, n_types = 1, n_quad = 8)
+fm1 <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 8)
 mc5 <- define_model_component(
   name = "satisfaction", data = df5, outcome = "Y", factor = fm1,
   evaluation_indicator = "eval", covariates = "x1",
