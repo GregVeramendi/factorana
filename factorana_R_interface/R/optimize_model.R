@@ -158,8 +158,12 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
 
   param_fixed <- rep(FALSE, n_params)
 
+  # Track cutpoint indices per component to identify incremental thresholds
+  cutpoint_counter <- list()
+
   for (i in seq_len(n_params)) {
     param_type <- param_metadata$types[i]
+    comp_id <- param_metadata$component_id[i]
 
     # Fix non-identified factor variances
     if (param_type == "factor_var") {
@@ -174,6 +178,21 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
     # Set lower bound for sigma parameters
     if (param_type == "sigma") {
       lower_bounds[i] <- 0.01
+    }
+
+    # Set lower bounds for ordered probit cutpoints (incremental parameterization)
+    # The first cutpoint is unrestricted (can be any value)
+    # Subsequent cutpoints are increments and must be positive to ensure ordering
+    if (param_type == "cutpoint") {
+      comp_key <- as.character(comp_id)
+      if (is.null(cutpoint_counter[[comp_key]])) {
+        cutpoint_counter[[comp_key]] <- 1
+        # First cutpoint is unrestricted
+      } else {
+        cutpoint_counter[[comp_key]] <- cutpoint_counter[[comp_key]] + 1
+        # Subsequent cutpoints are increments, must be positive
+        lower_bounds[i] <- 0.01
+      }
     }
   }
 
