@@ -7,11 +7,11 @@
 Model::Model(ModelType type, int outcome, int missing,
              const std::vector<int>& regs, int nfac, int ntyp,
              const std::vector<double>& fnorm,
-             int nchoice, int nrank)
+             int nchoice, int nrank, bool params_fixed)
     : modtype(type), outcome_idx(outcome), missing_idx(missing),
       regressors(regs), numfac(nfac), numtyp(ntyp),
       facnorm(fnorm), numchoice(nchoice), numrank(nrank),
-      ignore(false)
+      ignore(false), all_params_fixed(params_fixed)
 {
     nregressors = regressors.size();
 }

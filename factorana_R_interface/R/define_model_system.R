@@ -1,10 +1,15 @@
 #' Define a model system
 #'
 #' @param components A named list of model_component objects
+#' @param factor A factor_model object
+#' @param previous_stage Optional result from a previous estimation stage.
+#'   If provided, the previous stage components and parameters will be fixed
+#'   and prepended to the new components. This enables sequential/multi-stage
+#'   estimation where early stages are held fixed while later stages are optimized.
 #'
 #' @return An object of class "model_system". A list of model_component objects and one factor_model object.
 #' @export
-define_model_system <- function(components, factor) {
+define_model_system <- function(components, factor, previous_stage = NULL) {
   # Validate the inputs:
 
   if (!is.list(components) || !all(sapply(components, inherits, "model_component"))) {
@@ -30,10 +35,52 @@ define_model_system <- function(components, factor) {
    stop("All model_components must have Factor as the factor_model")
  }
 
+  # Handle previous_stage if provided
+  previous_stage_info <- NULL
+  if (!is.null(previous_stage)) {
+    # Validate previous_stage
+    if (!is.list(previous_stage) ||
+        !all(c("model_system", "estimates", "std_errors") %in% names(previous_stage))) {
+      stop("`previous_stage` must be a result object from estimate_model_rcpp() with model_system, estimates, and std_errors")
+    }
+
+    prev_ms <- previous_stage$model_system
+    if (!inherits(prev_ms, "model_system")) {
+      stop("`previous_stage$model_system` must be a model_system object")
+    }
+
+    # Check factor models match
+    if (!identical(prev_ms$factor, factor)) {
+      stop("Factor model in previous_stage must be identical to current factor model")
+    }
+
+    # Mark all previous stage components as having fixed parameters
+    prev_components <- prev_ms$components
+    for (i in seq_along(prev_components)) {
+      prev_components[[i]]$all_params_fixed <- TRUE
+    }
+
+    # Prepend previous stage components to new components
+    components <- c(prev_components, components)
+
+    # Store metadata about previous stage
+    previous_stage_info <- list(
+      n_components = length(prev_components),
+      fixed_param_values = previous_stage$estimates,
+      fixed_param_names = names(previous_stage$estimates),
+      fixed_std_errors = previous_stage$std_errors,
+      n_params_fixed = length(previous_stage$estimates)
+    )
+
+    # Mark factor variance as fixed
+    factor$variance_fixed <- TRUE
+    factor$variance_value <- previous_stage$estimates[1]  # First param is always factor variance
+  }
 
   out <- list(
     components = components,
-    factor = factor)
+    factor = factor,
+    previous_stage_info = previous_stage_info)
   class(out) <- "model_system"
   return(out)
 }

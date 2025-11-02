@@ -158,6 +158,19 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
 
   param_fixed <- rep(FALSE, n_params)
 
+  # Handle previous_stage: mark all previous-stage parameters as fixed
+  if (!is.null(model_system$previous_stage_info)) {
+    n_fixed <- model_system$previous_stage_info$n_params_fixed
+    if (n_fixed > 0 && n_fixed <= n_params) {
+      # Fix first n_fixed parameters (from previous stage)
+      param_fixed[1:n_fixed] <- TRUE
+      # Set bounds to fixed values
+      fixed_values <- model_system$previous_stage_info$fixed_param_values
+      lower_bounds[1:n_fixed] <- fixed_values
+      upper_bounds[1:n_fixed] <- fixed_values
+    }
+  }
+
   # Track cutpoint indices per component to identify incremental thresholds
   cutpoint_counter <- list()
 
@@ -673,7 +686,17 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       std_errors[free_params] <- se_free
 
       # Fixed parameters have zero standard error
+      # Exception: previous_stage parameters should retain their SEs
       std_errors[fixed_params] <- 0.0
+
+      # If we have previous_stage, use those standard errors
+      if (!is.null(model_system$previous_stage_info)) {
+        n_prev_stage <- model_system$previous_stage_info$n_params_fixed
+        prev_se <- model_system$previous_stage_info$fixed_std_errors
+        if (length(prev_se) == n_prev_stage) {
+          std_errors[1:n_prev_stage] <- prev_se
+        }
+      }
 
       # Diagnostic: show covariance diagonal and standard errors
       if (verbose) {

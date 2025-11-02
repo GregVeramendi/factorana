@@ -26,13 +26,14 @@ private:
     int numchoice;            // Number of choices (for discrete choice models)
     int numrank;              // Number of rankings (for ranked choice models)
     bool ignore;              // If true, skip this model in likelihood
+    bool all_params_fixed;    // If true, skip gradient/Hessian computation (use flag=1)
 
 public:
     // Constructor
     Model(ModelType type, int outcome, int missing,
           const std::vector<int>& regs, int nfac, int ntyp = 0,
           const std::vector<double>& fnorm = std::vector<double>(),
-          int nchoice = 2, int nrank = 1);
+          int nchoice = 2, int nrank = 1, bool params_fixed = false);
 
     // Main evaluation function
     // Computes likelihood, gradient, and Hessian for a single observation
@@ -62,6 +63,8 @@ public:
     int GetMissing() const { return missing_idx; }
     bool GetIgnore() const { return ignore; }
     void SetIgnore(bool ig) { ignore = ig; }
+    bool GetAllParamsFixed() const { return all_params_fixed; }
+    void SetAllParamsFixed(bool fixed) { all_params_fixed = fixed; }
 
 private:
     // Helper functions for each model type

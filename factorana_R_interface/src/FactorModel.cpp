@@ -218,8 +218,12 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             for (size_t imod = 0; imod < models.size(); imod++) {
                 int firstpar = param_model_start[imod];
 
+                // If all parameters are fixed for this model, only compute likelihood (flag=1)
+                // This saves computation time in multi-stage estimation
+                int model_flag = models[imod]->GetAllParamsFixed() ? 1 : iflag;
+
                 models[imod]->Eval(iobs_offset, data, param, firstpar, fac_val,
-                                  modEval, modHess, iflag);
+                                  modEval, modHess, model_flag);
 
                 // Multiply likelihood
                 probilk *= modEval[0];

@@ -24,39 +24,55 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
     message("Initializing parameters...")
   }
 
-  # ---- 1. Check factor identification ----
-  # A factor variance should be FIXED when a loading is normalized to 1.0
-  # Otherwise it should be estimated
-  n_factors <- model_system$factor$n_factors
-  n_types <- model_system$factor$n_types
+  # ---- 1. Handle previous_stage if present ----
+  if (!is.null(model_system$previous_stage_info)) {
+    # Use previous-stage parameter values directly
+    n_fixed_comps <- model_system$previous_stage_info$n_components
+    init_params <- model_system$previous_stage_info$fixed_param_values
 
-  factor_variance_fixed <- rep(FALSE, n_factors)
+    if (verbose) {
+      message(sprintf("Using %d fixed parameters from previous stage", length(init_params)))
+      message(sprintf("  Previous stage had %d components", n_fixed_comps))
+    }
 
-  for (comp in model_system$components) {
-    if (!is.null(comp$loading_normalization)) {
-      for (k in seq_len(n_factors)) {
-        # Check if this loading is fixed to 1.0 (identification via unit loading)
-        if (!is.na(comp$loading_normalization[k]) &&
-            abs(comp$loading_normalization[k] - 1.0) < 1e-6) {
-          factor_variance_fixed[k] <- TRUE
+    # Initialize only the new (second-stage) components
+    start_comp_idx <- n_fixed_comps + 1
+  } else {
+    # Standard initialization: start from scratch
+    n_factors <- model_system$factor$n_factors
+    n_types <- model_system$factor$n_types
+
+    # Check factor identification
+    factor_variance_fixed <- rep(FALSE, n_factors)
+
+    for (comp in model_system$components) {
+      if (!is.null(comp$loading_normalization)) {
+        for (k in seq_len(n_factors)) {
+          # Check if this loading is fixed to 1.0 (identification via unit loading)
+          if (!is.na(comp$loading_normalization[k]) &&
+              abs(comp$loading_normalization[k] - 1.0) < 1e-6) {
+            factor_variance_fixed[k] <- TRUE
+          }
         }
       }
     }
-  }
 
-  if (verbose) {
-    message("Factor identification:")
-    for (k in seq_len(n_factors)) {
-      status <- if (factor_variance_fixed[k]) "identified by unit loading (variance fixed to 1.0)" else "NOT identified (variance will be estimated)"
-      message(sprintf("  Factor %d: %s", k, status))
+    if (verbose) {
+      message("Factor identification:")
+      for (k in seq_len(n_factors)) {
+        status <- if (factor_variance_fixed[k]) "identified by unit loading (variance fixed to 1.0)" else "NOT identified (variance will be estimated)"
+        message(sprintf("  Factor %d: %s", k, status))
+      }
     }
+
+    # Initialize factor variances to 1.0
+    init_params <- rep(1.0, n_factors)
+    start_comp_idx <- 1
   }
 
-  # ---- 2. Initialize factor variances to 1.0 ----
-  init_params <- rep(1.0, n_factors)
-
-  # ---- 3. Estimate each component separately ----
-  for (i_comp in seq_along(model_system$components)) {
+  # ---- 2. Estimate each component separately ----
+  # If previous_stage, only estimate new components
+  for (i_comp in start_comp_idx:length(model_system$components)) {
     comp <- model_system$components[[i_comp]]
 
     if (verbose) {
@@ -200,8 +216,17 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
     message(sprintf("\nInitialized %d parameters total", length(init_params)))
   }
 
+  # Determine factor_variance_fixed status
+  if (!is.null(model_system$previous_stage_info)) {
+    # For previous_stage, factor variance is always fixed
+    factor_variance_fixed_status <- TRUE
+  } else {
+    # Standard case: use the computed status
+    factor_variance_fixed_status <- factor_variance_fixed[1]
+  }
+
   list(
     init_params = init_params,
-    factor_variance_fixed = factor_variance_fixed[1]  # Return first factor's status
+    factor_variance_fixed = factor_variance_fixed_status
   )
 }

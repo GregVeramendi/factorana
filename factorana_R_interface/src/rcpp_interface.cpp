@@ -195,10 +195,16 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8) {
         int n_choice = comp.containsElementNamed("num_choices") ?
                       int(comp["num_choices"]) : 2;
 
+        // Check if all parameters are fixed (for multi-stage estimation)
+        bool all_params_fixed = false;
+        if (comp.containsElementNamed("all_params_fixed")) {
+            all_params_fixed = as<bool>(comp["all_params_fixed"]);
+        }
+
         // Create Model object
         std::shared_ptr<Model> model = std::make_shared<Model>(
             mtype, outcome_idx, missing_idx, regressor_idx,
-            n_fac, n_types, facnorm, n_choice, 1
+            n_fac, n_types, facnorm, n_choice, 1, all_params_fixed
         );
 
         // Calculate number of parameters for this model
