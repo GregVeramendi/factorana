@@ -57,36 +57,53 @@ source("dev/validation/check_gradient_at_true.R")
 ## Test Categories
 
 ### Automated Tests (`tests/testthat/`)
+- **test-components.R** - Model component functionality
+- **test-parallelization.R** - Parallel estimation correctness and performance
 - **test-parameter-constraints.R** - Parameter constraint system
 - **test-quadrature.R** - Gauss-Hermite quadrature accuracy
-- **test-components.R** - Model component functionality
-- **test-01-validation.R** - Basic validation
-- **test-02-conditioning.R** - Conditioning tests
-- **test-03-modeltypes.R** - Different model types
-- **test-04-initialize.R** - Parameter initialization
-- **test-05-multifactor.R** - Multi-factor models
+- **test-systematic-suite.R** - Systematic model validation
+- **test-test-01-validation.R** - Basic validation
+- **test-test-02-conditioning.R** - Conditioning tests
+- **test-test-03-modeltypes.R** - Different model types
+- **test-test-04-initialize.R** - Parameter initialization
+- **test-test-05-multifactor.R** - Multi-factor models
 
 ### Manual Tests (`tests/manual/`)
 **Model Types:**
-- test_linear.R
-- test_probit.R
-- test_mlogit.R
-- test_oprobit.R
+- test_linear.R - Linear regression components
+- test_probit.R - Probit model components
+- test_mlogit.R - Multinomial logit components
+- test_oprobit.R - Ordered probit components
 
 **Complex Models:**
-- test_roy_model.R - Full Roy selection model
-- test_probit_with_selection.R
-- test_three_tests_plus_probit.R
+- test_roy_model.R - Full Roy selection model with missing data
+- test_probit_with_selection.R - Probit with selection
+- test_three_tests_plus_probit.R - Multiple components
+- test_simple_three_tests.R - Three test scores model
+- test_three_tests_all_free.R - All free loadings
+- test_three_tests_from_truth.R - Optimization from true values
 
 **Validation:**
 - test_gradient_validation.R - Comprehensive gradient checks
-- test_rcpp_implementation.R - C++ verification
+- test_rcpp_implementation.R - C++ implementation verification
 - test_match_estimate_model.R - Wrapper consistency
+- test_probit_hessian.R - Probit Hessian validation
 
 **Investigation:**
-- test_roy_two_starts.R - Local optima
-- test_with_vs_without_hessian.R - Hessian impact
-- test_roy_init_at_truth.R - Optimization behavior
+- test_roy_two_starts.R - Multiple local optima investigation
+- test_with_vs_without_hessian.R - Hessian impact on convergence
+- test_roy_init_at_truth.R - Optimization from true parameters
+- test_check_optimum.R - Optimum verification
+- test_simple_selection_from_truth.R - Selection model optimization
+
+**Specialized Tests:**
+- test_loading_recovery.R - Factor loading parameter recovery
+- test_loading_only_fixed.R - Fixed loading specifications
+- test_component_normalizations.R - Component-specific normalization strategies
+- test_initialization.R - Parameter initialization strategies
+- test_parameter_constraints.R - Parameter constraint handling
+- test_estimation.R - General estimation workflow
+- test_gh_simple.R - Gauss-Hermite integration
 
 ### Debug Scripts (`dev/debug/`)
 Scripts used during development to diagnose issues:
@@ -143,10 +160,15 @@ test_that("feature works correctly", {
 ## Test Results
 
 Current test suite status:
-- **Automated tests**: 30 passing, 9 failing (pre-existing issues)
-- **Manual tests**: 29 comprehensive tests
-- **Debug scripts**: 22 diagnostic scripts
-- **Validation scripts**: 4 mathematical validation scripts
+- **Automated tests**: 10 test files covering core functionality
+  - All tests passing (as of last run)
+  - Includes parallelization test with Roy model (n=10,000)
+- **Manual tests**: 26 comprehensive tests
+  - Model types: linear, probit, logit, oprobit
+  - Complex models: Roy selection, multiple components
+  - Validation: gradients, Hessians, parameter recovery
+- **Debug scripts**: Historical diagnostic scripts in `dev/debug/`
+- **Validation scripts**: 4 mathematical validation scripts in `dev/validation/`
 
 ## Notes
 
