@@ -101,8 +101,7 @@ build_parameter_metadata <- function(model_system) {
         }
       } else {
         for (k in seq_len(n_factors)) {
-          if (is.na(comp$loading_normalization[k]) ||
-              abs(comp$loading_normalization[k]) < 1e-10) {
+          if (is.na(comp$loading_normalization[k])) {
             param_names <- c(param_names, sprintf("%s_loading_%d", comp_name, k))
             param_types <- c(param_types, "loading")
             component_id <- c(component_id, i)

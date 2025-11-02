@@ -135,7 +135,7 @@ test_that("Parallelization: Roy model with 1, 2, and 4 cores produces identical 
         init_params = NULL,  # Use automatic initialization
         control = ctrl,
         parallel = (nc > 1),
-        optimizer = "nlminb",  # Use nlminb (no box constraints)
+        optimizer = "nloptr",
         verbose = FALSE
       )
     })["elapsed"]
