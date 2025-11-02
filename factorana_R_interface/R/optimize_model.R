@@ -1,3 +1,154 @@
+# ---- Internal helper functions ----
+
+# Build parameter metadata from model system
+build_parameter_metadata <- function(model_system) {
+  n_factors <- model_system$factor$n_factors
+
+  # Initialize vectors
+  param_names <- character(0)
+  param_types <- character(0)  # "factor_var", "intercept", "beta", "loading", "sigma", "cutpoint"
+  component_id <- integer(0)
+
+  # Add factor variances
+  for (k in seq_len(n_factors)) {
+    param_names <- c(param_names, sprintf("factor_var_%d", k))
+    param_types <- c(param_types, "factor_var")
+    component_id <- c(component_id, 0)  # 0 = factor model
+  }
+
+  # Add component parameters
+  for (i in seq_along(model_system$components)) {
+    comp <- model_system$components[[i]]
+    comp_name <- comp$name
+
+    # Intercept
+    if (comp$intercept) {
+      if (comp$model_type %in% c("mlogit", "oprobit") && comp$num_choices > 2) {
+        n_intercepts <- comp$num_choices - 1
+        for (j in seq_len(n_intercepts)) {
+          param_names <- c(param_names, sprintf("%s_intercept_%d", comp_name, j))
+          param_types <- c(param_types, "intercept")
+          component_id <- c(component_id, i)
+        }
+      } else {
+        param_names <- c(param_names, sprintf("%s_intercept", comp_name))
+        param_types <- c(param_types, "intercept")
+        component_id <- c(component_id, i)
+      }
+    }
+
+    # Covariate coefficients
+    if (!is.null(comp$covariates) && length(comp$covariates) > 0) {
+      for (cov in comp$covariates) {
+        if (cov != "intercept") {
+          param_names <- c(param_names, sprintf("%s_beta_%s", comp_name, cov))
+          param_types <- c(param_types, "beta")
+          component_id <- c(component_id, i)
+        }
+      }
+    }
+
+    # Factor loadings
+    if (is.null(comp$loading_normalization)) {
+      for (k in seq_len(n_factors)) {
+        param_names <- c(param_names, sprintf("%s_loading_%d", comp_name, k))
+        param_types <- c(param_types, "loading")
+        component_id <- c(component_id, i)
+      }
+    } else {
+      for (k in seq_len(n_factors)) {
+        if (is.na(comp$loading_normalization[k]) ||
+            abs(comp$loading_normalization[k]) < 1e-10) {
+          param_names <- c(param_names, sprintf("%s_loading_%d", comp_name, k))
+          param_types <- c(param_types, "loading")
+          component_id <- c(component_id, i)
+        }
+      }
+    }
+
+    # Residual variance
+    if (comp$model_type %in% c("linear", "oprobit")) {
+      param_names <- c(param_names, sprintf("%s_sigma", comp_name))
+      param_types <- c(param_types, "sigma")
+      component_id <- c(component_id, i)
+    }
+
+    # Cutpoints
+    if (comp$model_type == "oprobit" && !is.null(comp$n_cutpoints)) {
+      for (j in seq_len(comp$n_cutpoints)) {
+        param_names <- c(param_names, sprintf("%s_cutpoint_%d", comp_name, j))
+        param_types <- c(param_types, "cutpoint")
+        component_id <- c(component_id, i)
+      }
+    }
+  }
+
+  return(list(
+    names = param_names,
+    types = param_types,
+    component_id = component_id,
+    n_params = length(param_names)
+  ))
+}
+
+# Setup parameter bounds and identify fixed parameters
+setup_parameter_constraints <- function(model_system, init_params, param_metadata) {
+  n_params <- length(init_params)
+  n_factors <- model_system$factor$n_factors
+
+  lower_bounds <- rep(-Inf, n_params)
+  upper_bounds <- rep(Inf, n_params)
+
+  # Identify which factor variances are identified
+  factor_variance_identified <- rep(FALSE, n_factors)
+  for (comp in model_system$components) {
+    if (!is.null(comp$loading_normalization)) {
+      for (k in seq_len(n_factors)) {
+        if (!is.na(comp$loading_normalization[k]) &&
+            abs(comp$loading_normalization[k]) > 1e-6) {
+          factor_variance_identified[k] <- TRUE
+        }
+      }
+    }
+  }
+
+  param_fixed <- rep(FALSE, n_params)
+
+  for (i in seq_len(n_params)) {
+    param_type <- param_metadata$types[i]
+
+    # Fix non-identified factor variances
+    if (param_type == "factor_var") {
+      factor_idx <- i
+      if (!factor_variance_identified[factor_idx]) {
+        param_fixed[i] <- TRUE
+        lower_bounds[i] <- init_params[i]
+        upper_bounds[i] <- init_params[i]
+      }
+    }
+
+    # Set lower bound for sigma parameters
+    if (param_type == "sigma") {
+      lower_bounds[i] <- 0.01
+    }
+  }
+
+  free_idx <- which(!param_fixed)
+  n_free <- length(free_idx)
+
+  return(list(
+    lower_bounds = lower_bounds,
+    upper_bounds = upper_bounds,
+    param_fixed = param_fixed,
+    free_idx = free_idx,
+    n_free = n_free,
+    lower_bounds_free = lower_bounds[free_idx],
+    upper_bounds_free = upper_bounds[free_idx]
+  ))
+}
+
+# ---- Main estimation function ----
+
 #' Estimate factor model using R-based optimization
 #'
 #' This function estimates a factor model by optimizing the likelihood using
@@ -87,12 +238,10 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   }
 
   # Get initial parameters if not provided
-  factor_variance_fixed <- NULL
   if (is.null(init_params)) {
     # Use smart initialization based on separate component estimation
     init_result <- initialize_parameters(model_system, data, verbose = verbose)
     init_params <- init_result$init_params
-    factor_variance_fixed <- init_result$factor_variance_fixed
 
     # Get parameter count from C++ object
     param_info <- get_parameter_info_cpp(fm_ptrs[[1]])
@@ -102,73 +251,82 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       stop(sprintf("Parameter initialization returned %d parameters but C++ expects %d",
                    length(init_params), n_params))
     }
-  } else {
-    # User provided init_params - check if factor variances need to be fixed
-    n_factors <- model_system$factor$n_factors
-    factor_variance_identified <- rep(FALSE, n_factors)
-
-    for (comp in model_system$components) {
-      if (!is.null(comp$loading_normalization)) {
-        for (k in seq_len(n_factors)) {
-          if (!is.na(comp$loading_normalization[k]) &&
-              abs(comp$loading_normalization[k]) > 1e-6) {
-            factor_variance_identified[k] <- TRUE
-          }
-        }
-      }
-    }
-
-    factor_variance_fixed <- !factor_variance_identified
-
-    if (verbose && any(factor_variance_fixed)) {
-      message("Warning: Some factor variances are not identified and should be fixed to 1.0:")
-      for (k in which(factor_variance_fixed)) {
-        message(sprintf("  Factor %d: variance will be fixed to %.4f", k, init_params[k]))
-      }
-    }
   }
 
-  # Define objective function (negative log-likelihood)
-  objective_fn <- function(params) {
+  # Build parameter metadata (names, types, etc.)
+  param_metadata <- build_parameter_metadata(model_system)
+
+  # Setup constraints and identify fixed/free parameters
+  param_constraints <- setup_parameter_constraints(model_system, init_params, param_metadata)
+
+  if (verbose) {
+    message(sprintf("Total parameters: %d", length(init_params)))
+    message(sprintf("Free parameters: %d", param_constraints$n_free))
+    if (any(param_constraints$param_fixed)) {
+      fixed_names <- param_metadata$names[param_constraints$param_fixed]
+      message(sprintf("Fixed parameters (%d): %s",
+                     sum(param_constraints$param_fixed),
+                     paste(fixed_names, collapse = ", ")))
+    }
+    n_sigma <- sum(param_metadata$types == "sigma")
+    message(sprintf("Sigma parameters (%d) have lower bound = 0.01", n_sigma))
+  }
+
+  # Define objective function (operates on free parameters only)
+  objective_fn <- function(params_free) {
+    # Reconstruct full parameter vector
+    params_full <- init_params
+    params_full[param_constraints$free_idx] <- params_free
+
     if (!is.null(cl)) {
       # Parallel evaluation: aggregate across workers
       loglik_parts <- parallel::clusterMap(cl, function(fm_ptr) {
-        evaluate_loglik_only_cpp(fm_ptr, params)
+        evaluate_loglik_only_cpp(fm_ptr, params_full)
       }, fm_ptrs)
       loglik <- sum(unlist(loglik_parts))
     } else {
       # Single worker
-      loglik <- evaluate_loglik_only_cpp(fm_ptrs[[1]], params)
+      loglik <- evaluate_loglik_only_cpp(fm_ptrs[[1]], params_full)
     }
     return(-loglik)  # Negative for minimization
   }
 
-  # Define gradient function
-  gradient_fn <- function(params) {
+  # Define gradient function (returns gradient for free parameters only)
+  gradient_fn <- function(params_free) {
+    # Reconstruct full parameter vector
+    params_full <- init_params
+    params_full[param_constraints$free_idx] <- params_free
+
     if (!is.null(cl)) {
       # Parallel evaluation: aggregate gradients
       grad_parts <- parallel::clusterMap(cl, function(fm_ptr) {
-        result <- evaluate_likelihood_cpp(fm_ptr, params,
+        result <- evaluate_likelihood_cpp(fm_ptr, params_full,
                                          compute_gradient = TRUE,
                                          compute_hessian = FALSE)
         result$gradient
       }, fm_ptrs)
-      grad <- Reduce(`+`, grad_parts)
+      grad_full <- Reduce(`+`, grad_parts)
     } else {
-      result <- evaluate_likelihood_cpp(fm_ptrs[[1]], params,
+      result <- evaluate_likelihood_cpp(fm_ptrs[[1]], params_full,
                                        compute_gradient = TRUE,
                                        compute_hessian = FALSE)
-      grad <- result$gradient
+      grad_full <- result$gradient
     }
-    return(-grad)  # Negative for minimization
+
+    # Return gradient for free parameters only
+    return(-grad_full[param_constraints$free_idx])  # Negative for minimization
   }
 
-  # Define Hessian function
-  hessian_fn <- function(params) {
+  # Define Hessian function (returns Hessian for free parameters only)
+  hessian_fn <- function(params_free) {
+    # Reconstruct full parameter vector
+    params_full <- init_params
+    params_full[param_constraints$free_idx] <- params_free
+
     if (!is.null(cl)) {
       # Parallel evaluation: aggregate Hessians
       hess_parts <- parallel::clusterMap(cl, function(fm_ptr) {
-        result <- evaluate_likelihood_cpp(fm_ptr, params,
+        result <- evaluate_likelihood_cpp(fm_ptr, params_full,
                                          compute_gradient = FALSE,
                                          compute_hessian = TRUE)
         result$hessian
@@ -176,44 +334,28 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       # TODO: Properly aggregate Hessian matrices (they're upper triangles)
       hess <- Reduce(`+`, hess_parts)
     } else {
-      result <- evaluate_likelihood_cpp(fm_ptrs[[1]], params,
+      result <- evaluate_likelihood_cpp(fm_ptrs[[1]], params_full,
                                        compute_gradient = FALSE,
                                        compute_hessian = TRUE)
       hess <- result$hessian
     }
 
     # Convert upper triangle vector to full symmetric matrix
-    n_params <- length(params)
-    hess_mat <- matrix(0, n_params, n_params)
+    n_params_full <- length(params_full)
+    hess_mat_full <- matrix(0, n_params_full, n_params_full)
     idx <- 1
-    for (i in 1:n_params) {
-      for (j in i:n_params) {
-        hess_mat[i, j] <- hess[idx]
-        hess_mat[j, i] <- hess[idx]  # Symmetrize
+    for (i in 1:n_params_full) {
+      for (j in i:n_params_full) {
+        hess_mat_full[i, j] <- hess[idx]
+        hess_mat_full[j, i] <- hess[idx]  # Symmetrize
         idx <- idx + 1
       }
     }
 
-    return(-hess_mat)  # Negative for minimization
-  }
+    # Extract submatrix for free parameters only
+    hess_mat_free <- hess_mat_full[param_constraints$free_idx, param_constraints$free_idx, drop = FALSE]
 
-  # Setup parameter bounds for non-identified factor variances
-  n_params <- length(init_params)
-  n_factors <- model_system$factor$n_factors
-  lower_bounds <- rep(-Inf, n_params)
-  upper_bounds <- rep(Inf, n_params)
-
-  # Fix non-identified factor variances
-  if (!is.null(factor_variance_fixed) && any(factor_variance_fixed)) {
-    for (k in which(factor_variance_fixed)) {
-      # Fix factor variance k to its initial value (should be 1.0)
-      lower_bounds[k] <- init_params[k]
-      upper_bounds[k] <- init_params[k]
-
-      if (verbose) {
-        message(sprintf("  Factor %d variance fixed to %.4f (not identified)", k, init_params[k]))
-      }
-    }
+    return(-hess_mat_free)  # Negative for minimization
   }
 
   # Run optimization
@@ -225,11 +367,11 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     }
 
     result <- nloptr::nloptr(
-      x0 = init_params,
+      x0 = init_params[param_constraints$free_idx],
       eval_f = objective_fn,
       eval_grad_f = gradient_fn,
-      lb = lower_bounds,
-      ub = upper_bounds,
+      lb = param_constraints$lower_bounds_free,
+      ub = param_constraints$upper_bounds_free,
       opts = list(
         algorithm = "NLOPT_LD_LBFGS",  # L-BFGS with analytical gradient (no Hessian)
         maxeval = 1000,
@@ -238,22 +380,26 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       )
     )
 
-    estimates <- result$solution
+    # Reconstruct full parameter vector
+    estimates <- init_params
+    estimates[param_constraints$free_idx] <- result$solution
     loglik <- -result$objective
     convergence <- result$status
 
   } else if (optimizer == "optim") {
     result <- stats::optim(
-      par = init_params,
+      par = init_params[param_constraints$free_idx],
       fn = objective_fn,
       gr = gradient_fn,
       method = "L-BFGS-B",  # Quasi-Newton (no Hessian)
-      lower = lower_bounds,
-      upper = upper_bounds,
+      lower = param_constraints$lower_bounds_free,
+      upper = param_constraints$upper_bounds_free,
       control = list(trace = if (verbose) 1 else 0)
     )
 
-    estimates <- result$par
+    # Reconstruct full parameter vector
+    estimates <- init_params
+    estimates[param_constraints$free_idx] <- result$par
     loglik <- -result$value
     convergence <- result$convergence
 
@@ -262,12 +408,12 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     if (verbose) message("  Using analytical gradient and Hessian")
 
     result <- stats::nlminb(
-      start = init_params,
+      start = init_params[param_constraints$free_idx],
       objective = objective_fn,
       gradient = gradient_fn,
       hessian = hessian_fn,  # Uses analytical Hessian!
-      lower = lower_bounds,
-      upper = upper_bounds,
+      lower = param_constraints$lower_bounds_free,
+      upper = param_constraints$upper_bounds_free,
       control = list(
         trace = if (verbose) 1 else 0,
         eval.max = 5000,
@@ -275,7 +421,9 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       )
     )
 
-    estimates <- result$par
+    # Reconstruct full parameter vector
+    estimates <- init_params
+    estimates[param_constraints$free_idx] <- result$par
     loglik <- -result$objective
     convergence <- result$convergence
 
@@ -286,16 +434,16 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     }
 
     # Warning: trust optimizer doesn't support parameter bounds
-    if (!is.null(factor_variance_fixed) && any(factor_variance_fixed)) {
-      warning("trust optimizer does not support parameter bounds. ",
-              "Fixed factor variances may drift from their initial values. ",
+    if (any(param_constraints$param_fixed)) {
+      warning("trust optimizer does not support fixed parameters. ",
+              "Fixed parameters may drift from their initial values. ",
               "Consider using 'nlminb' or 'optim' instead.")
     }
 
     if (verbose) message("  Using trust region with analytical gradient and Hessian")
 
     result <- trustOptim::trust.optim(
-      x = init_params,
+      x = init_params[param_constraints$free_idx],
       fn = objective_fn,
       gr = gradient_fn,
       hs = hessian_fn,  # Uses analytical Hessian!
@@ -306,7 +454,9 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       )
     )
 
-    estimates <- result$solution
+    # Reconstruct full parameter vector
+    estimates <- init_params
+    estimates[param_constraints$free_idx] <- result$solution
     loglik <- -result$value
     convergence <- result$converged
 
@@ -370,11 +520,9 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       }
     }
 
-    # Identify fixed parameters (those with bounds that are equal)
-    fixed_params <- which(abs(lower_bounds - upper_bounds) < 1e-10)
-
-    # Create index of free parameters
-    free_params <- setdiff(1:n_params, fixed_params)
+    # Use parameter constraints to identify fixed vs free parameters
+    fixed_params <- which(param_constraints$param_fixed)
+    free_params <- param_constraints$free_idx
 
     if (length(free_params) > 0) {
       # Extract Hessian for free parameters only
