@@ -12,7 +12,7 @@ Description: A flexible framework for estimating factor models with multiple
     logit model components. Features include multi-stage estimation, automatic
     parameter initialization, analytical gradients and Hessians, and parallel
     estimation. Developed with assistance from Claude Code.
-License: MIT + file LICENSE
+License: GPL-3
 Encoding: UTF-8
 LazyData: true
 RoxygenNote: 7.3.2
