@@ -41,8 +41,8 @@ T2 <- 1.5 + 1.2*f + rnorm(n, 0, 0.6)
 T3 <- 1.0 + 0.8*f + rnorm(n, 0, 0.4)
 
 # Potential wages in each sector
-wage0 <- 2.0 + 0.5*x1 + 0.3*x2 + rnorm(n, 0, 0.6)              # No ability effect
-wage1 <- 2.5 + 0.6*x1 + 1.0*f + rnorm(n, 0, 0.7)              # Ability matters
+wage0 <- 2.0 + 0.5*x1 + 0.3*x2 + 0.5*f + rnorm(n, 0, 0.6)     # Ability affects wage0
+wage1 <- 2.5 + 0.6*x1 + 1.0*f + rnorm(n, 0, 0.7)              # Ability affects wage1
 
 # Sector choice (high ability → more likely sector 1)
 z_sector <- 0.0 + 0.4*x2 + 0.8*f
@@ -90,11 +90,11 @@ mc_T3 <- define_model_component(
   evaluation_indicator = "eval_tests"
 )
 
-# Wage in sector 0: No ability effect (loading = 0.0)
+# Wage in sector 0: Ability effect (free loading)
 mc_wage0 <- define_model_component(
   name = "wage0", data = dat, outcome = "wage", factor = fm,
   covariates = c("intercept", "x1", "x2"), model_type = "linear",
-  loading_normalization = 0.0,
+  loading_normalization = NA_real_,
   evaluation_indicator = "eval_wage0"
 )
 
@@ -120,23 +120,28 @@ ms <- define_model_system(
   factor = fm
 )
 
-# Single-core estimation (default: nlminb optimizer with analytical Hessian)
+# Single-core estimation
+# Note: init_params = NULL triggers automatic initialization
 ctrl_single <- define_estimation_control(num_cores = 1)
 result_single <- estimate_model_rcpp(
   model_system = ms,
   data = dat,
+  init_params = NULL,       # Automatic initialization (recommended)
   control = ctrl_single,
   parallel = FALSE,
+  optimizer = "nlminb",     # Default: fast with analytical Hessian
   verbose = TRUE
 )
 
-# Parallel estimation with 4 cores (3x speedup)
+# Parallel estimation with 4 cores (3x speedup on large datasets)
 ctrl_parallel <- define_estimation_control(num_cores = 4)
 result_parallel <- estimate_model_rcpp(
   model_system = ms,
   data = dat,
+  init_params = NULL,       # Automatic initialization
   control = ctrl_parallel,
   parallel = TRUE,
+  optimizer = "nlminb",
   verbose = TRUE
 )
 
@@ -150,11 +155,11 @@ print(result_parallel$loglik)
 
 - **Latent factor**: Unobserved ability (`f`) affects test scores, wages, and sector choice
 - **Loading normalization**:
-  - `T1`: Fixed to 1.0 for identification
-  - `wage0`: Fixed to 0.0 (no ability effect in sector 0)
-  - Others: Free parameters (estimated)
-- **Evaluation indicators**: Only observe wages in chosen sector
-- **Parallelization**: 4 cores provides ~3x speedup on large datasets
+  - `T1`: Fixed to 1.0 for identification (first test score normalizes scale)
+  - `T2, T3, wage0, wage1, sector`: Free parameters (estimated)
+- **Evaluation indicators**: Only observe wages in chosen sector (partial observability)
+- **Automatic initialization**: `init_params = NULL` uses smart component-by-component initialization
+- **Parallelization**: 4 cores provides ~3x speedup on large datasets (n=10,000)
 - **Optimizer**: Default `nlminb` uses analytical Hessian for fast convergence
 
 ---
@@ -163,18 +168,31 @@ print(result_parallel$loglik)
 
 ### Latent factors & normalization
 
-- Choose `k = n_factors` in `define_factor_model()`.  
-- Provide `loading_normalization` as a numeric vector of length `k`:
-  - `NA`  → loading is **free** (initialized at a small base value).
-  - value → loading is **fixed** to that numeric value (e.g., `0` or `1`).
+- Choose `k = n_factors` in `define_factor_model()`.
+- Specify `loading_normalization` at the **component level** via `define_model_component()`:
+  - `NA` or `NA_real_` → loading is **free** (estimated parameter)
+  - Numeric value → loading is **fixed** to that value (e.g., `0` or `1.0`)
+
+**Identification**: At least one component must have a fixed loading to normalize the factor scale.
 
 Examples:
 ```r
-# k = 1; fix loading at 1
-define_factor_model(1, 1, 8, loading_normalization = 1)
+# Single factor model
+fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad = 16)
 
-# k = 3; mix of free/fixed
-define_factor_model(3, 1, 8, loading_normalization = c(NA, 0, 1))
+# First component: fix loading to 1.0 for identification
+mc1 <- define_model_component(
+  name = "test1", data = dat, outcome = "y1", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1.0
+)
+
+# Other components: free loadings
+mc2 <- define_model_component(
+  name = "test2", data = dat, outcome = "y2", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_  # Free parameter
+)
 ```
 
 ### Ordered probit (OProbit)
@@ -194,12 +212,14 @@ stopifnot(is.numeric(ini$thresholds), length(ini$thresholds) == 3,
 ## API (R)
 More detailed explanations within functions.
 
-### `define_factor_model(n_factors, n_types, n_quad_points, correlation = FALSE, n_mixtures = 1, loading_normalization = NULL)`
-- `n_factors` (int ≥1): number of latent factors \(k\)
-- `loading_normalization` (length-k numeric): `NA` = free, number = fixed  
-- `correlation` logical, whether factors are correlated
-- `n_quad_points` number of quadrature points used in integration
-- Returns an object of class `"factor_model"`. Stores `n_factors`, `loading_normalization`, and derived counts (`nfac_param`, …).
+### `define_factor_model(n_factors, n_types, n_quad_points, correlation = FALSE, n_mixtures = 1)`
+- `n_factors` (int ≥0): number of latent factors (use 0 for models without factors)
+- `n_types` (int ≥1): number of types
+- `n_quad_points` (int ≥1): number of quadrature points used in integration
+- `correlation` (logical): whether factors are correlated (default: FALSE)
+- `n_mixtures` (int 1-3): number of discrete mixtures (default: 1)
+- Returns an object of class `"factor_model"`
+- **Note**: Loading normalization is now specified at the component level via `define_model_component()`
 
 ### `define_model_component(name, data, outcome, factor, evaluation_indicator = NULL, covariates, model_type, intercept = TRUE, num_choices = 2, nrank = NULL)`
 - Validates data (no missing in eval subset), coerces outcome for `oprobit` to ordered factors if needed.
@@ -254,40 +274,53 @@ More detailed explanations within functions.
 
 ## Examples
 
-### k = 3 with mixed constraints
+### Simple probit with factor
 ```r
 set.seed(1)
-n  <- 400
+n <- 400
 x1 <- rnorm(n); x2 <- rnorm(n)
-p  <- pnorm(0.5*x1 - 0.4*x2)
-y  <- as.integer(runif(n) < p)
+f <- rnorm(n)  # Latent factor
+z <- 0.5*x1 - 0.4*x2 + 0.6*f
+y <- as.integer(runif(n) < pnorm(z))
 dat <- data.frame(y=y, x1=x1, x2=x2, eval=1L)
 
-fm3 <- define_factor_model(3, 1, 8, loading_normalization = c(NA, 0, 1))
-mc3 <- define_model_component("prb3", dat, "y", fm3, "eval", c("x1","x2"), "probit")
-ini3 <- initialize_parameters(mc3)
+# Define factor and component
+fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad = 8)
+mc_probit <- define_model_component(
+  name = "choice", data = dat, outcome = "y", factor = fm,
+  evaluation_indicator = "eval", covariates = c("x1", "x2"),
+  model_type = "probit",
+  loading_normalization = 1.0  # Fix for identification
+)
 
-# Expect free/fixed: [*, 0, 1]
-ini3$loading
+# Initialize and estimate
+ms <- define_model_system(components = list(mc_probit), factor = fm)
+result <- estimate_model_rcpp(ms, dat, init_params = NULL)
+print(result$estimates)
 ```
 
-### OProbit with 5 categories
+### Ordered probit with 5 categories
 ```r
 set.seed(2)
-n  <- 350
+n <- 350
 x1 <- rnorm(n); e <- rnorm(n)
-z  <- 0.8*x1 + e
+z <- 0.8*x1 + e
 Y5 <- cut(z, breaks = quantile(z, probs = seq(0,1,by=0.2)),
           include.lowest = TRUE, ordered_result = TRUE)
 df5 <- data.frame(Y=Y5, x1=x1, eval=1L)
 
-fm1 <- define_factor_model(1, 1, 8, loading_normalization = 1)
-mc5 <- define_model_component("op5", df5, "Y", fm1, "eval", "x1", "oprobit")
-ini5 <- initialize_parameters(mc5)
+# Define factor and component
+fm1 <- define_factor_model(n_factors = 1, n_types = 1, n_quad = 8)
+mc5 <- define_model_component(
+  name = "satisfaction", data = df5, outcome = "Y", factor = fm1,
+  evaluation_indicator = "eval", covariates = "x1",
+  model_type = "oprobit",
+  loading_normalization = 1.0  # Fix for identification
+)
 
-length(ini5$thresholds)  # 4
-all(diff(ini5$thresholds) > 0)  # TRUE
-ini5$loading   # 1
+# Initialize (automatic in estimate_model_rcpp, but can call separately)
+ini5 <- initialize_parameters(define_model_system(list(mc5), fm1), df5)
+length(ini5$init_params)  # Includes covariates, loading, thresholds
 ```
 
 ---
