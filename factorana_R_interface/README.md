@@ -11,6 +11,50 @@ R front-end for specifying model components (linear/logit/probit/ordered probit)
 
 ---
 
+## Installation
+
+Install directly from GitHub using `devtools` or `remotes`:
+
+```r
+# Install devtools if you don't have it
+install.packages("devtools")
+
+# Install factorana from GitHub
+devtools::install_github("GregVeramendi/factorana", subdir = "factorana_R_interface")
+
+# Load the package
+library(factorana)
+```
+
+**Requirements**:
+- **R** ≥ 4.0.0
+- **C++ compiler**:
+  - **Windows**: Install [Rtools](https://cran.r-project.org/bin/windows/Rtools/) (matches your R version)
+  - **macOS**: Install Xcode Command Line Tools via `xcode-select --install`
+  - **Linux**: Install `build-essential` (Ubuntu/Debian) or `gcc-c++` (Fedora/RHEL)
+- **R packages**: Rcpp, RcppEigen (automatically installed as dependencies)
+
+The package will automatically compile the C++ code during installation.
+
+### Troubleshooting Installation
+
+**Windows**: If you get compilation errors, make sure Rtools is installed and on your PATH:
+```r
+# Check if Rtools is found
+Sys.which("make")
+```
+
+**macOS**: If you get "clang: error: unsupported option '-fopenmp'", this is expected and can be ignored (OpenMP is optional).
+
+**All platforms**: If installation fails, try:
+```r
+# Install with verbose output to see errors
+devtools::install_github("GregVeramendi/factorana",
+                        subdir = "factorana_R_interface",
+                        build_vignettes = FALSE,
+                        force = TRUE)
+```
+
 ## Features
 - Define any number of latent factors with flexible loading normalization
 - Specify model components independently (linear, logit, probit, oprobit)
