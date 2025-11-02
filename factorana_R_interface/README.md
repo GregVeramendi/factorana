@@ -435,53 +435,188 @@ More detailed explanations within functions.
 
 ## Examples
 
-### Simple probit with factor
-```r
-set.seed(1)
-n <- 400
-x1 <- rnorm(n); x2 <- rnorm(n)
-f <- rnorm(n)  # Latent factor
-z <- 0.5*x1 - 0.4*x2 + 0.6*f
-y <- as.integer(runif(n) < pnorm(z))
-dat <- data.frame(y=y, x1=x1, x2=x2, eval=1L)
+### Measurement System with Three Tests
 
-# Define factor and component
+A standard factor analysis setup with three test scores measuring a latent ability factor:
+
+```r
+set.seed(104)
+n <- 500
+f <- rnorm(n)  # Latent ability
+
+# Three test scores (T1 loading fixed to 1 for identification)
+T1 <- 2.0 + 1.0*f + rnorm(n, 0, 0.5)
+T2 <- 1.5 + 1.2*f + rnorm(n, 0, 0.6)
+T3 <- 1.0 + 0.8*f + rnorm(n, 0, 0.4)
+
+dat <- data.frame(intercept = 1, T1 = T1, T2 = T2, T3 = T3, eval = 1)
+
+# Define factor model
 fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 8)
-mc_probit <- define_model_component(
-  name = "choice", data = dat, outcome = "y", factor = fm,
-  evaluation_indicator = "eval", covariates = c("x1", "x2"),
-  model_type = "probit",
-  loading_normalization = 1.0  # Fix for identification
+
+# Define three test components
+mc_T1 <- define_model_component(
+  name = "T1", data = dat, outcome = "T1", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1.0,  # Fix for identification
+  evaluation_indicator = "eval"
 )
 
-# Initialize and estimate
-ms <- define_model_system(components = list(mc_probit), factor = fm)
-result <- estimate_model_rcpp(ms, dat, init_params = NULL)
+mc_T2 <- define_model_component(
+  name = "T2", data = dat, outcome = "T2", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_,  # Free parameter
+  evaluation_indicator = "eval"
+)
+
+mc_T3 <- define_model_component(
+  name = "T3", data = dat, outcome = "T3", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_,  # Free parameter
+  evaluation_indicator = "eval"
+)
+
+# Estimate
+ms <- define_model_system(components = list(mc_T1, mc_T2, mc_T3), factor = fm)
+result <- estimate_model_rcpp(ms, dat, init_params = NULL, verbose = TRUE)
+
+print(result$estimates)
+print(result$std_errors)
+```
+
+### Ordered Probit with Measurement System
+
+Combining test scores with an ordered outcome (e.g., educational attainment):
+
+```r
+set.seed(106)
+n <- 500
+x1 <- rnorm(n)
+f <- rnorm(n)  # Latent ability
+
+# Three test scores (same as above)
+T1 <- 2.0 + 1.0*f + rnorm(n, 0, 0.5)
+T2 <- 1.5 + 1.2*f + rnorm(n, 0, 0.6)
+T3 <- 1.0 + 0.8*f + rnorm(n, 0, 0.4)
+
+# Ordered outcome with 3 categories
+# Note: Latent z = 0.5 (intercept) + 0.6*x1 + 0.8*f + error
+# Intercept absorbed into thresholds, so model estimates only beta and loading
+z <- 0.5 + 0.6*x1 + 0.8*f + rnorm(n)
+y <- cut(z, breaks = c(-Inf, -0.5, 0.5, Inf), labels = FALSE)
+
+dat <- data.frame(intercept = 1, x1 = x1, T1 = T1, T2 = T2, T3 = T3, y = y, eval = 1)
+
+# Define factor and measurement components (same as above)
+fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 8)
+
+mc_T1 <- define_model_component(
+  name = "T1", data = dat, outcome = "T1", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1.0, evaluation_indicator = "eval"
+)
+
+mc_T2 <- define_model_component(
+  name = "T2", data = dat, outcome = "T2", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_, evaluation_indicator = "eval"
+)
+
+mc_T3 <- define_model_component(
+  name = "T3", data = dat, outcome = "T3", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_, evaluation_indicator = "eval"
+)
+
+# Ordered probit component (NO intercept - absorbed into thresholds)
+mc_y <- define_model_component(
+  name = "y", data = dat, outcome = "y", factor = fm,
+  covariates = "x1",  # No intercept for oprobit
+  model_type = "oprobit",
+  num_choices = 3,  # 3 ordered categories
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval"
+)
+
+# Estimate
+ms <- define_model_system(components = list(mc_T1, mc_T2, mc_T3, mc_y), factor = fm)
+result <- estimate_model_rcpp(ms, dat, init_params = NULL, verbose = TRUE)
+
 print(result$estimates)
 ```
 
-### Ordered probit with 5 categories
-```r
-set.seed(2)
-n <- 350
-x1 <- rnorm(n); e <- rnorm(n)
-z <- 0.8*x1 + e
-Y5 <- cut(z, breaks = quantile(z, probs = seq(0,1,by=0.2)),
-          include.lowest = TRUE, ordered_result = TRUE)
-df5 <- data.frame(Y=Y5, x1=x1, eval=1L)
+### Multinomial Logit with Measurement System
 
-# Define factor and component
-fm1 <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 8)
-mc5 <- define_model_component(
-  name = "satisfaction", data = df5, outcome = "Y", factor = fm1,
-  evaluation_indicator = "eval", covariates = "x1",
-  model_type = "oprobit",
-  loading_normalization = 1.0  # Fix for identification
+Combining test scores with a discrete choice outcome (3 alternatives):
+
+```r
+set.seed(107)
+n <- 500
+x1 <- rnorm(n)
+f <- rnorm(n)  # Latent ability
+
+# Three test scores (same as above)
+T1 <- 2.0 + 1.0*f + rnorm(n, 0, 0.5)
+T2 <- 1.5 + 1.2*f + rnorm(n, 0, 0.6)
+T3 <- 1.0 + 0.8*f + rnorm(n, 0, 0.4)
+
+# Multinomial choice with 3 alternatives (choice 0 is reference)
+z1 <- 0.5 + 0.6*x1 + 0.7*f
+z2 <- 1.0 - 0.5*x1 + 0.9*f
+
+exp_z0 <- 1
+exp_z1 <- exp(z1)
+exp_z2 <- exp(z2)
+denom <- exp_z0 + exp_z1 + exp_z2
+
+p0 <- exp_z0 / denom
+p1 <- exp_z1 / denom
+p2 <- exp_z2 / denom
+
+y <- numeric(n)
+for (i in seq_len(n)) {
+  # C++ expects choices coded as 1, 2, 3 (not 0, 1, 2)
+  y[i] <- sample(1:3, 1, prob = c(p0[i], p1[i], p2[i]))
+}
+
+dat <- data.frame(intercept = 1, x1 = x1, T1 = T1, T2 = T2, T3 = T3, y = y, eval = 1)
+
+# Define factor and measurement components (same as above)
+fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 8)
+
+mc_T1 <- define_model_component(
+  name = "T1", data = dat, outcome = "T1", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1.0, evaluation_indicator = "eval"
 )
 
-# Initialize (automatic in estimate_model_rcpp, but can call separately)
-ini5 <- initialize_parameters(define_model_system(list(mc5), fm1), df5)
-length(ini5$init_params)  # Includes covariates, loading, thresholds
+mc_T2 <- define_model_component(
+  name = "T2", data = dat, outcome = "T2", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_, evaluation_indicator = "eval"
+)
+
+mc_T3 <- define_model_component(
+  name = "T3", data = dat, outcome = "T3", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_, evaluation_indicator = "eval"
+)
+
+# Multinomial logit component
+mc_y <- define_model_component(
+  name = "y", data = dat, outcome = "y", factor = fm,
+  covariates = c("intercept", "x1"),
+  model_type = "logit",
+  num_choices = 3,  # 3 alternatives
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval"
+)
+
+# Estimate
+ms <- define_model_system(components = list(mc_T1, mc_T2, mc_T3, mc_y), factor = fm)
+result <- estimate_model_rcpp(ms, dat, init_params = NULL, verbose = TRUE)
+
+print(result$estimates)
 ```
 
 ---
@@ -540,17 +675,47 @@ result <- estimate_model_rcpp(ms, dat, control = ctrl, parallel = TRUE)
 
 ## Testing
 
-Run all tests:
+### Quick Tests
+
+Run all automated tests (should complete in ~15 seconds):
 ```r
 devtools::test()
 ```
 
-Run a subset (while iterating):
+Run a subset while developing:
 ```r
 devtools::test(filter = "modeltypes|multifactor|oprobit")
 ```
 
-What's covered:
+### Comprehensive Tests
+
+The systematic test suite performs extensive validation including:
+- Analytical gradient verification vs. finite differences
+- Analytical Hessian verification vs. finite differences
+- Parameter recovery from simulated data
+- Convergence from default and true initial values
+
+Run the comprehensive suite with verbose output:
+```r
+# Enable verbose output and log saving
+Sys.setenv(FACTORANA_TEST_VERBOSE = "TRUE")
+Sys.setenv(FACTORANA_TEST_SAVE_LOGS = "TRUE")
+
+# Run systematic tests (takes ~2-3 minutes)
+devtools::test(filter = "systematic")
+```
+
+This will test:
+- **Model A**: Measurement system (3 linear tests)
+- **Model B**: Measurement + probit outcome
+- **Model C**: Measurement + ordered probit (3 categories)
+- **Model D**: Measurement + multinomial logit (3 choices)
+- **Model E**: Roy selection model (wages + sector choice)
+
+Logs are saved to `tests/testthat/test_logs/` with detailed diagnostics.
+
+### What's Covered
+
 - Validation of inputs & conditioning on evaluation subset
 - Ordered probit thresholds (J-1, strictly increasing)
 - Multi-factor loading normalization (length-k; fixed entries works)
@@ -558,5 +723,6 @@ What's covered:
 - Two-stage/sequential estimation (measurement system → full Roy model)
 - Quadrature accuracy with properly identified three-measurement system
 - Parameter recovery from simulated data
+- Gradient and Hessian accuracy checks
 
 ---
