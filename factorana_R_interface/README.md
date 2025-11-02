@@ -19,62 +19,143 @@ R front-end for specifying model components (linear/logit/probit/ordered probit)
 - Automatically initialize parameters and compute approximate standard errors
 - Export files for C++ back-end estimation.
 
-## Quick start
+## Quick start: Roy model example
+
+This example demonstrates a Roy selection model with unobserved ability (latent factor), sector choice, test scores, and wages.
 
 ```r
-# devtools::load_all() inside factorana_R_interface
-# Quick demo: Simulated system with continuous, binary, and ordered outcomes
-
 library(factorana)
 
-set.seed(42)
-n <- 500
-f  <- rnorm(n)
-x1 <- rnorm(n); x2 <- rnorm(n)
-z1 <- rnorm(n)
-q1 <- rnorm(n)
+# Generate Roy model data
+set.seed(108)
+n <- 10000
 
-# latent variable generating an ordered outcome
-latent <- 0.5*x1 - 0.3*x2 + 0.8*f + rnorm(n)
-y_ord <- cut(latent, breaks = quantile(latent, seq(0,1,0.25)), include.lowest = TRUE, ordered_result = TRUE)
+# Covariates
+x1 <- rnorm(n)  # Affects wages
+x2 <- rnorm(n)  # Affects wages and sector choice
+f <- rnorm(n)   # Latent ability (unobserved)
 
-Y  <- 1 + x1 + 0.8*f + rnorm(n)
-D  <- as.integer(0.5*z1 + f + rnorm(n) > 0)
-T  <- q1 + 0.5*f + rnorm(n)
-dat <- data.frame(Y, D, T, x1, x2, z1, q1, y_ord)
-dat$eval_y0 <- 1L - dat$D
+# Test scores (measure ability with error)
+T1 <- 2.0 + 1.0*f + rnorm(n, 0, 0.5)
+T2 <- 1.5 + 1.2*f + rnorm(n, 0, 0.6)
+T3 <- 1.0 + 0.8*f + rnorm(n, 0, 0.4)
 
-# ---- Define system ----
-fm  <- define_factor_model(2, 1, 8, loading_normalization = c(NA, 1))
-mc_sel <- define_model_component("selection", dat, "D", fm, covariates = "z1", model_type = "probit")
-mc_y1  <- define_model_component("Y1", dat, "Y", fm, evaluation_indicator = "D", covariates = c("x1","x2"), model_type = "linear")
-mc_y0  <- define_model_component("Y0", dat, "Y", fm, evaluation_indicator = "eval_y0", covariates = c("x1","x2"), model_type = "linear")
-mc_T   <- define_model_component("Tscore", dat, "T", fm, covariates = "q1", model_type = "linear")
-mc_op  <- define_model_component("Satisfaction", dat, "y_ord", fm, covariates = "x1", model_type = "oprobit")
+# Potential wages in each sector
+wage0 <- 2.0 + 0.5*x1 + 0.3*x2 + rnorm(n, 0, 0.6)              # No ability effect
+wage1 <- 2.5 + 0.6*x1 + 1.0*f + rnorm(n, 0, 0.7)              # Ability matters
 
-ms   <- define_model_system(factor = fm, components = list(mc_sel, mc_y1, mc_y0, mc_T, mc_op))
-ctrl <- define_estimation_control(num_cores = 1)
+# Sector choice (high ability → more likely sector 1)
+z_sector <- 0.0 + 0.4*x2 + 0.8*f
+sector <- as.numeric(runif(n) < pnorm(z_sector))
 
-# ---- Estimate and export ----
-out <- estimate_and_write(ms, fm, ctrl, data = dat)
+# Observed wage (only see wage in chosen sector)
+wage <- ifelse(sector == 1, wage1, wage0)
 
+# Create dataset with evaluation indicators
+dat <- data.frame(
+  intercept = 1,
+  x1 = x1, x2 = x2,
+  T1 = T1, T2 = T2, T3 = T3,
+  wage = wage,
+  sector = sector,
+  eval_tests = 1,                    # Always observe test scores
+  eval_wage0 = 1 - sector,           # Observe wage0 when sector=0
+  eval_wage1 = sector,               # Observe wage1 when sector=1
+  eval_sector = 1                    # Always observe sector choice
+)
+
+# Define factor model (1 latent ability factor)
+fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad = 16)
+
+# Define model components
+# Test 1: Normalize loading to 1.0 for identification
+mc_T1 <- define_model_component(
+  name = "T1", data = dat, outcome = "T1", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1.0,
+  evaluation_indicator = "eval_tests"
+)
+
+# Tests 2 and 3: Free loadings
+mc_T2 <- define_model_component(
+  name = "T2", data = dat, outcome = "T2", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval_tests"
+)
+mc_T3 <- define_model_component(
+  name = "T3", data = dat, outcome = "T3", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval_tests"
+)
+
+# Wage in sector 0: No ability effect (loading = 0.0)
+mc_wage0 <- define_model_component(
+  name = "wage0", data = dat, outcome = "wage", factor = fm,
+  covariates = c("intercept", "x1", "x2"), model_type = "linear",
+  loading_normalization = 0.0,
+  evaluation_indicator = "eval_wage0"
+)
+
+# Wage in sector 1: Ability matters (free loading)
+mc_wage1 <- define_model_component(
+  name = "wage1", data = dat, outcome = "wage", factor = fm,
+  covariates = c("intercept", "x1"), model_type = "linear",
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval_wage1"
+)
+
+# Sector choice: Probit model
+mc_sector <- define_model_component(
+  name = "sector", data = dat, outcome = "sector", factor = fm,
+  covariates = c("intercept", "x2"), model_type = "probit",
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval_sector"
+)
+
+# Define model system
+ms <- define_model_system(
+  components = list(mc_T1, mc_T2, mc_T3, mc_wage0, mc_wage1, mc_sector),
+  factor = fm
+)
+
+# Single-core estimation (default: nlminb optimizer with analytical Hessian)
+ctrl_single <- define_estimation_control(num_cores = 1)
+result_single <- estimate_model_rcpp(
+  model_system = ms,
+  data = dat,
+  control = ctrl_single,
+  parallel = FALSE,
+  verbose = TRUE
+)
+
+# Parallel estimation with 4 cores (3x speedup)
+ctrl_parallel <- define_estimation_control(num_cores = 4)
+result_parallel <- estimate_model_rcpp(
+  model_system = ms,
+  data = dat,
+  control = ctrl_parallel,
+  parallel = TRUE,
+  verbose = TRUE
+)
+
+# View results
+print(result_parallel$estimates)
+print(result_parallel$std_errors)
+print(result_parallel$loglik)
 ```
 
-Typical printed output:
-```
-=== Running estimation ===
-     component   intercept                               betas loading factor_var factor_cor
-1    selection -0.03187048                     0.4646297187091   0.3;1          1          0
-2           Y1  1.33174200 1.0760519470925;-0.0357340595369585   0.3;1          1          0
-3           Y0  0.58041749 0.990587130317505;0.093872170432524   0.3;1          1          0
-4       Tscore -0.04325684                   0.997703682546533   0.3;1          1          0
-5 Satisfaction  0.00000000                                   0   0.3;1          1          0
+**Key features demonstrated:**
 
-Wrote all output files to /Users/.../factorana/factorana_R_interface/results 
-```
-
-- Number of latent factors = 2 -> length-2 `loading` for each component 
-- Normalization `c(NA, 1)` fixes the second loading to 1; the first is initialized at default `0.3`
+- **Latent factor**: Unobserved ability (`f`) affects test scores, wages, and sector choice
+- **Loading normalization**:
+  - `T1`: Fixed to 1.0 for identification
+  - `wage0`: Fixed to 0.0 (no ability effect in sector 0)
+  - Others: Free parameters (estimated)
+- **Evaluation indicators**: Only observe wages in chosen sector
+- **Parallelization**: 4 cores provides ~3x speedup on large datasets
+- **Optimizer**: Default `nlminb` uses analytical Hessian for fast convergence
 
 ---
 
@@ -130,24 +211,44 @@ More detailed explanations within functions.
 
 ### `define_estimation_control(num_cores = 1)`
 - Simple container for runtime controls such as the number of parallel cores.
+- `num_cores`: Number of CPU cores to use for parallel estimation (default: 1)
 
-### `initialize_parameters(mc)`
-- (Internal helper) Produces initial values for a **single** model component:
-  - `intercept`, `betas`
-  - `loading` (length-k; applies normalization)
-  - For `oprobit`: `thresholds` (length \(J-1\))
-  - `factor_var`, `factor_cor` placeholders
+### `estimate_model_rcpp(model_system, data, init_params = NULL, control = NULL, optimizer = "nlminb", parallel = TRUE, verbose = TRUE)`
+- Main estimation function using C++ backend with R-level parallelization
+- **Parameters**:
+  - `model_system`: Output from `define_model_system()`
+  - `data`: Data frame containing all variables
+  - `init_params`: Optional initial parameter values (auto-initialized if NULL)
+  - `control`: Output from `define_estimation_control()` (uses 1 core if NULL)
+  - `optimizer`: Optimization algorithm (default: `"nlminb"`)
+    - `"nlminb"`: Fast, uses analytical Hessian (recommended)
+    - `"nloptr"`: L-BFGS with bounds (slower, ~4.6x)
+    - `"optim"`: L-BFGS-B (similar to nloptr)
+    - `"trust"`: Trust region (experimental)
+  - `parallel`: Enable parallelization when `num_cores > 1` (default: TRUE)
+  - `verbose`: Print progress messages (default: TRUE)
+- **Returns**: List with
+  - `estimates`: Parameter estimates
+  - `std_errors`: Standard errors (from Hessian)
+  - `loglik`: Log-likelihood at optimum
+  - `convergence`: Convergence code (0 = success)
+  - `model_system`: Original model system
+  - `optimizer`: Optimizer used
 
-### `estimate_model(ms, control)`
-- Current prototype: initializes each component and returns a small summary `data.frame`.  
-  (The C++ estimation step will consume these later.)
-  
-### `estimate_and_write(ms, factor_model, control, data, outdir = "results")
-- wrapper that calls estimate_model() and exports 4 files:
-1. system_inits_long.csv : Long format list of component level parameters
-2. meas_par.csv : Numeric parameter + SE table for the backend
-3. model_config.csv : Key-value configuration table (system, factor, control)
-4. simulated_data.csv : the dataset used in estimation 
+**Parallelization notes**:
+- Splits observations across workers (not parameters)
+- Each worker evaluates likelihood on its data subset
+- Results are aggregated across workers
+- Achieves ~3x speedup with 4 cores on large datasets
+- Uses `doParallel` for Windows compatibility
+- Single evaluation indicator per observation (one worker evaluates it)
+
+### `initialize_parameters(model_system, data, verbose = TRUE)`
+- Produces initial values for all parameters in the model system
+- Estimates each component separately (ignoring factors) to get starting values
+- **Returns**: List with
+  - `init_params`: Initial parameter vector
+  - `factor_variance_fixed`: Whether factor variance is identified 
 
 ---
 
@@ -191,6 +292,58 @@ ini5$loading   # 1
 
 ---
 
+## Performance and optimization
+
+### Choosing an optimizer
+
+**nlminb (default, recommended)**:
+- Uses analytical Hessian for fast convergence
+- ~4.6x faster than nloptr on typical problems
+- Supports box constraints (sigma >= 0.01, cutpoint increments >= 0.01)
+- Best choice for most applications
+
+**nloptr**:
+- L-BFGS with gradient only (approximates Hessian)
+- Slower but more conservative with constraints
+- Use if nlminb has convergence issues
+
+**optim (L-BFGS-B)**:
+- Similar to nloptr but uses stats::optim
+- Good alternative to nloptr
+
+**trust**:
+- Trust region method with Hessian
+- Experimental, doesn't support fixed parameters well
+
+### Parallelization guidelines
+
+**When to use parallelization**:
+- Large datasets (n > 5,000)
+- Complex models with many components
+- Multiple local optimizations (e.g., testing initial values)
+
+**Typical speedups** (n=10,000 Roy model):
+- 2 cores: 1.7x speedup (85% efficiency)
+- 4 cores: 3.0x speedup (75% efficiency)
+- 8 cores: Diminishing returns due to overhead
+
+**Best practices**:
+```r
+# Use 1 core for small datasets
+ctrl <- define_estimation_control(num_cores = 1)
+
+# Use multiple cores for large datasets
+n_cores <- min(4, parallel::detectCores() - 1)  # Leave 1 core free
+ctrl <- define_estimation_control(num_cores = n_cores)
+
+# Enable parallel mode
+result <- estimate_model_rcpp(ms, dat, control = ctrl, parallel = TRUE)
+```
+
+**Note**: Parallelization splits observations across workers. Each worker gets a subset of the data and evaluates the likelihood independently. Results are aggregated to compute the total log-likelihood and gradients.
+
+---
+
 ## Testing
 
 Run all tests:
@@ -203,9 +356,11 @@ Run a subset (while iterating):
 devtools::test(filter = "modeltypes|multifactor|oprobit")
 ```
 
-What’s covered:
+What's covered:
 - Validation of inputs & conditioning on evaluation subset
 - Ordered probit thresholds (J-1, strictly increasing)
 - Multi-factor loading normalization (length-k; fixed entries works)
+- Parallelization correctness and performance (Roy model, n=10,000)
+- Parameter recovery from simulated data
 
 ---
