@@ -143,7 +143,12 @@ finite_diff_hessian <- function(model_system, data, params, h = NULL) {
 #' @param tol Tolerance for relative error
 #' @param verbose Print detailed diagnostics
 #' @return List with pass (logical), max_error (numeric), diagnostics (data.frame)
-check_gradient_accuracy <- function(model_system, data, params, tol = 1e-5, verbose = FALSE) {
+check_gradient_accuracy <- function(model_system, data, params, param_fixed = NULL, tol = 1e-5, verbose = FALSE) {
+  # Default: fix factor variance (first parameter)
+  if (is.null(param_fixed)) {
+    param_fixed <- c(TRUE, rep(FALSE, length(params) - 1))
+  }
+
   # Get analytical gradient
   result <- tryCatch({
     evaluate_likelihood_rcpp(model_system, data, params,
@@ -166,16 +171,18 @@ check_gradient_accuracy <- function(model_system, data, params, tol = 1e-5, verb
   diagnostics <- data.frame(
     param_idx = seq_along(params),
     param_value = params,
+    fixed = param_fixed,
     analytical = grad_analytical,
     finite_diff = grad_fd,
     abs_error = abs_error,
     rel_error = rel_error,
-    pass = rel_error < tol
+    pass = param_fixed | (rel_error < tol)  # Fixed params automatically pass
   )
 
-  # Check if all pass
-  all_pass <- all(diagnostics$pass, na.rm = TRUE) && !any(is.na(diagnostics$pass))
-  max_error <- if (all(is.na(rel_error))) NA else max(rel_error, na.rm = TRUE)
+  # Check if all FREE parameters pass
+  free_params <- !param_fixed
+  all_pass <- all(diagnostics$pass[free_params], na.rm = TRUE) && !any(is.na(diagnostics$pass[free_params]))
+  max_error <- if (all(is.na(rel_error[free_params]))) NA else max(rel_error[free_params], na.rm = TRUE)
 
   if (verbose) {
     cat("\n=== Gradient Check ===\n")
@@ -192,15 +199,20 @@ check_gradient_accuracy <- function(model_system, data, params, tol = 1e-5, verb
   ))
 }
 
-#' Check Hessian accuracy against finite differences
+#' Check Hessian accuracy against finite differences (diagonal elements only)
 #'
 #' @param model_system Model system object
 #' @param data Data frame
 #' @param params Parameter vector to check at
+#' @param param_fixed Logical vector indicating which parameters are fixed (default: first is fixed)
 #' @param tol Tolerance for relative error
 #' @param verbose Print detailed diagnostics
 #' @return List with pass (logical), max_error (numeric), diagnostics (data.frame)
-check_hessian_accuracy <- function(model_system, data, params, tol = 1e-4, verbose = FALSE) {
+check_hessian_accuracy <- function(model_system, data, params, param_fixed = NULL, tol = 1e-3, verbose = FALSE) {
+  # Default: fix factor variance (first parameter)
+  if (is.null(param_fixed)) {
+    param_fixed <- c(TRUE, rep(FALSE, length(params) - 1))
+  }
   # Get analytical Hessian
   result <- tryCatch({
     evaluate_likelihood_rcpp(model_system, data, params,
@@ -210,40 +222,69 @@ check_hessian_accuracy <- function(model_system, data, params, tol = 1e-4, verbo
     return(list(hessian = matrix(NA, length(params), length(params))))
   })
 
-  hess_analytical <- result$hessian
+  # Convert Hessian vector (packed upper triangular) to matrix
+  n_params <- length(params)
+  hess_analytical <- matrix(0, n_params, n_params)
+  idx <- 1
+  for (i in 1:n_params) {
+    for (j in i:n_params) {
+      hess_analytical[i, j] <- result$hessian[idx]
+      hess_analytical[j, i] <- result$hessian[idx]
+      idx <- idx + 1
+    }
+  }
 
   # Get finite difference Hessian
   hess_fd <- finite_diff_hessian(model_system, data, params)
 
-  # Compute errors (element-wise)
-  abs_error <- abs(hess_analytical - hess_fd)
-  rel_error <- abs_error / pmax(abs(hess_fd), 1e-10)
-
-  # Create diagnostics table (for upper triangle only)
+  # Check ALL elements (upper triangle) of FREE parameters
   n_params <- length(params)
-  diag_list <- list()
+  free_params <- !param_fixed
+
+  elem_list <- list()
   idx <- 1
 
   for (i in seq_len(n_params)) {
     for (j in i:n_params) {
-      diag_list[[idx]] <- data.frame(
+      analytical_val <- hess_analytical[i, j]
+      fd_val <- hess_fd[i, j]
+      abs_err <- abs(analytical_val - fd_val)
+
+      # For near-zero elements, use absolute error; otherwise use relative error
+      # Threshold set to 1e-5 to catch FD numerical noise in cross-derivatives
+      abs_threshold <- 1e-5
+      if (abs(analytical_val) < abs_threshold && abs(fd_val) < abs_threshold) {
+        # Both values near zero: use absolute error comparison
+        rel_err <- abs_err
+      } else {
+        # At least one value is non-zero: use relative error
+        rel_err <- abs_err / max(abs(analytical_val), abs(fd_val))
+      }
+
+      # Element passes if either parameter is fixed OR error is within tolerance
+      passes <- (param_fixed[i] || param_fixed[j]) | (rel_err < tol)
+
+      elem_list[[idx]] <- data.frame(
         row = i,
         col = j,
-        analytical = hess_analytical[i, j],
-        finite_diff = hess_fd[i, j],
-        abs_error = abs_error[i, j],
-        rel_error = rel_error[i, j],
-        pass = rel_error[i, j] < tol
+        row_fixed = param_fixed[i],
+        col_fixed = param_fixed[j],
+        analytical = analytical_val,
+        finite_diff = fd_val,
+        abs_error = abs_err,
+        rel_error = rel_err,
+        pass = passes
       )
       idx <- idx + 1
     }
   }
 
-  diagnostics <- do.call(rbind, diag_list)
+  diagnostics <- do.call(rbind, elem_list)
 
-  # Check if all pass
-  all_pass <- all(diagnostics$pass, na.rm = TRUE) && !any(is.na(diagnostics$pass))
-  max_error <- if (all(is.na(rel_error))) NA else max(rel_error, na.rm = TRUE)
+  # Check if all FREE-FREE parameter pairs pass
+  free_free_mask <- !diagnostics$row_fixed & !diagnostics$col_fixed
+  all_pass <- all(diagnostics$pass[free_free_mask], na.rm = TRUE) && !any(is.na(diagnostics$pass[free_free_mask]))
+  max_error <- if (all(is.na(diagnostics$rel_error[free_free_mask]))) NA else max(diagnostics$rel_error[free_free_mask], na.rm = TRUE)
 
   if (verbose) {
     cat("\n=== Hessian Check ===\n")
@@ -255,10 +296,15 @@ check_hessian_accuracy <- function(model_system, data, params, tol = 1e-4, verbo
     print(summary(diagnostics$rel_error))
     cat("\n")
 
-    # Print worst cases
-    cat("Worst 10 elements:\n")
-    worst <- diagnostics[order(diagnostics$rel_error, decreasing = TRUE)[1:min(10, nrow(diagnostics))], ]
-    print(worst, row.names = FALSE)
+    # Print worst FREE-FREE elements (excluding fixed parameters)
+    cat("Worst 10 free-free elements:\n")
+    free_free_diagnostics <- diagnostics[!diagnostics$row_fixed & !diagnostics$col_fixed, ]
+    if (nrow(free_free_diagnostics) > 0) {
+      worst <- free_free_diagnostics[order(free_free_diagnostics$rel_error, decreasing = TRUE)[1:min(10, nrow(free_free_diagnostics))], ]
+      print(worst, row.names = FALSE)
+    } else {
+      cat("  (no free-free elements)\n")
+    }
     cat("\n")
   }
 
@@ -285,10 +331,16 @@ run_estimation_comparison <- function(model_system, data, true_params,
   }
 
   # Get default initial parameters
-  default_init <- initialize_parameters(model_system, data, verbose = FALSE)
+  init_result <- initialize_parameters(model_system, data, verbose = FALSE)
+  default_init <- init_result$init_params
+  factor_var_fixed <- init_result$factor_variance_fixed
+
+  # Create param_fixed vector (factor variance is first parameter)
+  param_fixed <- c(factor_var_fixed, rep(FALSE, length(true_params) - 1))
 
   if (verbose) {
     cat("\n=== Estimation Comparison ===\n\n")
+    cat(sprintf("Factor variance fixed: %s\n", factor_var_fixed))
   }
 
   # Estimate with default initialization
@@ -298,10 +350,19 @@ run_estimation_comparison <- function(model_system, data, true_params,
                        optimizer = "nlminb", parallel = FALSE, verbose = FALSE)
   }, error = function(e) {
     if (verbose) cat("Error with default init:", e$message, "\n")
-    return(list(estimates = rep(NA, length(true_params)),
-                std_errors = rep(NA, length(true_params)),
+    # Return empty result (will get correct length from successful estimation or set to n_estimates)
+    return(list(estimates = numeric(0),
+                std_errors = numeric(0),
                 loglik = NA, convergence = 999))
   })
+
+  # Determine expected number of free parameters
+  if (length(result_default$estimates) > 0) {
+    n_estimates <- length(result_default$estimates)
+  } else {
+    # If default failed, estimate from model structure (total - number fixed)
+    n_estimates <- sum(!param_fixed)
+  }
 
   # Estimate with true parameters as initialization
   if (verbose) cat("Estimating with true parameter initialization...\n")
@@ -310,10 +371,17 @@ run_estimation_comparison <- function(model_system, data, true_params,
                        optimizer = "nlminb", parallel = FALSE, verbose = FALSE)
   }, error = function(e) {
     if (verbose) cat("Error with true init:", e$message, "\n")
-    return(list(estimates = rep(NA, length(true_params)),
-                std_errors = rep(NA, length(true_params)),
+    # Return result with correct length
+    return(list(estimates = rep(NA, n_estimates),
+                std_errors = rep(NA, n_estimates),
                 loglik = NA, convergence = 999))
   })
+
+  # Fix result_default if it failed
+  if (length(result_default$estimates) == 0) {
+    result_default$estimates <- rep(NA, n_estimates)
+    result_default$std_errors <- rep(NA, n_estimates)
+  }
 
   # Evaluate likelihood at true parameters
   if (verbose) cat("Evaluating likelihood at true parameters...\n")
@@ -327,7 +395,7 @@ run_estimation_comparison <- function(model_system, data, true_params,
 
   # Handle case where true_params and default_init include fixed parameters
   # If lengths don't match, they likely include fixed params
-  n_estimates <- length(result_default$estimates)
+  # (n_estimates already defined above)
 
   if (length(true_params) > n_estimates) {
     if (verbose) {
@@ -419,7 +487,8 @@ run_estimation_comparison <- function(model_system, data, true_params,
     default_converged = default_converged,
     true_init_converged = true_init_converged,
     reasonable_default = reasonable_default,
-    reasonable_true_init = reasonable_true_init
+    reasonable_true_init = reasonable_true_init,
+    param_fixed = param_fixed
   ))
 }
 

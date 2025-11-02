@@ -25,19 +25,20 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
   }
 
   # ---- 1. Check factor identification ----
-  # A factor variance is identified if ANY component has a non-NA, non-zero normalization
+  # A factor variance should be FIXED when a loading is normalized to 1.0
+  # Otherwise it should be estimated
   n_factors <- model_system$factor$n_factors
   n_types <- model_system$factor$n_types
 
-  factor_variance_identified <- rep(FALSE, n_factors)
+  factor_variance_fixed <- rep(FALSE, n_factors)
 
   for (comp in model_system$components) {
     if (!is.null(comp$loading_normalization)) {
       for (k in seq_len(n_factors)) {
-        # Check if this loading is fixed to a non-zero value
+        # Check if this loading is fixed to 1.0 (identification via unit loading)
         if (!is.na(comp$loading_normalization[k]) &&
-            abs(comp$loading_normalization[k]) > 1e-6) {
-          factor_variance_identified[k] <- TRUE
+            abs(comp$loading_normalization[k] - 1.0) < 1e-6) {
+          factor_variance_fixed[k] <- TRUE
         }
       }
     }
@@ -46,7 +47,7 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
   if (verbose) {
     message("Factor identification:")
     for (k in seq_len(n_factors)) {
-      status <- if (factor_variance_identified[k]) "identified (variance will be estimated)" else "NOT identified (variance fixed to 1.0)"
+      status <- if (factor_variance_fixed[k]) "identified by unit loading (variance fixed to 1.0)" else "NOT identified (variance will be estimated)"
       message(sprintf("  Factor %d: %s", k, status))
     }
   }
@@ -149,12 +150,43 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         stop("MASS package required for ordered probit initialization. Install with: install.packages('MASS')")
       }
 
-      fit <- MASS::polr(as.ordered(outcome) ~ X - 1, method = "probit")
-      coefs <- coef(fit)
-      thresholds <- fit$zeta
+      # For ordered probit, intercept is not identified (absorbed into thresholds)
+      # Remove intercept column if present
+      X_no_int <- X
+      intercept_col <- which(tolower(comp$covariates) == "intercept")
+      if (length(intercept_col) > 0) {
+        X_no_int <- X[, -intercept_col, drop = FALSE]
+      }
+
+      # Fit model without intercept
+      if (ncol(X_no_int) > 0) {
+        fit <- MASS::polr(as.ordered(outcome) ~ X_no_int - 1, method = "probit")
+        coefs_no_int <- coef(fit)
+      } else {
+        coefs_no_int <- numeric(0)
+      }
+      thresholds_abs <- fit$zeta
+
+      # Convert absolute thresholds to incremental parameterization
+      # thresh1, thresh2, thresh3 -> thresh1, (thresh2-thresh1), (thresh3-thresh2)
+      thresholds <- c(thresholds_abs[1])
+      if (length(thresholds_abs) > 1) {
+        for (i in 2:length(thresholds_abs)) {
+          thresholds <- c(thresholds, thresholds_abs[i] - thresholds_abs[i-1])
+        }
+      }
+
+      # Build parameter vector: put intercept (0.0) first if it was in covariates
+      if (length(intercept_col) > 0) {
+        # Reconstruct in original order: intercept gets 0.0, others get fitted values
+        coefs <- rep(0.0, ncol(X))
+        coefs[-intercept_col] <- coefs_no_int
+      } else {
+        coefs <- coefs_no_int
+      }
 
       if (verbose) {
-        message(sprintf("  Ordered probit: %d covariates, %d thresholds", length(coefs), length(thresholds)))
+        message(sprintf("  Ordered probit: %d covariates, %d thresholds (incremental form)", length(coefs), length(thresholds)))
       }
 
       comp_params <- c(coefs, rep(0.01, n_free_loadings), thresholds)
@@ -170,6 +202,6 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
 
   list(
     init_params = init_params,
-    factor_variance_fixed = !factor_variance_identified
+    factor_variance_fixed = factor_variance_fixed[1]  # Return first factor's status
   )
 }
