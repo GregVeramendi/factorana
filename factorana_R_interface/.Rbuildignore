@@ -1,2 +1,8 @@
 ^.*\.Rproj$
 ^\.Rproj\.user$
+^dev$
+^tests/manual$
+^HESSIAN_TODO\.md$
+^MLOGIT_IMPLEMENTATION\.md$
+^OPROBIT_IMPLEMENTATION\.md$
+^TEST_RESULTS_SUMMARY\.md$
