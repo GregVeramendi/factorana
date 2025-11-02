@@ -239,19 +239,23 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   # Setup parallel cluster if requested
   cl <- NULL
   if (parallel && control$num_cores > 1) {
-    if (verbose) {
-      message(sprintf("Setting up parallel cluster with %d cores...", control$num_cores))
-    }
-
-    # Use doParallel for Windows compatibility
-    cl <- parallel::makeCluster(control$num_cores)
-    doParallel::registerDoParallel(cl)
-    on.exit(parallel::stopCluster(cl), add = TRUE)
-
-    # Split data across workers
+    # Split data across workers first to determine actual number of workers needed
     n_obs <- nrow(data_mat)
     n_per_worker <- ceiling(n_obs / control$num_cores)
     data_splits <- split(1:n_obs, ceiling(1:n_obs / n_per_worker))
+
+    # Use actual number of data splits (may be less than requested cores)
+    n_workers <- length(data_splits)
+
+    if (verbose) {
+      message(sprintf("Setting up parallel cluster with %d cores (requested %d)...",
+                     n_workers, control$num_cores))
+    }
+
+    # Use doParallel for Windows compatibility
+    cl <- parallel::makeCluster(n_workers)
+    doParallel::registerDoParallel(cl)
+    on.exit(parallel::stopCluster(cl), add = TRUE)
 
   } else {
     # Single worker
@@ -266,17 +270,27 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
 
   if (!is.null(cl)) {
     # Export necessary objects to workers
-    parallel::clusterExport(cl, c("model_system", "data_mat", "n_quad"),
+    parallel::clusterExport(cl, c("model_system", "data_mat", "n_quad", "data_splits"),
                            envir = environment())
     parallel::clusterEvalQ(cl, {
       library(factorana)
     })
 
+    # Set worker IDs (1 to n_workers) in each worker's global environment
+    for (i in seq_along(cl)) {
+      parallel::clusterCall(cl[i], assign, ".self_id", i, envir = .GlobalEnv)
+    }
+
     # Initialize FactorModel on each worker with its data subset
-    fm_ptrs <- parallel::clusterMap(cl, function(idx) {
+    # IMPORTANT: Store pointer in worker's global env to avoid serialization
+    parallel::clusterEvalQ(cl, {
+      worker_id <- .self_id
+      idx <- data_splits[[worker_id]]
       data_subset <- data_mat[idx, , drop = FALSE]
-      initialize_factor_model_cpp(model_system, data_subset, n_quad)
-    }, data_splits)
+      .fm_ptr <- initialize_factor_model_cpp(model_system, data_subset, n_quad)
+    })
+
+    fm_ptrs <- NULL  # Not used; pointers stored on workers
   } else {
     # Single worker initialization
     fm_ptrs <- list(initialize_factor_model_cpp(model_system, data_mat, n_quad))
@@ -289,7 +303,12 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     init_params <- init_result$init_params
 
     # Get parameter count from C++ object
-    param_info <- get_parameter_info_cpp(fm_ptrs[[1]])
+    if (!is.null(cl)) {
+      # For parallel case, get from first worker
+      param_info <- parallel::clusterEvalQ(cl, get_parameter_info_cpp(.fm_ptr))[[1]]
+    } else {
+      param_info <- get_parameter_info_cpp(fm_ptrs[[1]])
+    }
     n_params <- param_info$n_param_free
 
     if (length(init_params) != n_params) {
@@ -325,9 +344,10 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
 
     if (!is.null(cl)) {
       # Parallel evaluation: aggregate across workers
-      loglik_parts <- parallel::clusterMap(cl, function(fm_ptr) {
-        evaluate_loglik_only_cpp(fm_ptr, params_full)
-      }, fm_ptrs)
+      parallel::clusterExport(cl, "params_full", envir = environment())
+      loglik_parts <- parallel::clusterEvalQ(cl, {
+        evaluate_loglik_only_cpp(.fm_ptr, params_full)
+      })
       loglik <- sum(unlist(loglik_parts))
     } else {
       # Single worker
@@ -344,12 +364,13 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
 
     if (!is.null(cl)) {
       # Parallel evaluation: aggregate gradients
-      grad_parts <- parallel::clusterMap(cl, function(fm_ptr) {
-        result <- evaluate_likelihood_cpp(fm_ptr, params_full,
+      parallel::clusterExport(cl, "params_full", envir = environment())
+      grad_parts <- parallel::clusterEvalQ(cl, {
+        result <- evaluate_likelihood_cpp(.fm_ptr, params_full,
                                          compute_gradient = TRUE,
                                          compute_hessian = FALSE)
         result$gradient
-      }, fm_ptrs)
+      })
       grad_full <- Reduce(`+`, grad_parts)
     } else {
       result <- evaluate_likelihood_cpp(fm_ptrs[[1]], params_full,
@@ -370,13 +391,14 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
 
     if (!is.null(cl)) {
       # Parallel evaluation: aggregate Hessians
-      hess_parts <- parallel::clusterMap(cl, function(fm_ptr) {
-        result <- evaluate_likelihood_cpp(fm_ptr, params_full,
+      parallel::clusterExport(cl, "params_full", envir = environment())
+      hess_parts <- parallel::clusterEvalQ(cl, {
+        result <- evaluate_likelihood_cpp(.fm_ptr, params_full,
                                          compute_gradient = FALSE,
                                          compute_hessian = TRUE)
         result$hessian
-      }, fm_ptrs)
-      # TODO: Properly aggregate Hessian matrices (they're upper triangles)
+      })
+      # Aggregate Hessian matrices (they're upper triangles, addition is correct)
       hess <- Reduce(`+`, hess_parts)
     } else {
       result <- evaluate_likelihood_cpp(fm_ptrs[[1]], params_full,
@@ -514,14 +536,14 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   if (verbose) message("Computing Hessian for standard errors...")
 
   if (!is.null(cl)) {
-    hess_parts <- parallel::clusterMap(cl, function(fm_ptr) {
-      result <- evaluate_likelihood_cpp(fm_ptr, estimates,
+    parallel::clusterExport(cl, "estimates", envir = environment())
+    hess_parts <- parallel::clusterEvalQ(cl, {
+      result <- evaluate_likelihood_cpp(.fm_ptr, estimates,
                                        compute_gradient = TRUE,
                                        compute_hessian = TRUE)
       result$hessian
-    }, fm_ptrs)
-    # TODO: Properly aggregate Hessian matrices (they're upper triangles)
-    # For now, simple sum
+    })
+    # Aggregate Hessian matrices (they're upper triangles, addition is correct)
     hessian <- Reduce(`+`, hess_parts)
   } else {
     result <- evaluate_likelihood_cpp(fm_ptrs[[1]], estimates,
