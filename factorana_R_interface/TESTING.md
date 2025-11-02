@@ -60,13 +60,14 @@ source("dev/validation/check_gradient_at_true.R")
 - **test-components.R** - Model component functionality
 - **test-parallelization.R** - Parallel estimation correctness and performance
 - **test-parameter-constraints.R** - Parameter constraint system
-- **test-quadrature.R** - Gauss-Hermite quadrature accuracy
+- **test-quadrature.R** - Gauss-Hermite quadrature accuracy with three-measurement system
 - **test-systematic-suite.R** - Systematic model validation
+- **test-two-stage.R** - Multi-stage/sequential estimation with Roy model
 - **test-test-01-validation.R** - Basic validation
 - **test-test-02-conditioning.R** - Conditioning tests
-- **test-test-03-modeltypes.R** - Different model types
+- **test-test-03-modeltypes.R** - Different model types (linear, probit, ordered probit)
 - **test-test-04-initialize.R** - Parameter initialization
-- **test-test-05-multifactor.R** - Multi-factor models
+- **test-test-05-multifactor.R** - Multi-factor models with component-level normalization
 
 ### Manual Tests (`tests/manual/`)
 **Model Types:**
@@ -160,9 +161,11 @@ test_that("feature works correctly", {
 ## Test Results
 
 Current test suite status:
-- **Automated tests**: 10 test files covering core functionality
-  - All tests passing (as of last run)
+- **Automated tests**: 11 test files covering core functionality
+  - **85 tests passing**, 0 failures, 0 warnings (as of last run)
   - Includes parallelization test with Roy model (n=10,000)
+  - Includes two-stage estimation test with Roy model
+  - Quadrature test uses three-measurement system for proper identification
 - **Manual tests**: 26 comprehensive tests
   - Model types: linear, probit, logit, oprobit
   - Complex models: Roy selection, multiple components

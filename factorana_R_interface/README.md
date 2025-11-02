@@ -14,6 +14,7 @@ R front-end for specifying model components (linear/logit/probit/ordered probit)
 ## Features
 - Define any number of latent factors with flexible loading normalization
 - Specify model components independently (linear, logit, probit, oprobit)
+- Multi-stage/sequential estimation with fixed early-stage parameters
 - Automatically initialize parameters using component-by-component estimation
 - Fast C++ backend with R-level parallelization for large datasets
 - Analytical Hessian for fast convergence and accurate standard errors
@@ -163,6 +164,120 @@ print(result_parallel$loglik)
 
 ---
 
+## Two-Stage (Sequential) Estimation
+
+For complex models, you can estimate in multiple stages to improve convergence and interpretability. In the first stage, estimate a subset of components (e.g., measurement system). In subsequent stages, fix those components and add new ones.
+
+**Example**: Estimate test scores first, then add wage and sector equations:
+
+```r
+# Using the same Roy model data from above...
+
+# ======================================================================
+# STAGE 1: Estimate measurement system (test scores only)
+# ======================================================================
+
+fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 16)
+
+# Define three test score components
+mc_T1 <- define_model_component(
+  name = "T1", data = dat, outcome = "T1", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1.0,
+  evaluation_indicator = "eval_tests"
+)
+
+mc_T2 <- define_model_component(
+  name = "T2", data = dat, outcome = "T2", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval_tests"
+)
+
+mc_T3 <- define_model_component(
+  name = "T3", data = dat, outcome = "T3", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval_tests"
+)
+
+# Create model system for stage 1
+ms_stage1 <- define_model_system(
+  components = list(mc_T1, mc_T2, mc_T3),
+  factor = fm
+)
+
+# Estimate stage 1
+result_stage1 <- estimate_model_rcpp(
+  model_system = ms_stage1,
+  data = dat,
+  init_params = NULL,
+  optimizer = "nlminb",
+  verbose = TRUE
+)
+
+# ======================================================================
+# STAGE 2: Add wage/sector equations, fixing stage 1 parameters
+# ======================================================================
+
+# Define wage and sector components (same as before)
+mc_wage0 <- define_model_component(
+  name = "wage0", data = dat, outcome = "wage", factor = fm,
+  covariates = c("intercept", "x1", "x2"), model_type = "linear",
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval_wage0"
+)
+
+mc_wage1 <- define_model_component(
+  name = "wage1", data = dat, outcome = "wage", factor = fm,
+  covariates = c("intercept", "x1"), model_type = "linear",
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval_wage1"
+)
+
+mc_sector <- define_model_component(
+  name = "sector", data = dat, outcome = "sector", factor = fm,
+  covariates = c("intercept", "x2"), model_type = "probit",
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval_sector"
+)
+
+# Create model system for stage 2, passing stage 1 results
+ms_stage2 <- define_model_system(
+  components = list(mc_wage0, mc_wage1, mc_sector),
+  factor = fm,
+  previous_stage = result_stage1  # Fix stage 1 parameters
+)
+
+# Estimate stage 2
+result_stage2 <- estimate_model_rcpp(
+  model_system = ms_stage2,
+  data = dat,
+  init_params = NULL,
+  optimizer = "nlminb",
+  verbose = TRUE
+)
+
+# View combined results
+print(result_stage2$estimates)    # Includes both stage 1 and stage 2 parameters
+print(result_stage2$std_errors)   # Standard errors preserved from stage 1
+```
+
+**How it works:**
+- Stage 1 estimates only the measurement system (9 parameters)
+- Stage 2 fixes those 9 parameters and estimates wage/sector parameters (12 new parameters)
+- `result_stage2` contains all 21 parameters with correct standard errors
+- Factor variance is fixed at stage 1 estimate
+- Computational efficiency: gradients/Hessians not computed for fixed components
+
+**Benefits:**
+- Improved convergence for complex models
+- Interpretable intermediate results
+- Faster optimization (skip derivatives for fixed parameters)
+- Can chain multiple stages: `stage3 <- define_model_system(..., previous_stage = result_stage2)`
+
+---
+
 ## Concepts
 
 ### Latent factors & normalization
@@ -222,8 +337,14 @@ More detailed explanations within functions.
 - `loading_normalization`: Normalization for factor loadings (NA or NA_real_ = free, numeric = fixed)
 - Returns a `"model_component"` with pointers to `factor`.
 
-### `define_model_system(components, factor)`
+### `define_model_system(components, factor, previous_stage = NULL)`
 - Bundles components and the shared factor model into a `"model_system"`.
+- `previous_stage` (optional): Result object from a previous `estimate_model_rcpp()` call
+  - Enables multi-stage/sequential estimation
+  - Fixes all previous-stage component parameters and factor variance
+  - Previous-stage components are prepended to new components
+  - Standard errors are preserved from previous stage
+  - See "Two-Stage Estimation" section for usage example
 
 ### `define_estimation_control(num_cores = 1)`
 - Simple container for runtime controls such as the number of parallel cores.
@@ -390,6 +511,8 @@ What's covered:
 - Ordered probit thresholds (J-1, strictly increasing)
 - Multi-factor loading normalization (length-k; fixed entries works)
 - Parallelization correctness and performance (Roy model, n=10,000)
+- Two-stage/sequential estimation (measurement system → full Roy model)
+- Quadrature accuracy with properly identified three-measurement system
 - Parameter recovery from simulated data
 
 ---
