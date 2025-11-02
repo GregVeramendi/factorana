@@ -5,7 +5,7 @@ This document describes the testing structure for the factorana package.
 ## Directory Structure
 
 ```
-factorana_R_interface/
+factorana_R/
 ├── tests/
 │   ├── testthat/           # Automated tests (run via devtools::test())
 │   │   ├── test-*.R        # Test files

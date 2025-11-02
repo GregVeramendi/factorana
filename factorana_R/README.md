@@ -20,7 +20,7 @@ Install directly from GitHub using `devtools` or `remotes`:
 install.packages("devtools")
 
 # Install factorana from GitHub
-devtools::install_github("GregVeramendi/factorana", subdir = "factorana_R_interface")
+devtools::install_github("GregVeramendi/factorana", subdir = "factorana_R")
 
 # Load the package
 library(factorana)
@@ -50,7 +50,7 @@ Sys.which("make")
 ```r
 # Install with verbose output to see errors
 devtools::install_github("GregVeramendi/factorana",
-                        subdir = "factorana_R_interface",
+                        subdir = "factorana_R",
                         build_vignettes = FALSE,
                         force = TRUE)
 ```
