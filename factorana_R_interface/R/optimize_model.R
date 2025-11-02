@@ -239,7 +239,7 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
 #' @return List with parameter estimates, standard errors, log-likelihood, etc.
 #' @export
 estimate_model_rcpp <- function(model_system, data, init_params = NULL,
-                                control = NULL, optimizer = "nloptr",
+                                control = NULL, optimizer = "nlminb",
                                 parallel = TRUE, verbose = TRUE) {
 
   # WORKAROUND: Deep copy model_system to avoid C++ reuse bug
