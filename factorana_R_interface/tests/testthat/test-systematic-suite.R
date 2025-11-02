@@ -15,307 +15,10 @@ GRAD_TOL <- 1e-3  # Relaxed to accommodate numerical precision in finite differe
 HESS_TOL <- 1e-3  # Checking all elements (diagonal and off-diagonal)
 
 # ==============================================================================
-# Test A: Linear Model with Zero Factors
+# Test A: Measurement System with 3 Linear Tests and 1 Factor
 # ==============================================================================
 
-test_that("Model A: Linear model with zero factors", {
-  skip_on_cran()
-  skip("Zero-factor models not yet supported in C++ - requires handling n_factors=0 throughout codebase")
-
-  set.seed(100)
-
-  # Simulate data
-  n <- 500
-  x1 <- rnorm(n)
-  x2 <- rnorm(n)
-
-  # True parameters: intercept, beta1, beta2, sigma
-  true_params <- c(2.0, 1.5, -0.8, 0.5)
-
-  y <- true_params[1] + true_params[2]*x1 + true_params[3]*x2 +
-       rnorm(n, 0, true_params[4])
-
-  dat <- data.frame(intercept = 1, x1 = x1, x2 = x2, y = y, eval = 1)
-
-  # Create model system with 0 factors
-  fm <- define_factor_model(n_factors = 0, n_types = 1, n_quad = 8)
-  mc <- define_model_component(
-    name = "y",
-    data = dat,
-    outcome = "y",
-    factor = fm,
-    covariates = c("intercept", "x1", "x2"),
-    model_type = "linear",
-    loading_normalization = numeric(0),
-    evaluation_indicator = "eval"
-  )
-  ms <- define_model_system(components = list(mc), factor = fm)
-
-  # Run checks
-  grad_check <- check_gradient_accuracy(ms, dat, true_params, tol = GRAD_TOL, verbose = VERBOSE)
-  hess_check <- check_hessian_accuracy(ms, dat, true_params, tol = HESS_TOL, verbose = VERBOSE)
-  est_comp <- run_estimation_comparison(
-    ms, dat, true_params,
-    param_names = c("intercept", "beta1", "beta2", "sigma"),
-    verbose = VERBOSE
-  )
-
-  # Collect diagnostics
-  diagnostics <- list(
-    gradient_check = grad_check,
-    hessian_check = hess_check,
-    estimation = est_comp,
-    overall_pass = grad_check$pass && hess_check$pass &&
-                   est_comp$default_converged && est_comp$reasonable_default
-  )
-
-  # Save log
-  if (SAVE_LOGS) {
-    log_file <- save_diagnostics_to_log("test_A_linear_zero_factors", diagnostics)
-    if (VERBOSE) cat("Log saved to:", log_file, "\n")
-  }
-
-  # Assertions
-  expect_true(grad_check$pass, info = sprintf("Gradient check failed (max error: %.2e)", grad_check$max_error))
-  expect_true(hess_check$pass, info = sprintf("Hessian check failed (max error: %.2e)", hess_check$max_error))
-  expect_true(est_comp$default_converged, info = "Estimation with default init failed to converge")
-  expect_true(est_comp$reasonable_default, info = "Estimates are not reasonable")
-})
-
-# ==============================================================================
-# Test B: Probit Model with Zero Factors
-# ==============================================================================
-
-test_that("Model B: Probit model with zero factors", {
-  skip_on_cran()
-  skip("Zero-factor models not yet supported in C++ - requires handling n_factors=0 throughout codebase")
-
-  set.seed(101)
-
-  # Simulate data
-  n <- 500
-  x1 <- rnorm(n)
-  x2 <- rnorm(n)
-
-  # True parameters: intercept, beta1, beta2
-  true_params <- c(0.5, 1.0, -0.7)
-
-  z <- true_params[1] + true_params[2]*x1 + true_params[3]*x2
-  y <- as.numeric(runif(n) < pnorm(z))
-
-  dat <- data.frame(intercept = 1, x1 = x1, x2 = x2, y = y, eval = 1)
-
-  # Create model system with 0 factors
-  fm <- define_factor_model(n_factors = 0, n_types = 1, n_quad = 8)
-  mc <- define_model_component(
-    name = "y",
-    data = dat,
-    outcome = "y",
-    factor = fm,
-    covariates = c("intercept", "x1", "x2"),
-    model_type = "probit",
-    loading_normalization = numeric(0),
-    evaluation_indicator = "eval"
-  )
-  ms <- define_model_system(components = list(mc), factor = fm)
-
-  # Run checks
-  grad_check <- check_gradient_accuracy(ms, dat, true_params, tol = GRAD_TOL, verbose = VERBOSE)
-  hess_check <- check_hessian_accuracy(ms, dat, true_params, tol = HESS_TOL, verbose = VERBOSE)
-  est_comp <- run_estimation_comparison(
-    ms, dat, true_params,
-    param_names = c("intercept", "beta1", "beta2"),
-    verbose = VERBOSE
-  )
-
-  # Collect diagnostics
-  diagnostics <- list(
-    gradient_check = grad_check,
-    hessian_check = hess_check,
-    estimation = est_comp,
-    overall_pass = grad_check$pass && hess_check$pass &&
-                   est_comp$default_converged && est_comp$reasonable_default
-  )
-
-  # Save log
-  if (SAVE_LOGS) {
-    log_file <- save_diagnostics_to_log("test_B_probit_zero_factors", diagnostics)
-    if (VERBOSE) cat("Log saved to:", log_file, "\n")
-  }
-
-  # Assertions
-  expect_true(grad_check$pass, info = sprintf("Gradient check failed (max error: %.2e)", grad_check$max_error))
-  expect_true(hess_check$pass, info = sprintf("Hessian check failed (max error: %.2e)", hess_check$max_error))
-  expect_true(est_comp$default_converged, info = "Estimation with default init failed to converge")
-  expect_true(est_comp$reasonable_default, info = "Estimates are not reasonable")
-})
-
-# ==============================================================================
-# Test C: Ordered Probit with 3 Choices and Zero Factors
-# ==============================================================================
-
-test_that("Model C: Ordered probit with 3 choices and zero factors", {
-  skip_on_cran()
-  skip("Zero-factor models not yet supported in C++ - requires handling n_factors=0 throughout codebase")
-
-  set.seed(102)
-
-  # Simulate data
-  n <- 500
-  x1 <- rnorm(n)
-  x2 <- rnorm(n)
-
-  # True parameters: intercept, beta1, beta2, tau1, tau2
-  # (3 choices means 2 thresholds)
-  true_params <- c(0.5, 0.8, -0.6, 0.0, 1.0)
-
-  z <- true_params[1] + true_params[2]*x1 + true_params[3]*x2
-  tau1 <- true_params[4]
-  tau2 <- tau1 + abs(true_params[5])  # Ensure tau2 > tau1
-
-  # Generate ordered outcome (1, 2, or 3)
-  u <- rnorm(n)
-  y <- ifelse(z + u < tau1, 1,
-              ifelse(z + u < tau2, 2, 3))
-
-  dat <- data.frame(intercept = 1, x1 = x1, x2 = x2, y = y, eval = 1)
-
-  # Create model system with 0 factors
-  fm <- define_factor_model(n_factors = 0, n_types = 1, n_quad = 8)
-  mc <- define_model_component(
-    name = "y",
-    data = dat,
-    outcome = "y",
-    factor = fm,
-    covariates = c("intercept", "x1", "x2"),
-    model_type = "oprobit",
-    loading_normalization = numeric(0),
-    evaluation_indicator = "eval"
-  )
-  ms <- define_model_system(components = list(mc), factor = fm)
-
-  # Run checks
-  grad_check <- check_gradient_accuracy(ms, dat, true_params, tol = GRAD_TOL, verbose = VERBOSE)
-  hess_check <- check_hessian_accuracy(ms, dat, true_params, tol = HESS_TOL, verbose = VERBOSE)
-  est_comp <- run_estimation_comparison(
-    ms, dat, true_params,
-    param_names = c("intercept", "beta1", "beta2", "tau1", "tau2"),
-    verbose = VERBOSE
-  )
-
-  # Collect diagnostics
-  diagnostics <- list(
-    gradient_check = grad_check,
-    hessian_check = hess_check,
-    estimation = est_comp,
-    overall_pass = grad_check$pass && hess_check$pass &&
-                   est_comp$default_converged && est_comp$reasonable_default
-  )
-
-  # Save log
-  if (SAVE_LOGS) {
-    log_file <- save_diagnostics_to_log("test_C_oprobit_zero_factors", diagnostics)
-    if (VERBOSE) cat("Log saved to:", log_file, "\n")
-  }
-
-  # Assertions
-  expect_true(grad_check$pass, info = sprintf("Gradient check failed (max error: %.2e)", grad_check$max_error))
-  expect_true(hess_check$pass, info = sprintf("Hessian check failed (max error: %.2e)", hess_check$max_error))
-  expect_true(est_comp$default_converged, info = "Estimation with default init failed to converge")
-  expect_true(est_comp$reasonable_default, info = "Estimates are not reasonable")
-})
-
-# ==============================================================================
-# Test D: Multinomial Logit with 3 Choices and Zero Factors
-# ==============================================================================
-
-test_that("Model D: Multinomial logit with 3 choices and zero factors", {
-  skip_on_cran()
-  skip("Zero-factor models not yet supported in C++ - requires handling n_factors=0 throughout codebase")
-
-  set.seed(103)
-
-  # Simulate data
-  n <- 500
-  x1 <- rnorm(n)
-  x2 <- rnorm(n)
-
-  # True parameters: intercept1, beta1_1, beta2_1, intercept2, beta1_2, beta2_2
-  # (3 choices with choice 0 as reference means 2 sets of parameters)
-  true_params <- c(0.5, 0.8, -0.4, 1.0, -0.6, 0.7)
-
-  # Linear predictors for choices 1 and 2 (choice 0 is reference)
-  z1 <- true_params[1] + true_params[2]*x1 + true_params[3]*x2
-  z2 <- true_params[4] + true_params[5]*x1 + true_params[6]*x2
-
-  # Multinomial logit probabilities
-  exp_z0 <- 1
-  exp_z1 <- exp(z1)
-  exp_z2 <- exp(z2)
-  denom <- exp_z0 + exp_z1 + exp_z2
-
-  p0 <- exp_z0 / denom
-  p1 <- exp_z1 / denom
-  p2 <- exp_z2 / denom
-
-  # Generate choice outcome
-  y <- numeric(n)
-  for (i in seq_len(n)) {
-    y[i] <- sample(0:2, 1, prob = c(p0[i], p1[i], p2[i]))
-  }
-
-  dat <- data.frame(intercept = 1, x1 = x1, x2 = x2, y = y, eval = 1)
-
-  # Create model system with 0 factors
-  fm <- define_factor_model(n_factors = 0, n_types = 1, n_quad = 8)
-  mc <- define_model_component(
-    name = "y",
-    data = dat,
-    outcome = "y",
-    factor = fm,
-    covariates = c("intercept", "x1", "x2"),
-    model_type = "mlogit",
-    loading_normalization = numeric(0),
-    evaluation_indicator = "eval"
-  )
-  ms <- define_model_system(components = list(mc), factor = fm)
-
-  # Run checks
-  grad_check <- check_gradient_accuracy(ms, dat, true_params, tol = GRAD_TOL, verbose = VERBOSE)
-  hess_check <- check_hessian_accuracy(ms, dat, true_params, tol = HESS_TOL, verbose = VERBOSE)
-  est_comp <- run_estimation_comparison(
-    ms, dat, true_params,
-    param_names = c("int1", "beta1_1", "beta2_1", "int2", "beta1_2", "beta2_2"),
-    verbose = VERBOSE
-  )
-
-  # Collect diagnostics
-  diagnostics <- list(
-    gradient_check = grad_check,
-    hessian_check = hess_check,
-    estimation = est_comp,
-    overall_pass = grad_check$pass && hess_check$pass &&
-                   est_comp$default_converged && est_comp$reasonable_default
-  )
-
-  # Save log
-  if (SAVE_LOGS) {
-    log_file <- save_diagnostics_to_log("test_D_mlogit_zero_factors", diagnostics)
-    if (VERBOSE) cat("Log saved to:", log_file, "\n")
-  }
-
-  # Assertions
-  expect_true(grad_check$pass, info = sprintf("Gradient check failed (max error: %.2e)", grad_check$max_error))
-  expect_true(hess_check$pass, info = sprintf("Hessian check failed (max error: %.2e)", hess_check$max_error))
-  expect_true(est_comp$default_converged, info = "Estimation with default init failed to converge")
-  expect_true(est_comp$reasonable_default, info = "Estimates are not reasonable")
-})
-
-# ==============================================================================
-# Test E: Measurement System with 3 Linear Tests and 1 Factor
-# ==============================================================================
-
-test_that("Model E: Measurement system with 3 linear tests and 1 factor", {
+test_that("Model A: Measurement system with 3 linear tests and 1 factor", {
   skip_on_cran()
 
   set.seed(104)
@@ -389,7 +92,7 @@ test_that("Model E: Measurement system with 3 linear tests and 1 factor", {
 
   # Save log
   if (SAVE_LOGS) {
-    log_file <- save_diagnostics_to_log("test_E_measurement_system", diagnostics)
+    log_file <- save_diagnostics_to_log("test_A_measurement_system", diagnostics)
     if (VERBOSE) cat("Log saved to:", log_file, "\n")
   }
 
@@ -401,10 +104,10 @@ test_that("Model E: Measurement system with 3 linear tests and 1 factor", {
 })
 
 # ==============================================================================
-# Test F: Measurement System (E) + Probit (B)
+# Test B: Measurement System (A) + Probit
 # ==============================================================================
 
-test_that("Model F: Measurement system with 3 linear tests and probit outcome", {
+test_that("Model B: Measurement system with 3 linear tests and probit outcome", {
   skip_on_cran()
 
   set.seed(105)
@@ -486,7 +189,7 @@ test_that("Model F: Measurement system with 3 linear tests and probit outcome", 
 
   # Save log
   if (SAVE_LOGS) {
-    log_file <- save_diagnostics_to_log("test_F_measurement_plus_probit", diagnostics)
+    log_file <- save_diagnostics_to_log("test_B_measurement_plus_probit", diagnostics)
     if (VERBOSE) cat("Log saved to:", log_file, "\n")
   }
 
@@ -498,10 +201,10 @@ test_that("Model F: Measurement system with 3 linear tests and probit outcome", 
 })
 
 # ==============================================================================
-# Test G: Measurement System (E) + Ordered Probit (C)
+# Test C: Measurement System (A) + Ordered Probit
 # ==============================================================================
 
-test_that("Model G: Measurement system with 3 linear tests and ordered probit", {
+test_that("Model C: Measurement system with 3 linear tests and ordered probit", {
   skip_on_cran()
 
   set.seed(106)
@@ -600,7 +303,7 @@ test_that("Model G: Measurement system with 3 linear tests and ordered probit", 
 
   # Save log
   if (SAVE_LOGS) {
-    log_file <- save_diagnostics_to_log("test_G_measurement_plus_oprobit", diagnostics)
+    log_file <- save_diagnostics_to_log("test_C_measurement_plus_oprobit", diagnostics)
     if (VERBOSE) cat("Log saved to:", log_file, "\n")
   }
 
@@ -612,10 +315,10 @@ test_that("Model G: Measurement system with 3 linear tests and ordered probit", 
 })
 
 # ==============================================================================
-# Test H: Measurement System (E) + Multinomial Logit (D)
+# Test D: Measurement System (A) + Multinomial Logit
 # ==============================================================================
 
-test_that("Model H: Measurement system with 3 linear tests and multinomial logit", {
+test_that("Model D: Measurement system with 3 linear tests and multinomial logit", {
   skip_on_cran()
 
   set.seed(107)
@@ -718,7 +421,7 @@ test_that("Model H: Measurement system with 3 linear tests and multinomial logit
 
   # Save log
   if (SAVE_LOGS) {
-    log_file <- save_diagnostics_to_log("test_H_measurement_plus_mlogit", diagnostics)
+    log_file <- save_diagnostics_to_log("test_D_measurement_plus_mlogit", diagnostics)
     if (VERBOSE) cat("Log saved to:", log_file, "\n")
   }
 
@@ -730,10 +433,10 @@ test_that("Model H: Measurement system with 3 linear tests and multinomial logit
 })
 
 # ==============================================================================
-# Test I: Roy Model
+# Test E: Roy Model
 # ==============================================================================
 
-test_that("Model I: Roy selection model", {
+test_that("Model E: Roy selection model", {
   skip_on_cran()
 
   set.seed(108)
@@ -864,7 +567,7 @@ test_that("Model I: Roy selection model", {
 
   # Save log
   if (SAVE_LOGS) {
-    log_file <- save_diagnostics_to_log("test_I_roy_model", diagnostics)
+    log_file <- save_diagnostics_to_log("test_E_roy_model", diagnostics)
     if (VERBOSE) cat("Log saved to:", log_file, "\n")
   }
 
