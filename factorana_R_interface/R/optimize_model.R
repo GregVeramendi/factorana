@@ -21,47 +21,92 @@ build_parameter_metadata <- function(model_system) {
     comp <- model_system$components[[i]]
     comp_name <- comp$name
 
-    # Intercept
-    if (comp$intercept) {
-      if (comp$model_type %in% c("mlogit", "oprobit") && comp$num_choices > 2) {
-        n_intercepts <- comp$num_choices - 1
-        for (j in seq_len(n_intercepts)) {
-          param_names <- c(param_names, sprintf("%s_intercept_%d", comp_name, j))
+    # Special handling for multinomial logit (mlogit) with >2 choices
+    # Parameters are organized per choice (except reference choice 0)
+    if (comp$model_type == "logit" && !is.null(comp$num_choices) && comp$num_choices > 2) {
+      n_alternatives <- comp$num_choices - 1  # Exclude reference category
+
+      for (alt in seq_len(n_alternatives)) {
+        # Intercept for this alternative
+        if (comp$intercept) {
+          param_names <- c(param_names, sprintf("%s_intercept_alt%d", comp_name, alt))
           param_types <- c(param_types, "intercept")
           component_id <- c(component_id, i)
         }
-      } else {
-        param_names <- c(param_names, sprintf("%s_intercept", comp_name))
-        param_types <- c(param_types, "intercept")
-        component_id <- c(component_id, i)
-      }
-    }
 
-    # Covariate coefficients
-    if (!is.null(comp$covariates) && length(comp$covariates) > 0) {
-      for (cov in comp$covariates) {
-        if (cov != "intercept") {
-          param_names <- c(param_names, sprintf("%s_beta_%s", comp_name, cov))
-          param_types <- c(param_types, "beta")
+        # Covariate coefficients for this alternative
+        if (!is.null(comp$covariates) && length(comp$covariates) > 0) {
+          for (cov in comp$covariates) {
+            if (cov != "intercept") {
+              param_names <- c(param_names, sprintf("%s_beta_%s_alt%d", comp_name, cov, alt))
+              param_types <- c(param_types, "beta")
+              component_id <- c(component_id, i)
+            }
+          }
+        }
+
+        # Factor loadings for this alternative
+        if (is.null(comp$loading_normalization)) {
+          for (k in seq_len(n_factors)) {
+            param_names <- c(param_names, sprintf("%s_loading_%d_alt%d", comp_name, k, alt))
+            param_types <- c(param_types, "loading")
+            component_id <- c(component_id, i)
+          }
+        } else {
+          for (k in seq_len(n_factors)) {
+            if (is.na(comp$loading_normalization[k]) ||
+                abs(comp$loading_normalization[k]) < 1e-10) {
+              param_names <- c(param_names, sprintf("%s_loading_%d_alt%d", comp_name, k, alt))
+              param_types <- c(param_types, "loading")
+              component_id <- c(component_id, i)
+            }
+          }
+        }
+      }
+    } else {
+      # Standard handling for all other model types
+      # Intercept
+      if (comp$intercept) {
+        if (comp$model_type == "oprobit" && comp$num_choices > 2) {
+          n_intercepts <- comp$num_choices - 1
+          for (j in seq_len(n_intercepts)) {
+            param_names <- c(param_names, sprintf("%s_intercept_%d", comp_name, j))
+            param_types <- c(param_types, "intercept")
+            component_id <- c(component_id, i)
+          }
+        } else {
+          param_names <- c(param_names, sprintf("%s_intercept", comp_name))
+          param_types <- c(param_types, "intercept")
           component_id <- c(component_id, i)
         }
       }
-    }
 
-    # Factor loadings
-    if (is.null(comp$loading_normalization)) {
-      for (k in seq_len(n_factors)) {
-        param_names <- c(param_names, sprintf("%s_loading_%d", comp_name, k))
-        param_types <- c(param_types, "loading")
-        component_id <- c(component_id, i)
+      # Covariate coefficients
+      if (!is.null(comp$covariates) && length(comp$covariates) > 0) {
+        for (cov in comp$covariates) {
+          if (cov != "intercept") {
+            param_names <- c(param_names, sprintf("%s_beta_%s", comp_name, cov))
+            param_types <- c(param_types, "beta")
+            component_id <- c(component_id, i)
+          }
+        }
       }
-    } else {
-      for (k in seq_len(n_factors)) {
-        if (is.na(comp$loading_normalization[k]) ||
-            abs(comp$loading_normalization[k]) < 1e-10) {
+
+      # Factor loadings
+      if (is.null(comp$loading_normalization)) {
+        for (k in seq_len(n_factors)) {
           param_names <- c(param_names, sprintf("%s_loading_%d", comp_name, k))
           param_types <- c(param_types, "loading")
           component_id <- c(component_id, i)
+        }
+      } else {
+        for (k in seq_len(n_factors)) {
+          if (is.na(comp$loading_normalization[k]) ||
+              abs(comp$loading_normalization[k]) < 1e-10) {
+            param_names <- c(param_names, sprintf("%s_loading_%d", comp_name, k))
+            param_types <- c(param_types, "loading")
+            component_id <- c(component_id, i)
+          }
         }
       }
     }
