@@ -489,41 +489,71 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
     }
 
     // Gradient for factor loadings and regression coefficients
-    // Each non-reference choice has its own set of parameters
-    for (int icat = 1; icat < numchoice; icat++) {
-        int base_idx = numfac + (icat - 1) * nparamchoice;
+    // Following legacy TModel.cc pattern exactly
 
-        // Regression coefficients
-        for (int ireg = 0; ireg < nregressors; ireg++) {
-            double xval = data[iobs_offset + regressors[ireg]];
-            double grad_val = (icat == obsCat ? 1.0 : 0.0) - pdf[icat];
-            grad_val *= xval;
+    // Factor loadings - obsCat term and logitgrad
+    int ifree = 0;
+    for (int ifac = 0; ifac < numfac + numtyp*(outcome_idx != -2); ifac++) {
+        if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
+            double fval = fac[ifac];
 
-            modEval[1 + base_idx + ireg] += grad_val;
+            // obsCat term for gradient
+            if (obsCat > 0) {
+                int base_idx = numfac + (obsCat - 1) * nparamchoice;
+                modEval[1 + base_idx + nregressors + ifree] += fval;
+            }
 
+            // logitgrad update (unconditional, not nested in obsCat check!)
             if (flag == 3) {
                 for (int jcat = 1; jcat < numchoice; jcat++) {
-                    logitgrad[jcat * npar + base_idx + ireg] += xval;
+                    int jbase_idx = numfac + (jcat - 1) * nparamchoice;
+                    logitgrad[jcat * npar + jbase_idx + nregressors + ifree] += fval;
                 }
+            }
+
+            // All categories term
+            for (int icat = 1; icat < numchoice; icat++) {
+                int base_idx = numfac + (icat - 1) * nparamchoice;
+                modEval[1 + base_idx + nregressors + ifree] += -pdf[icat] * fval;
+
+                if (flag == 3) {
+                    for (int jcat = 0; jcat < numchoice; jcat++) {
+                        logitgrad[jcat * npar + base_idx + nregressors + ifree] += -pdf[icat] * fval;
+                    }
+                }
+            }
+
+            ifree++;
+        }
+    }
+
+    // Regression coefficients - obsCat term and logitgrad
+    for (int ireg = 0; ireg < nregressors; ireg++) {
+        double xval = data[iobs_offset + regressors[ireg]];
+
+        // obsCat term for gradient
+        if (obsCat > 0) {
+            int base_idx = numfac + (obsCat - 1) * nparamchoice;
+            modEval[1 + base_idx + ireg] += xval;
+        }
+
+        // logitgrad update (unconditional, not nested in obsCat check!)
+        if (flag == 3) {
+            for (int jcat = 1; jcat < numchoice; jcat++) {
+                int jbase_idx = numfac + (jcat - 1) * nparamchoice;
+                logitgrad[jcat * npar + jbase_idx + ireg] += xval;
             }
         }
 
-        // Factor loadings
-        int ifree = 0;
-        for (int ifac = 0; ifac < numfac + numtyp*(outcome_idx != -2); ifac++) {
-            if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
-                double fval = fac[ifac];
-                double grad_val = (icat == obsCat ? 1.0 : 0.0) - pdf[icat];
-                grad_val *= fval;
+        // All categories term
+        for (int icat = 1; icat < numchoice; icat++) {
+            int base_idx = numfac + (icat - 1) * nparamchoice;
+            modEval[1 + base_idx + ireg] += -pdf[icat] * xval;
 
-                modEval[1 + base_idx + nregressors + ifree] += grad_val;
-
-                if (flag == 3) {
-                    for (int jcat = 1; jcat < numchoice; jcat++) {
-                        logitgrad[jcat * npar + base_idx + nregressors + ifree] += fval;
-                    }
+            if (flag == 3) {
+                for (int jcat = 0; jcat < numchoice; jcat++) {
+                    logitgrad[jcat * npar + base_idx + ireg] += -pdf[icat] * xval;
                 }
-                ifree++;
             }
         }
     }

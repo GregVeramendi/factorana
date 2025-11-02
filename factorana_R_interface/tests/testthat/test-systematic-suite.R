@@ -617,7 +617,6 @@ test_that("Model G: Measurement system with 3 linear tests and ordered probit", 
 
 test_that("Model H: Measurement system with 3 linear tests and multinomial logit", {
   skip_on_cran()
-  skip("Known C++ bug: multinomial logit Hessian has large errors in cross-derivatives")
 
   set.seed(107)
 
