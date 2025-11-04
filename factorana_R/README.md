@@ -167,6 +167,7 @@ ms <- define_model_system(
 # Single-core estimation
 # Note: init_params = NULL triggers automatic initialization
 ctrl_single <- define_estimation_control(num_cores = 1)
+time_start_single <- Sys.time()
 result_single <- estimate_model_rcpp(
   model_system = ms,
   data = dat,
@@ -176,9 +177,12 @@ result_single <- estimate_model_rcpp(
   optimizer = "nlminb",     # Default: fast with analytical Hessian
   verbose = TRUE
 )
+time_end_single <- Sys.time()
+time_single <- as.numeric(difftime(time_end_single, time_start_single, units = "secs"))
 
 # Parallel estimation with 4 cores (3x speedup on large datasets)
 ctrl_parallel <- define_estimation_control(num_cores = 4)
+time_start_parallel <- Sys.time()
 result_parallel <- estimate_model_rcpp(
   model_system = ms,
   data = dat,
@@ -188,6 +192,8 @@ result_parallel <- estimate_model_rcpp(
   optimizer = "nlminb",
   verbose = TRUE
 )
+time_end_parallel <- Sys.time()
+time_parallel <- as.numeric(difftime(time_end_parallel, time_start_parallel, units = "secs"))
 
 # Create formatted results tables
 # Define true parameter values
@@ -239,19 +245,18 @@ cat("\n=== Parameter Estimates ===\n")
 print(results_table, row.names = FALSE, right = FALSE)
 
 # Table 2: Estimation diagnostics
-# Note: Access timing via system.time() wrapper if needed
-# result$loglik contains the log-likelihood
-# result$convergence indicates optimizer convergence (0 = success)
+speedup <- time_single / time_parallel
 diagnostics <- data.frame(
   Method = c("Single-core", "Parallel (4 cores)"),
   Log_Likelihood = sprintf("%.2f", c(result_single$loglik, result_parallel$loglik)),
+  Time_sec = sprintf("%.2f", c(time_single, time_parallel)),
+  Speedup = c("1.0x", sprintf("%.2fx", speedup)),
   Convergence = c(result_single$convergence, result_parallel$convergence),
   N_Parameters = c(length(result_single$estimates), length(result_parallel$estimates))
 )
 
 cat("\n=== Estimation Diagnostics ===\n")
 print(diagnostics, row.names = FALSE, right = FALSE)
-cat(sprintf("\nNote: Parallel estimation provides ~3x speedup on large datasets (n=%d)\n", nrow(dat)))
 ```
 
 **Key features demonstrated:**
