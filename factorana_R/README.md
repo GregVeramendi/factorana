@@ -189,10 +189,66 @@ result_parallel <- estimate_model_rcpp(
   verbose = TRUE
 )
 
-# View results
-print(result_parallel$estimates)
-print(result_parallel$std_errors)
-print(result_parallel$loglik)
+# Create formatted results tables
+# Define true parameter values
+true_params <- c(
+  1.0,      # factor_var (fixed to estimates)
+  2.0, 0.5, # T1: intercept, sigma
+  1.5, 1.2, 0.6, # T2: intercept, loading, sigma
+  1.0, 0.8, 0.4, # T3: intercept, loading, sigma
+  2.0, 0.5, 0.3, 0.5, 0.6, # wage0: intercept, x1, x2, loading, sigma
+  2.5, 0.6, 1.0, 0.7, # wage1: intercept, x1, loading, sigma
+  0.0, 0.4, 0.8  # sector: intercept, x2, loading
+)
+
+# Update factor variance to match estimate
+true_params[1] <- result_parallel$estimates[1]
+
+# Parameter names
+param_names <- c(
+  "factor_var",
+  "T1_intercept", "T1_sigma",
+  "T2_intercept", "T2_loading", "T2_sigma",
+  "T3_intercept", "T3_loading", "T3_sigma",
+  "wage0_intercept", "wage0_x1", "wage0_x2", "wage0_loading", "wage0_sigma",
+  "wage1_intercept", "wage1_x1", "wage1_loading", "wage1_sigma",
+  "sector_intercept", "sector_x2", "sector_loading"
+)
+
+# Component labels for grouping
+components <- c(
+  "Factor",
+  "T1", "T1",
+  "T2", "T2", "T2",
+  "T3", "T3", "T3",
+  "wage0", "wage0", "wage0", "wage0", "wage0",
+  "wage1", "wage1", "wage1", "wage1",
+  "sector", "sector", "sector"
+)
+
+# Table 1: Parameter estimates
+results_table <- data.frame(
+  Component = components,
+  Parameter = param_names,
+  True = sprintf("%.3f", true_params),
+  Estimate = sprintf("%.3f", result_parallel$estimates),
+  Std_Error = sprintf("%.3f", result_parallel$std_errors)
+)
+
+cat("\n=== Parameter Estimates ===\n")
+print(results_table, row.names = FALSE, right = FALSE)
+
+# Table 2: Estimation diagnostics
+diagnostics <- data.frame(
+  Cores = c(1, 4),
+  Log_Likelihood = sprintf("%.2f", c(result_single$loglik, result_parallel$loglik)),
+  Iterations = c(result_single$iterations, result_parallel$iterations),
+  Time_sec = sprintf("%.2f", c(result_single$time, result_parallel$time)),
+  Speedup = c("1.0x", sprintf("%.1fx", result_single$time / result_parallel$time))
+)
+
+cat("\n=== Estimation Diagnostics ===\n")
+print(diagnostics, row.names = FALSE, right = FALSE)
 ```
 
 **Key features demonstrated:**
