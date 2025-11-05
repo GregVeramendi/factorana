@@ -364,7 +364,9 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
                      paste(fixed_names, collapse = ", ")))
     }
     n_sigma <- sum(param_metadata$types == "sigma")
-    message(sprintf("Sigma parameters (%d) have lower bound = 0.01", n_sigma))
+    if (n_sigma > 0) {
+      message(sprintf("Sigma parameters (%d) have lower bound = 0.01", n_sigma))
+    }
   }
 
   # Define objective function (operates on free parameters only)
@@ -729,7 +731,27 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   })
 
   if (verbose) {
-    message(sprintf("Optimization completed. Log-likelihood: %.4f", loglik))
+    # Report convergence status based on optimizer
+    if ((optimizer %in% c("optim", "nlminb") && convergence == 0) ||
+        (optimizer %in% c("L-BFGS", "L-BFGS-B") && convergence == 0) ||
+        (optimizer == "trust" && convergence == TRUE)) {
+      message(sprintf("Converged successfully. Log-likelihood: %.4f", loglik))
+    } else {
+      # Convergence failed - determine reason
+      if (optimizer == "nlminb") {
+        reason <- switch(as.character(convergence),
+                        "1" = "iteration limit reached",
+                        "non-zero convergence code")
+      } else if (optimizer %in% c("optim", "L-BFGS", "L-BFGS-B")) {
+        reason <- switch(as.character(convergence),
+                        "1" = "iteration limit reached",
+                        "10" = "degeneracy in Nelder-Mead simplex",
+                        "non-zero convergence code")
+      } else {
+        reason <- "failed to converge"
+      }
+      message(sprintf("Convergence FAILED (%s). Log-likelihood: %.4f", reason, loglik))
+    }
   }
 
   # Return results
