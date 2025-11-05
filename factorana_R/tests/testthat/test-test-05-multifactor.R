@@ -261,3 +261,635 @@ test_that("two-factor CFA with ordered probit converges and recovers parameters"
     }
   }
 })
+
+test_that("two-factor CFA with 3 linear measures per factor converges and recovers parameters", {
+  # Generate data with known two-factor structure
+  # 3 linear measures per factor with intercept + covariate
+  set.seed(456)
+  n <- 500
+  
+  # Two independent factors
+  f1 <- rnorm(n, 0, 1)
+  f2 <- rnorm(n, 0, 1)
+  
+  # Common covariate and intercept
+  x1 <- rnorm(n, 0, 1)
+  beta_intercept <- 2.0
+  beta_x1 <- 1.5
+  
+  # True loadings for factor 1 measures (m1, m2, m3)
+  lambda1_1 <- 1.0   # Fixed for identification
+  lambda1_2 <- 0.8
+  lambda1_3 <- 1.2
+  
+  # True loadings for factor 2 measures (m4, m5, m6)
+  lambda2_4 <- 1.0   # Fixed for identification
+  lambda2_5 <- 0.9
+  lambda2_6 <- 1.1
+  
+  # Generate linear outcomes: intercept + covariate + factor loading
+  dat <- data.frame(
+    intercept = 1,
+    x1 = x1,
+    m1 = beta_intercept + beta_x1 * x1 + lambda1_1 * f1 + rnorm(n, 0, 0.5),
+    m2 = beta_intercept + beta_x1 * x1 + lambda1_2 * f1 + rnorm(n, 0, 0.5),
+    m3 = beta_intercept + beta_x1 * x1 + lambda1_3 * f1 + rnorm(n, 0, 0.5),
+    m4 = beta_intercept + beta_x1 * x1 + lambda2_4 * f2 + rnorm(n, 0, 0.5),
+    m5 = beta_intercept + beta_x1 * x1 + lambda2_5 * f2 + rnorm(n, 0, 0.5),
+    m6 = beta_intercept + beta_x1 * x1 + lambda2_6 * f2 + rnorm(n, 0, 0.5)
+  )
+  
+  # Define 2-factor model
+  fm <- define_factor_model(n_factors = 2, n_types = 1)
+  
+  # Factor 1 measures
+  mc1 <- define_model_component(
+    name = "m1", data = dat, outcome = "m1", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "linear",
+    loading_normalization = c(1.0, 0)  # f1=1.0 (fixed), f2=0 (zero)
+  )
+  
+  mc2 <- define_model_component(
+    name = "m2", data = dat, outcome = "m2", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "linear",
+    loading_normalization = c(NA, 0)  # f1=free, f2=0 (zero)
+  )
+  
+  mc3 <- define_model_component(
+    name = "m3", data = dat, outcome = "m3", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "linear",
+    loading_normalization = c(NA, 0)  # f1=free, f2=0 (zero)
+  )
+  
+  # Factor 2 measures
+  mc4 <- define_model_component(
+    name = "m4", data = dat, outcome = "m4", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "linear",
+    loading_normalization = c(0, 1.0)  # f1=0 (zero), f2=1.0 (fixed)
+  )
+  
+  mc5 <- define_model_component(
+    name = "m5", data = dat, outcome = "m5", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "linear",
+    loading_normalization = c(0, NA)  # f1=0 (zero), f2=free
+  )
+  
+  mc6 <- define_model_component(
+    name = "m6", data = dat, outcome = "m6", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "linear",
+    loading_normalization = c(0, NA)  # f1=0 (zero), f2=free
+  )
+  
+  # Create model system
+  ms <- define_model_system(
+    components = list(mc1, mc2, mc3, mc4, mc5, mc6),
+    factor = fm
+  )
+  
+  # Estimate the model
+  ctrl <- define_estimation_control(n_quad_points = 16, num_cores = 1)
+  result <- estimate_model_rcpp(
+    model_system = ms,
+    data = dat,
+    control = ctrl,
+    parallel = FALSE,
+    optimizer = "nlminb",
+    verbose = FALSE
+  )
+  
+  # Check convergence
+  expect_equal(result$convergence, 0, info = "Model should converge")
+  
+  # Check that we have the right number of parameters
+  # 2 factor vars + 6 components * (2 covs + 1 loading OR 2 covs + 1 sigma)
+  # = 2 + 3*(2+1+1) + 3*(2+1) = 2 + 12 + 9 = 23
+  # Actually: 2 + (2+1)*3 + (2+1+1)*3 = 2 + 9 + 12 = 23
+  # Let me calculate properly:
+  # m1: intercept, x1, sigma = 3
+  # m2: intercept, x1, loading_f1, sigma = 4
+  # m3: intercept, x1, loading_f1, sigma = 4
+  # m4: intercept, x1, sigma = 3
+  # m5: intercept, x1, loading_f2, sigma = 4
+  # m6: intercept, x1, loading_f2, sigma = 4
+  # Total: 2 (factor vars) + 3 + 4 + 4 + 3 + 4 + 4 = 24
+  expect_equal(length(result$estimates), 24)
+  
+  # Check factor variances are positive
+  expect_true(result$estimates[1] > 0, 
+              info = sprintf("Factor 1 variance should be positive, got %.4f", result$estimates[1]))
+  expect_true(result$estimates[2] > 0,
+              info = sprintf("Factor 2 variance should be positive, got %.4f", result$estimates[2]))
+  
+  # Tolerance for parameter recovery (more lenient for linear models)
+  tol <- 0.15
+  
+  # Check loadings are recovered (with parameter names if available)
+  param_names <- result$parameter_names
+  if (!is.null(param_names)) {
+    # Check m2 loading on f1 (true = 0.8)
+    m2_load_idx <- grep("m2.*loading.*1", param_names, ignore.case = TRUE)
+    if (length(m2_load_idx) > 0) {
+      m2_est <- result$estimates[m2_load_idx[1]]
+      expect_true(abs(m2_est - 0.8) < tol,
+                  info = sprintf("m2 loading should be near 0.8, got %.3f", m2_est))
+    }
+    
+    # Check m3 loading on f1 (true = 1.2)
+    m3_load_idx <- grep("m3.*loading.*1", param_names, ignore.case = TRUE)
+    if (length(m3_load_idx) > 0) {
+      m3_est <- result$estimates[m3_load_idx[1]]
+      expect_true(abs(m3_est - 1.2) < tol,
+                  info = sprintf("m3 loading should be near 1.2, got %.3f", m3_est))
+    }
+    
+    # Check m5 loading on f2 (true = 0.9)
+    m5_load_idx <- grep("m5.*loading.*2", param_names, ignore.case = TRUE)
+    if (length(m5_load_idx) > 0) {
+      m5_est <- result$estimates[m5_load_idx[1]]
+      expect_true(abs(m5_est - 0.9) < tol,
+                  info = sprintf("m5 loading should be near 0.9, got %.3f", m5_est))
+    }
+    
+    # Check m6 loading on f2 (true = 1.1)
+    m6_load_idx <- grep("m6.*loading.*2", param_names, ignore.case = TRUE)
+    if (length(m6_load_idx) > 0) {
+      m6_est <- result$estimates[m6_load_idx[1]]
+      expect_true(abs(m6_est - 1.1) < tol,
+                  info = sprintf("m6 loading should be near 1.1, got %.3f", m6_est))
+    }
+  }
+})
+
+test_that("three-factor CFA with 3 linear measures per factor converges and recovers parameters", {
+  # Generate data with known three-factor structure
+  # 3 linear measures per factor with intercept + covariate
+  set.seed(789)
+  n <- 500
+  
+  # Three independent factors
+  f1 <- rnorm(n, 0, 1)
+  f2 <- rnorm(n, 0, 1)
+  f3 <- rnorm(n, 0, 1)
+  
+  # Common covariate and intercept
+  x1 <- rnorm(n, 0, 1)
+  beta_intercept <- 2.0
+  beta_x1 <- 1.5
+  
+  # True loadings for factor 1 measures (m1, m2, m3)
+  lambda1_1 <- 1.0   # Fixed for identification
+  lambda1_2 <- 0.8
+  lambda1_3 <- 1.2
+  
+  # True loadings for factor 2 measures (m4, m5, m6)
+  lambda2_4 <- 1.0   # Fixed for identification
+  lambda2_5 <- 0.9
+  lambda2_6 <- 1.1
+  
+  # True loadings for factor 3 measures (m7, m8, m9)
+  lambda3_7 <- 1.0   # Fixed for identification
+  lambda3_8 <- 0.7
+  lambda3_9 <- 1.3
+  
+  # Generate linear outcomes: intercept + covariate + factor loading
+  dat <- data.frame(
+    intercept = 1,
+    x1 = x1,
+    m1 = beta_intercept + beta_x1 * x1 + lambda1_1 * f1 + rnorm(n, 0, 0.5),
+    m2 = beta_intercept + beta_x1 * x1 + lambda1_2 * f1 + rnorm(n, 0, 0.5),
+    m3 = beta_intercept + beta_x1 * x1 + lambda1_3 * f1 + rnorm(n, 0, 0.5),
+    m4 = beta_intercept + beta_x1 * x1 + lambda2_4 * f2 + rnorm(n, 0, 0.5),
+    m5 = beta_intercept + beta_x1 * x1 + lambda2_5 * f2 + rnorm(n, 0, 0.5),
+    m6 = beta_intercept + beta_x1 * x1 + lambda2_6 * f2 + rnorm(n, 0, 0.5),
+    m7 = beta_intercept + beta_x1 * x1 + lambda3_7 * f3 + rnorm(n, 0, 0.5),
+    m8 = beta_intercept + beta_x1 * x1 + lambda3_8 * f3 + rnorm(n, 0, 0.5),
+    m9 = beta_intercept + beta_x1 * x1 + lambda3_9 * f3 + rnorm(n, 0, 0.5)
+  )
+  
+  # Define 3-factor model
+  fm <- define_factor_model(n_factors = 3, n_types = 1)
+  
+  # Factor 1 measures
+  mc1 <- define_model_component(
+    name = "m1", data = dat, outcome = "m1", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "linear",
+    loading_normalization = c(1.0, 0, 0)  # f1=1.0 (fixed), f2=0, f3=0
+  )
+  
+  mc2 <- define_model_component(
+    name = "m2", data = dat, outcome = "m2", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "linear",
+    loading_normalization = c(NA, 0, 0)  # f1=free, f2=0, f3=0
+  )
+  
+  mc3 <- define_model_component(
+    name = "m3", data = dat, outcome = "m3", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "linear",
+    loading_normalization = c(NA, 0, 0)  # f1=free, f2=0, f3=0
+  )
+  
+  # Factor 2 measures
+  mc4 <- define_model_component(
+    name = "m4", data = dat, outcome = "m4", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "linear",
+    loading_normalization = c(0, 1.0, 0)  # f1=0, f2=1.0 (fixed), f3=0
+  )
+  
+  mc5 <- define_model_component(
+    name = "m5", data = dat, outcome = "m5", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "linear",
+    loading_normalization = c(0, NA, 0)  # f1=0, f2=free, f3=0
+  )
+  
+  mc6 <- define_model_component(
+    name = "m6", data = dat, outcome = "m6", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "linear",
+    loading_normalization = c(0, NA, 0)  # f1=0, f2=free, f3=0
+  )
+  
+  # Factor 3 measures
+  mc7 <- define_model_component(
+    name = "m7", data = dat, outcome = "m7", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "linear",
+    loading_normalization = c(0, 0, 1.0)  # f1=0, f2=0, f3=1.0 (fixed)
+  )
+  
+  mc8 <- define_model_component(
+    name = "m8", data = dat, outcome = "m8", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "linear",
+    loading_normalization = c(0, 0, NA)  # f1=0, f2=0, f3=free
+  )
+  
+  mc9 <- define_model_component(
+    name = "m9", data = dat, outcome = "m9", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "linear",
+    loading_normalization = c(0, 0, NA)  # f1=0, f2=0, f3=free
+  )
+  
+  # Create model system
+  ms <- define_model_system(
+    components = list(mc1, mc2, mc3, mc4, mc5, mc6, mc7, mc8, mc9),
+    factor = fm
+  )
+  
+  # Estimate the model
+  ctrl <- define_estimation_control(n_quad_points = 16, num_cores = 1)
+  result <- estimate_model_rcpp(
+    model_system = ms,
+    data = dat,
+    control = ctrl,
+    parallel = FALSE,
+    optimizer = "nlminb",
+    verbose = FALSE
+  )
+  
+  # Check convergence
+  expect_equal(result$convergence, 0, info = "Model should converge")
+  
+  # Check that we have the right number of parameters
+  # 3 factor vars + 9 components * (various)
+  # m1,m4,m7: 3 params each (intercept, x1, sigma) = 9
+  # m2,m3,m5,m6,m8,m9: 4 params each (intercept, x1, loading, sigma) = 24
+  # Total: 3 + 9 + 24 = 36
+  expect_equal(length(result$estimates), 36)
+  
+  # Check factor variances are positive
+  expect_true(result$estimates[1] > 0, 
+              info = sprintf("Factor 1 variance should be positive, got %.4f", result$estimates[1]))
+  expect_true(result$estimates[2] > 0,
+              info = sprintf("Factor 2 variance should be positive, got %.4f", result$estimates[2]))
+  expect_true(result$estimates[3] > 0,
+              info = sprintf("Factor 3 variance should be positive, got %.4f", result$estimates[3]))
+  
+  # Tolerance for parameter recovery
+  tol <- 0.15
+  
+  # Check loadings are recovered (with parameter names if available)
+  param_names <- result$parameter_names
+  if (!is.null(param_names)) {
+    # Factor 1 loadings
+    m2_load_idx <- grep("m2.*loading.*1", param_names, ignore.case = TRUE)
+    if (length(m2_load_idx) > 0) {
+      m2_est <- result$estimates[m2_load_idx[1]]
+      expect_true(abs(m2_est - 0.8) < tol,
+                  info = sprintf("m2 loading should be near 0.8, got %.3f", m2_est))
+    }
+    
+    m3_load_idx <- grep("m3.*loading.*1", param_names, ignore.case = TRUE)
+    if (length(m3_load_idx) > 0) {
+      m3_est <- result$estimates[m3_load_idx[1]]
+      expect_true(abs(m3_est - 1.2) < tol,
+                  info = sprintf("m3 loading should be near 1.2, got %.3f", m3_est))
+    }
+    
+    # Factor 2 loadings
+    m5_load_idx <- grep("m5.*loading.*2", param_names, ignore.case = TRUE)
+    if (length(m5_load_idx) > 0) {
+      m5_est <- result$estimates[m5_load_idx[1]]
+      expect_true(abs(m5_est - 0.9) < tol,
+                  info = sprintf("m5 loading should be near 0.9, got %.3f", m5_est))
+    }
+    
+    m6_load_idx <- grep("m6.*loading.*2", param_names, ignore.case = TRUE)
+    if (length(m6_load_idx) > 0) {
+      m6_est <- result$estimates[m6_load_idx[1]]
+      expect_true(abs(m6_est - 1.1) < tol,
+                  info = sprintf("m6 loading should be near 1.1, got %.3f", m6_est))
+    }
+    
+    # Factor 3 loadings
+    m8_load_idx <- grep("m8.*loading.*3", param_names, ignore.case = TRUE)
+    if (length(m8_load_idx) > 0) {
+      m8_est <- result$estimates[m8_load_idx[1]]
+      expect_true(abs(m8_est - 0.7) < tol,
+                  info = sprintf("m8 loading should be near 0.7, got %.3f", m8_est))
+    }
+    
+    m9_load_idx <- grep("m9.*loading.*3", param_names, ignore.case = TRUE)
+    if (length(m9_load_idx) > 0) {
+      m9_est <- result$estimates[m9_load_idx[1]]
+      expect_true(abs(m9_est - 1.3) < tol,
+                  info = sprintf("m9 loading should be near 1.3, got %.3f", m9_est))
+    }
+  }
+})
+
+test_that("two-factor CFA with probit measures and variance normalization", {
+  # Generate data with two-factor structure and binary outcomes
+  # Using variance normalization (variance=1.0) instead of loading normalization
+  set.seed(999)
+  n <- 500
+  
+  # Two independent factors
+  f1 <- rnorm(n, 0, 1)
+  f2 <- rnorm(n, 0, 1)
+  
+  # Common covariate
+  x1 <- rnorm(n, 0, 1)
+  
+  # True loadings (all free to be estimated, variance fixed to 1.0)
+  lambda1_1 <- 0.8
+  lambda1_2 <- 1.0
+  lambda1_3 <- 0.9
+  lambda2_4 <- 0.7
+  lambda2_5 <- 1.1
+  lambda2_6 <- 0.8
+  
+  # Generate binary probit outcomes
+  dat <- data.frame(
+    intercept = 1,
+    x1 = x1,
+    m1 = as.integer(pnorm(0.5 + 0.3 * x1 + lambda1_1 * f1) > runif(n)),
+    m2 = as.integer(pnorm(0.5 + 0.3 * x1 + lambda1_2 * f1) > runif(n)),
+    m3 = as.integer(pnorm(0.5 + 0.3 * x1 + lambda1_3 * f1) > runif(n)),
+    m4 = as.integer(pnorm(0.5 + 0.3 * x1 + lambda2_4 * f2) > runif(n)),
+    m5 = as.integer(pnorm(0.5 + 0.3 * x1 + lambda2_5 * f2) > runif(n)),
+    m6 = as.integer(pnorm(0.5 + 0.3 * x1 + lambda2_6 * f2) > runif(n))
+  )
+  
+  # Define 2-factor model  
+  fm <- define_factor_model(n_factors = 2, n_types = 1)
+  
+  # Factor 1 measures - all loadings FREE (NA), variance will be fixed to 1.0
+  mc1 <- define_model_component(
+    name = "m1", data = dat, outcome = "m1", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "probit",
+    loading_normalization = c(NA, 0)  # f1=free, f2=0
+  )
+  
+  mc2 <- define_model_component(
+    name = "m2", data = dat, outcome = "m2", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "probit",
+    loading_normalization = c(NA, 0)  # f1=free, f2=0
+  )
+  
+  mc3 <- define_model_component(
+    name = "m3", data = dat, outcome = "m3", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "probit",
+    loading_normalization = c(NA, 0)  # f1=free, f2=0
+  )
+  
+  # Factor 2 measures - all loadings FREE (NA), variance will be fixed to 1.0
+  mc4 <- define_model_component(
+    name = "m4", data = dat, outcome = "m4", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "probit",
+    loading_normalization = c(0, NA)  # f1=0, f2=free
+  )
+  
+  mc5 <- define_model_component(
+    name = "m5", data = dat, outcome = "m5", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "probit",
+    loading_normalization = c(0, NA)  # f1=0, f2=free
+  )
+  
+  mc6 <- define_model_component(
+    name = "m6", data = dat, outcome = "m6", factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "probit",
+    loading_normalization = c(0, NA)  # f1=0, f2=free
+  )
+  
+  # Create model system
+  ms <- define_model_system(
+    components = list(mc1, mc2, mc3, mc4, mc5, mc6),
+    factor = fm
+  )
+  
+  # Estimate the model
+  ctrl <- define_estimation_control(n_quad_points = 16, num_cores = 1)
+  result <- estimate_model_rcpp(
+    model_system = ms,
+    data = dat,
+    control = ctrl,
+    parallel = FALSE,
+    optimizer = "nlminb",
+    verbose = FALSE
+  )
+  
+  # Check convergence
+  expect_equal(result$convergence, 0, 
+               info = sprintf("Model should converge, got code %d", result$convergence))
+  
+  # Check that factor variances are fixed at 1.0 (within tolerance)
+  # With variance normalization, factor variances should be 1.0
+  expect_equal(result$estimates[1], 1.0, tolerance = 1e-6,
+               info = "Factor 1 variance should be fixed at 1.0 with variance normalization")
+  expect_equal(result$estimates[2], 1.0, tolerance = 1e-6,
+               info = "Factor 2 variance should be fixed at 1.0 with variance normalization")
+  
+  # Check that all loadings are estimated (should be non-zero)
+  param_names <- result$parameter_names
+  if (!is.null(param_names)) {
+    loading_indices <- grep("loading", param_names, ignore.case = TRUE)
+    expect_true(length(loading_indices) == 6, 
+                info = "Should have 6 free loadings (3 per factor)")
+    for (idx in loading_indices) {
+      expect_true(abs(result$estimates[idx]) > 0.1,
+                  info = sprintf("Loading %s should be non-trivial, got %.3f", 
+                                param_names[idx], result$estimates[idx]))
+    }
+  }
+})
+
+test_that("two-factor CFA with ordered probit measures and variance normalization", {
+  skip_if_not_installed("MASS")
+  
+  # Generate data with two-factor structure and ordered outcomes
+  # Using variance normalization (variance=1.0) instead of loading normalization
+  set.seed(888)
+  n <- 500
+  
+  # Two independent factors
+  f1 <- rnorm(n, 0, 1)
+  f2 <- rnorm(n, 0, 1)
+  
+  # Common covariate
+  x1 <- rnorm(n, 0, 1)
+  
+  # True loadings (all free to be estimated, variance fixed to 1.0)
+  lambda1_1 <- 0.8
+  lambda1_2 <- 1.0
+  lambda1_3 <- 0.9
+  lambda2_4 <- 0.7
+  lambda2_5 <- 1.1
+  lambda2_6 <- 0.8
+  
+  # Generate latent continuous variables
+  y1_star <- 0.3 * x1 + lambda1_1 * f1 + rnorm(n, 0, 0.5)
+  y2_star <- 0.3 * x1 + lambda1_2 * f1 + rnorm(n, 0, 0.5)
+  y3_star <- 0.3 * x1 + lambda1_3 * f1 + rnorm(n, 0, 0.5)
+  y4_star <- 0.3 * x1 + lambda2_4 * f2 + rnorm(n, 0, 0.5)
+  y5_star <- 0.3 * x1 + lambda2_5 * f2 + rnorm(n, 0, 0.5)
+  y6_star <- 0.3 * x1 + lambda2_6 * f2 + rnorm(n, 0, 0.5)
+  
+  # Convert to ordered categories (4 categories)
+  make_ordered <- function(y_star) {
+    as.integer(cut(y_star,
+                   breaks = c(-Inf, -0.5, 0, 0.5, Inf),
+                   labels = FALSE))
+  }
+  
+  dat <- data.frame(
+    intercept = 1,
+    x1 = x1,
+    m1 = make_ordered(y1_star),
+    m2 = make_ordered(y2_star),
+    m3 = make_ordered(y3_star),
+    m4 = make_ordered(y4_star),
+    m5 = make_ordered(y5_star),
+    m6 = make_ordered(y6_star)
+  )
+  
+  # Define 2-factor model
+  fm <- define_factor_model(n_factors = 2, n_types = 1)
+  
+  # Factor 1 measures - all loadings FREE (NA), variance will be fixed to 1.0
+  mc1 <- define_model_component(
+    name = "m1", data = dat, outcome = "m1", factor = fm,
+    covariates = c("x1"),
+    model_type = "oprobit",
+    loading_normalization = c(NA, 0),  # f1=free, f2=0
+    num_choices = 4
+  )
+  
+  mc2 <- define_model_component(
+    name = "m2", data = dat, outcome = "m2", factor = fm,
+    covariates = c("x1"),
+    model_type = "oprobit",
+    loading_normalization = c(NA, 0),  # f1=free, f2=0
+    num_choices = 4
+  )
+  
+  mc3 <- define_model_component(
+    name = "m3", data = dat, outcome = "m3", factor = fm,
+    covariates = c("x1"),
+    model_type = "oprobit",
+    loading_normalization = c(NA, 0),  # f1=free, f2=0
+    num_choices = 4
+  )
+  
+  # Factor 2 measures - all loadings FREE (NA), variance will be fixed to 1.0
+  mc4 <- define_model_component(
+    name = "m4", data = dat, outcome = "m4", factor = fm,
+    covariates = c("x1"),
+    model_type = "oprobit",
+    loading_normalization = c(0, NA),  # f1=0, f2=free
+    num_choices = 4
+  )
+  
+  mc5 <- define_model_component(
+    name = "m5", data = dat, outcome = "m5", factor = fm,
+    covariates = c("x1"),
+    model_type = "oprobit",
+    loading_normalization = c(0, NA),  # f1=0, f2=free
+    num_choices = 4
+  )
+  
+  mc6 <- define_model_component(
+    name = "m6", data = dat, outcome = "m6", factor = fm,
+    covariates = c("x1"),
+    model_type = "oprobit",
+    loading_normalization = c(0, NA),  # f1=0, f2=free
+    num_choices = 4
+  )
+  
+  # Create model system
+  ms <- define_model_system(
+    components = list(mc1, mc2, mc3, mc4, mc5, mc6),
+    factor = fm
+  )
+  
+  # Estimate the model
+  ctrl <- define_estimation_control(n_quad_points = 16, num_cores = 1)
+  result <- estimate_model_rcpp(
+    model_system = ms,
+    data = dat,
+    control = ctrl,
+    parallel = FALSE,
+    optimizer = "nlminb",
+    verbose = FALSE
+  )
+  
+  # Check convergence
+  expect_equal(result$convergence, 0, 
+               info = sprintf("Model should converge, got code %d", result$convergence))
+  
+  # Check that factor variances are fixed at 1.0 (within tolerance)
+  expect_equal(result$estimates[1], 1.0, tolerance = 1e-6,
+               info = "Factor 1 variance should be fixed at 1.0 with variance normalization")
+  expect_equal(result$estimates[2], 1.0, tolerance = 1e-6,
+               info = "Factor 2 variance should be fixed at 1.0 with variance normalization")
+  
+  # Check that all loadings are estimated (should be non-zero)
+  param_names <- result$parameter_names
+  if (!is.null(param_names)) {
+    loading_indices <- grep("loading", param_names, ignore.case = TRUE)
+    expect_true(length(loading_indices) == 6, 
+                info = "Should have 6 free loadings (3 per factor)")
+    for (idx in loading_indices) {
+      expect_true(abs(result$estimates[idx]) > 0.1,
+                  info = sprintf("Loading %s should be non-trivial, got %.3f", 
+                                param_names[idx], result$estimates[idx]))
+    }
+  }
+})
