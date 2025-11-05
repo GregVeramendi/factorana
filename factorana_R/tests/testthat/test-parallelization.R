@@ -70,7 +70,7 @@ test_that("Parallelization: Roy model with 1, 2, and 4 cores produces identical 
   )
 
   # Create model system
-  fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad = 16)
+  fm <- define_factor_model(n_factors = 1, n_types = 1)
 
   mc_T1 <- define_model_component(
     name = "T1", data = dat, outcome = "T1", factor = fm,
@@ -126,7 +126,7 @@ test_that("Parallelization: Roy model with 1, 2, and 4 cores produces identical 
 
     if (VERBOSE) cat(sprintf("Testing with %d core(s)...\n", nc))
 
-    ctrl <- define_estimation_control(num_cores = nc)
+    ctrl <- define_estimation_control(n_quad_points = 16, num_cores = nc)
 
     timings[i] <- system.time({
       results[[i]] <- estimate_model_rcpp(

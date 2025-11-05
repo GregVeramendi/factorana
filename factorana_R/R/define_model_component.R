@@ -81,14 +81,20 @@ define_model_component <- function(name,
 
   # ---- 4. Validate covariates ----
   # Check all covariate names exist and are non-missing
+  # NULL or character(0) is allowed (factor-only model)
 
-  if (!is.character(covariates) || length(covariates) < 1L) {
-    stop("`covariates` must be a non-empty character vector of column names.")
-  }
+  if (!is.null(covariates)) {
+    if (!is.character(covariates) || length(covariates) < 1L) {
+      stop("`covariates` must be NULL or a non-empty character vector of column names.")
+    }
 
-  missing <- setdiff(covariates, names(data))
-  if (length(missing)) {
-    stop("Covariates not found in `data`: ", paste(missing, collapse = ", "))
+    missing <- setdiff(covariates, names(data))
+    if (length(missing)) {
+      stop("Covariates not found in `data`: ", paste(missing, collapse = ", "))
+    }
+  } else {
+    # NULL covariates: set to empty character vector for consistency
+    covariates <- character(0)
   }
 
   # ---- 5. Validate model configuration arguments ----
@@ -171,9 +177,11 @@ define_model_component <- function(name,
   }
 
   # covariates must not have missing (on the same subset)
-  for (cov in covariates) {
-    if (anyNA(data[[cov]][idx])) {
-      stop("Missing values found in covariate: ", cov)
+  if (length(covariates) > 0) {
+    for (cov in covariates) {
+      if (anyNA(data[[cov]][idx])) {
+        stop("Missing values found in covariate: ", cov)
+      }
     }
   }
 
@@ -297,7 +305,11 @@ print.model_component <- function(x, ...) {
   if (!is.null(x$evaluation_indicator)) {
     cat("Evaluation indicator:    ", x$evaluation_indicator, "\n")
   }
-  cat("Covariates:              ", paste(x$covariates, collapse = ", "), "\n")
+  if (length(x$covariates) > 0) {
+    cat("Covariates:              ", paste(x$covariates, collapse = ", "), "\n")
+  } else {
+    cat("Covariates:               (none - factor-only model)\n")
+  }
 
   cat("Total parameters:        ", x$nparam_model, "\n")
   invisible(x)

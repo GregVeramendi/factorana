@@ -3,7 +3,7 @@
 
 test_that("probit requires 0/1 outcome", {
   dat <- make_toy()
-  fm  <- define_factor_model(1, 1, 8)
+  fm  <- define_factor_model(1, 1)
   expect_error(
     define_model_component("sel", dat, "Y", fm,
                            covariates = "Z1", model_type = "probit"),
@@ -14,7 +14,7 @@ test_that("probit requires 0/1 outcome", {
 test_that("ordered probit returns J-1 ordered cutpoints", {
   skip_if_not_installed("MASS")
   dat <- make_toy()
-  fm  <- define_factor_model(1, 1, 8)
+  fm  <- define_factor_model(1, 1)
 
   # make an ordinal outcome with 4 categories
   dat$Yord <- cut(dat$Y,
@@ -47,7 +47,7 @@ test_that("oprobit works with multi-factor loading normalization", {
                   include.lowest = TRUE, ordered_result = TRUE)
 
   # two factors
-  fm <- define_factor_model(2, 1, 8)
+  fm <- define_factor_model(2, 1)
 
   # Fix the 2nd loading to 1, leave the 1st free (NA) at component level
   mc <- define_model_component(

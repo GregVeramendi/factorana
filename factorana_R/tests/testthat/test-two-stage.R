@@ -47,7 +47,7 @@ test_that("Two-stage estimation: Roy model measurement then selection/wages", {
   # STAGE 1: Estimate measurement system (test scores only)
   # ======================================================================
 
-  fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 16)
+  fm <- define_factor_model(n_factors = 1, n_types = 1)
 
   mc_T1 <- define_model_component(
     name = "T1", data = dat, outcome = "T1", factor = fm,
@@ -75,10 +75,12 @@ test_that("Two-stage estimation: Roy model measurement then selection/wages", {
     factor = fm
   )
 
+  ctrl <- define_estimation_control(n_quad_points = 16, num_cores = 1)
   result_stage1 <- estimate_model_rcpp(
     model_system = ms_stage1,
     data = dat,
     init_params = NULL,
+    control = ctrl,
     optimizer = "nlminb",
     verbose = FALSE
   )
@@ -134,6 +136,7 @@ test_that("Two-stage estimation: Roy model measurement then selection/wages", {
     model_system = ms_stage2,
     data = dat,
     init_params = NULL,
+    control = ctrl,
     optimizer = "nlminb",
     verbose = FALSE
   )
@@ -186,6 +189,7 @@ test_that("Two-stage estimation: Roy model measurement then selection/wages", {
     model_system = ms_full,
     data = dat,
     init_params = NULL,
+    control = ctrl,
     optimizer = "nlminb",
     verbose = FALSE
   )

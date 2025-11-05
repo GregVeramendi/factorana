@@ -41,7 +41,7 @@ test_that("Model A: Measurement system with 3 linear tests and 1 factor", {
   dat <- data.frame(intercept = 1, T1 = T1, T2 = T2, T3 = T3, eval = 1)
 
   # Create model system with 1 factor
-  fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad = 8)
+  fm <- define_factor_model(n_factors = 1, n_types = 1)
 
   mc_T1 <- define_model_component(
     name = "T1", data = dat, outcome = "T1", factor = fm,
@@ -76,10 +76,10 @@ test_that("Model A: Measurement system with 3 linear tests and 1 factor", {
   # Run gradient/Hessian checks with param_fixed
   grad_check <- check_gradient_accuracy(ms, dat, true_params,
                                        param_fixed = est_comp$param_fixed,
-                                       tol = GRAD_TOL, verbose = VERBOSE)
+                                       tol = GRAD_TOL, verbose = VERBOSE, n_quad = 8)
   hess_check <- check_hessian_accuracy(ms, dat, true_params,
                                        param_fixed = est_comp$param_fixed,
-                                       tol = HESS_TOL, verbose = VERBOSE)
+                                       tol = HESS_TOL, verbose = VERBOSE, n_quad = 8)
 
   # Collect diagnostics
   diagnostics <- list(
@@ -135,7 +135,7 @@ test_that("Model B: Measurement system with 3 linear tests and probit outcome", 
   dat <- data.frame(intercept = 1, x1 = x1, T1 = T1, T2 = T2, T3 = T3, y = y, eval = 1)
 
   # Create model system
-  fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad = 8)
+  fm <- define_factor_model(n_factors = 1, n_types = 1)
 
   mc_T1 <- define_model_component(
     name = "T1", data = dat, outcome = "T1", factor = fm,
@@ -173,10 +173,10 @@ test_that("Model B: Measurement system with 3 linear tests and probit outcome", 
   # Run gradient/Hessian checks with param_fixed
   grad_check <- check_gradient_accuracy(ms, dat, true_params,
                                        param_fixed = est_comp$param_fixed,
-                                       tol = GRAD_TOL, verbose = VERBOSE)
+                                       tol = GRAD_TOL, verbose = VERBOSE, n_quad = 8)
   hess_check <- check_hessian_accuracy(ms, dat, true_params,
                                        param_fixed = est_comp$param_fixed,
-                                       tol = HESS_TOL, verbose = VERBOSE)
+                                       tol = HESS_TOL, verbose = VERBOSE, n_quad = 8)
 
   # Collect diagnostics
   diagnostics <- list(
@@ -246,7 +246,7 @@ test_that("Model C: Measurement system with 3 linear tests and ordered probit", 
   dat <- data.frame(intercept = 1, x1 = x1, T1 = T1, T2 = T2, T3 = T3, y = y, eval = 1)
 
   # Create model system
-  fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad = 8)
+  fm <- define_factor_model(n_factors = 1, n_types = 1)
 
   mc_T1 <- define_model_component(
     name = "T1", data = dat, outcome = "T1", factor = fm,
@@ -287,10 +287,10 @@ test_that("Model C: Measurement system with 3 linear tests and ordered probit", 
   # Run gradient/Hessian checks with param_fixed
   grad_check <- check_gradient_accuracy(ms, dat, true_params,
                                        param_fixed = est_comp$param_fixed,
-                                       tol = GRAD_TOL, verbose = VERBOSE)
+                                       tol = GRAD_TOL, verbose = VERBOSE, n_quad = 8)
   hess_check <- check_hessian_accuracy(ms, dat, true_params,
                                        param_fixed = est_comp$param_fixed,
-                                       tol = HESS_TOL, verbose = VERBOSE)
+                                       tol = HESS_TOL, verbose = VERBOSE, n_quad = 8)
 
   # Collect diagnostics
   diagnostics <- list(
@@ -363,7 +363,7 @@ test_that("Model D: Measurement system with 3 linear tests and multinomial logit
   dat <- data.frame(intercept = 1, x1 = x1, T1 = T1, T2 = T2, T3 = T3, y = y, eval = 1)
 
   # Create model system
-  fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad = 8)
+  fm <- define_factor_model(n_factors = 1, n_types = 1)
 
   mc_T1 <- define_model_component(
     name = "T1", data = dat, outcome = "T1", factor = fm,
@@ -405,10 +405,10 @@ test_that("Model D: Measurement system with 3 linear tests and multinomial logit
   # Run gradient/Hessian checks with param_fixed
   grad_check <- check_gradient_accuracy(ms, dat, true_params,
                                        param_fixed = est_comp$param_fixed,
-                                       tol = GRAD_TOL, verbose = VERBOSE)
+                                       tol = GRAD_TOL, verbose = VERBOSE, n_quad = 8)
   hess_check <- check_hessian_accuracy(ms, dat, true_params,
                                        param_fixed = est_comp$param_fixed,
-                                       tol = HESS_TOL, verbose = VERBOSE)
+                                       tol = HESS_TOL, verbose = VERBOSE, n_quad = 8)
 
   # Collect diagnostics
   diagnostics <- list(
@@ -497,7 +497,7 @@ test_that("Model E: Roy selection model", {
   )
 
   # Create model system
-  fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad = 16)
+  fm <- define_factor_model(n_factors = 1, n_types = 1)
 
   mc_T1 <- define_model_component(
     name = "T1", data = dat, outcome = "T1", factor = fm,
@@ -551,10 +551,10 @@ test_that("Model E: Roy selection model", {
   # Run gradient/Hessian checks with param_fixed
   grad_check <- check_gradient_accuracy(ms, dat, true_params,
                                        param_fixed = est_comp$param_fixed,
-                                       tol = GRAD_TOL, verbose = VERBOSE)
+                                       tol = GRAD_TOL, verbose = VERBOSE, n_quad = 16)
   hess_check <- check_hessian_accuracy(ms, dat, true_params,
                                        param_fixed = est_comp$param_fixed,
-                                       tol = HESS_TOL, verbose = VERBOSE)
+                                       tol = HESS_TOL, verbose = VERBOSE, n_quad = 16)
 
   # Collect diagnostics
   diagnostics <- list(

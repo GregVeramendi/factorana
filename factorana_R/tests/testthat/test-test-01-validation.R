@@ -2,7 +2,7 @@
 
 test_that("define_model_component validates inputs", {
   dat <- make_toy()
-  fm  <- define_factor_model(1, 1, 8)
+  fm  <- define_factor_model(1, 1)
 
   # good path : calls functino with valid arguments
   mc <- define_model_component("Y1", dat, "Y", fm,

@@ -12,7 +12,7 @@ test_that("Parameter constraints work correctly", {
   dat <- data.frame(intercept=1, T1=T1, T2=T2, eval=1)
 
   # Define model with factor variance fixed
-  fm <- define_factor_model(n_factors=1, n_types=1, n_quad=8)
+  fm <- define_factor_model(n_factors=1, n_types=1)
   mc_T1 <- define_model_component(name="T1", data=dat, outcome="T1", factor=fm,
     covariates="intercept", model_type="linear",
     loading_normalization=NA_real_, evaluation_indicator="eval")
@@ -23,10 +23,12 @@ test_that("Parameter constraints work correctly", {
   ms <- define_model_system(components=list(mc_T1, mc_T2), factor=fm)
 
   # Estimate with parameter constraints
+  ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
   init_params <- c(1.0, 1.0, 1.0, 0.5, 0.5, 1.2, 0.6)
   result <- estimate_model_rcpp(
     ms, dat,
     init_params = init_params,
+    control = ctrl,
     optimizer = "nlminb",
     parallel = FALSE,
     verbose = FALSE
@@ -67,7 +69,7 @@ test_that("Free parameter optimization works", {
 
   dat <- data.frame(intercept=1, Y=Y, eval=1)
 
-  fm <- define_factor_model(n_factors=1, n_types=1, n_quad=8)
+  fm <- define_factor_model(n_factors=1, n_types=1)
   mc <- define_model_component(name="Y", data=dat, outcome="Y", factor=fm,
     covariates="intercept", model_type="linear",
     loading_normalization=NA_real_, evaluation_indicator="eval")
@@ -75,10 +77,12 @@ test_that("Free parameter optimization works", {
   ms <- define_model_system(components=list(mc), factor=fm)
 
   # Estimate
+  ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
   init_params <- c(1.0, 2.0, 1.5, 0.5)
   result <- estimate_model_rcpp(
     ms, dat,
     init_params = init_params,
+    control = ctrl,
     optimizer = "nlminb",
     parallel = FALSE,
     verbose = FALSE

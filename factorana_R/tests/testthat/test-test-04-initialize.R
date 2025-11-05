@@ -3,7 +3,7 @@
 
 test_that("initialize_parameters returns expected shapes", {
   dat <- make_toy()
-  fm  <- define_factor_model(1, 1, 8)
+  fm  <- define_factor_model(1, 1)
 
   mc <- define_model_component("Y1", dat, "Y", fm,
                                evaluation_indicator = "eval_y1",

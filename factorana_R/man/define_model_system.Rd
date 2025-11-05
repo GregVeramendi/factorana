@@ -4,10 +4,17 @@
 \alias{define_model_system}
 \title{Define a model system}
 \usage{
-define_model_system(components, factor)
+define_model_system(components, factor, previous_stage = NULL)
 }
 \arguments{
 \item{components}{A named list of model_component objects}
+
+\item{factor}{A factor_model object}
+
+\item{previous_stage}{Optional result from a previous estimation stage.
+If provided, the previous stage components and parameters will be fixed
+and prepended to the new components. This enables sequential/multi-stage
+estimation where early stages are held fixed while later stages are optimized.}
 }
 \value{
 An object of class "model_system". A list of model_component objects and one factor_model object.

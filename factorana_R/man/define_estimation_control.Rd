@@ -4,12 +4,12 @@
 \alias{define_estimation_control}
 \title{Define estimation control settings}
 \usage{
-define_estimation_control(num_cores = 1)
+define_estimation_control(n_quad_points = 16, num_cores = 1)
 }
 \arguments{
-\item{num_cores}{Integer. Number of processes to use for parallel estimation (default = 1)}
+\item{n_quad_points}{Integer. Number of Gauss-Hermite quadrature points for numerical integration (default = 16)}
 
-\item{model_system}{Object of class model_system.}
+\item{num_cores}{Integer. Number of processes to use for parallel estimation (default = 1)}
 }
 \value{
 An object of class estimation_control containing control settings

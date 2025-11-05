@@ -18,7 +18,7 @@ test_that("Gauss-Hermite quadrature accuracy", {
 
   # Test with different quadrature points
   for (n_quad in c(8, 16)) {
-    fm <- define_factor_model(n_factors=1, n_types=1, n_quad=n_quad)
+    fm <- define_factor_model(n_factors=1, n_types=1)
 
     # Define three measurement components
     mc1 <- define_model_component(name="T1", data=dat, outcome="T1", factor=fm,
@@ -35,9 +35,11 @@ test_that("Gauss-Hermite quadrature accuracy", {
 
     ms <- define_model_system(components=list(mc1, mc2, mc3), factor=fm)
 
+    ctrl <- define_estimation_control(n_quad_points = n_quad, num_cores = 1)
     result <- estimate_model_rcpp(
       ms, dat,
       init_params = NULL,
+      control = ctrl,
       optimizer = "nlminb",
       parallel = FALSE,
       verbose = FALSE
@@ -75,25 +77,27 @@ test_that("n_quad parameter is properly passed to C++", {
   dat <- data.frame(intercept=1, Y=Y, eval=1)
 
   # Test with n_quad=8
-  fm8 <- define_factor_model(n_factors=1, n_types=1, n_quad=8)
+  fm8 <- define_factor_model(n_factors=1, n_types=1)
   mc8 <- define_model_component(name="Y", data=dat, outcome="Y", factor=fm8,
     covariates="intercept", model_type="linear",
     loading_normalization=NA_real_, evaluation_indicator="eval")
   ms8 <- define_model_system(components=list(mc8), factor=fm8)
 
+  ctrl8 <- define_estimation_control(n_quad_points = 8, num_cores = 1)
   init_params <- c(1.0, 1.0, 1.0, 0.5)
   result8 <- estimate_model_rcpp(ms8, dat, init_params=init_params,
-    optimizer="nlminb", parallel=FALSE, verbose=FALSE)
+    control=ctrl8, optimizer="nlminb", parallel=FALSE, verbose=FALSE)
 
   # Test with n_quad=16
-  fm16 <- define_factor_model(n_factors=1, n_types=1, n_quad=16)
+  fm16 <- define_factor_model(n_factors=1, n_types=1)
   mc16 <- define_model_component(name="Y", data=dat, outcome="Y", factor=fm16,
     covariates="intercept", model_type="linear",
     loading_normalization=NA_real_, evaluation_indicator="eval")
   ms16 <- define_model_system(components=list(mc16), factor=fm16)
 
+  ctrl16 <- define_estimation_control(n_quad_points = 16, num_cores = 1)
   result16 <- estimate_model_rcpp(ms16, dat, init_params=init_params,
-    optimizer="nlminb", parallel=FALSE, verbose=FALSE)
+    control=ctrl16, optimizer="nlminb", parallel=FALSE, verbose=FALSE)
 
   # Results should be similar but may differ slightly
   # The key is that both converge successfully

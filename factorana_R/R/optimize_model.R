@@ -144,6 +144,7 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
   upper_bounds <- rep(Inf, n_params)
 
   # Identify which factor variances are identified
+  # A factor is identified if at least one component has a fixed non-zero loading on that factor
   factor_variance_identified <- rep(FALSE, n_factors)
   for (comp in model_system$components) {
     if (!is.null(comp$loading_normalization)) {
@@ -296,8 +297,8 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   # Initialize factor models on each worker
   if (verbose) message("Initializing C++ likelihood evaluators...")
 
-  # Get n_quad from model_system
-  n_quad <- model_system$factor$n_quad
+  # Get n_quad from control
+  n_quad <- control$n_quad_points
 
   if (!is.null(cl)) {
     # Export necessary objects to workers

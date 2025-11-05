@@ -8,12 +8,13 @@
 #' @param params Parameter vector
 #' @param compute_gradient Logical
 #' @param compute_hessian Logical
+#' @param n_quad Number of quadrature points (default: 16)
 #' @return List with loglik, gradient (if requested), hessian (if requested)
 evaluate_likelihood_rcpp <- function(model_system, data, params,
-                                     compute_gradient = FALSE, compute_hessian = FALSE) {
+                                     compute_gradient = FALSE, compute_hessian = FALSE,
+                                     n_quad = 16) {
   # Convert data to matrix
   data_mat <- as.matrix(data)
-  n_quad <- model_system$factor$n_quad
 
   # Initialize C++ model
   fm_ptr <- initialize_factor_model_cpp(model_system, data_mat, n_quad)
@@ -37,8 +38,9 @@ evaluate_likelihood_rcpp <- function(model_system, data, params,
 #' @param data Data frame
 #' @param params Parameter vector
 #' @param h Step size (if NULL, uses adaptive step size)
+#' @param n_quad Number of quadrature points (default: 16)
 #' @return Gradient vector computed via finite differences
-finite_diff_gradient <- function(model_system, data, params, h = NULL) {
+finite_diff_gradient <- function(model_system, data, params, h = NULL, n_quad = 16) {
   n_params <- length(params)
   grad <- numeric(n_params)
 
@@ -59,12 +61,14 @@ finite_diff_gradient <- function(model_system, data, params, h = NULL) {
     # Evaluate likelihood at both points
     result_fwd <- tryCatch({
       evaluate_likelihood_rcpp(model_system, data, params_fwd,
-                               compute_gradient = FALSE, compute_hessian = FALSE)
+                               compute_gradient = FALSE, compute_hessian = FALSE,
+                               n_quad = n_quad)
     }, error = function(e) list(loglik = NA))
 
     result_bwd <- tryCatch({
       evaluate_likelihood_rcpp(model_system, data, params_bwd,
-                               compute_gradient = FALSE, compute_hessian = FALSE)
+                               compute_gradient = FALSE, compute_hessian = FALSE,
+                               n_quad = n_quad)
     }, error = function(e) list(loglik = NA))
 
     # Central difference
@@ -84,15 +88,17 @@ finite_diff_gradient <- function(model_system, data, params, h = NULL) {
 #' @param data Data frame
 #' @param params Parameter vector
 #' @param h Step size (if NULL, uses adaptive step size)
+#' @param n_quad Number of quadrature points (default: 16)
 #' @return Hessian matrix computed via finite differences
-finite_diff_hessian <- function(model_system, data, params, h = NULL) {
+finite_diff_hessian <- function(model_system, data, params, h = NULL, n_quad = 16) {
   n_params <- length(params)
   hess <- matrix(0, n_params, n_params)
 
   # Get function value at base point
   result_base <- tryCatch({
     evaluate_likelihood_rcpp(model_system, data, params,
-                             compute_gradient = TRUE, compute_hessian = FALSE)
+                             compute_gradient = TRUE, compute_hessian = FALSE,
+                             n_quad = n_quad)
   }, error = function(e) list(loglik = NA, gradient = rep(NA, n_params)))
 
   if (is.na(result_base$loglik)) {
@@ -117,7 +123,8 @@ finite_diff_hessian <- function(model_system, data, params, h = NULL) {
 
     result_fwd <- tryCatch({
       evaluate_likelihood_rcpp(model_system, data, params_fwd,
-                               compute_gradient = TRUE, compute_hessian = FALSE)
+                               compute_gradient = TRUE, compute_hessian = FALSE,
+                               n_quad = n_quad)
     }, error = function(e) list(gradient = rep(NA, n_params)))
 
     if (any(is.na(result_fwd$gradient))) {
@@ -140,10 +147,12 @@ finite_diff_hessian <- function(model_system, data, params, h = NULL) {
 #' @param model_system Model system object
 #' @param data Data frame
 #' @param params Parameter vector to check at
+#' @param param_fixed Logical vector indicating which parameters are fixed
 #' @param tol Tolerance for relative error
 #' @param verbose Print detailed diagnostics
+#' @param n_quad Number of quadrature points (default: 16)
 #' @return List with pass (logical), max_error (numeric), diagnostics (data.frame)
-check_gradient_accuracy <- function(model_system, data, params, param_fixed = NULL, tol = 1e-5, verbose = FALSE) {
+check_gradient_accuracy <- function(model_system, data, params, param_fixed = NULL, tol = 1e-5, verbose = FALSE, n_quad = 16) {
   # Default: fix factor variance (first parameter)
   if (is.null(param_fixed)) {
     param_fixed <- c(TRUE, rep(FALSE, length(params) - 1))
@@ -152,7 +161,8 @@ check_gradient_accuracy <- function(model_system, data, params, param_fixed = NU
   # Get analytical gradient
   result <- tryCatch({
     evaluate_likelihood_rcpp(model_system, data, params,
-                             compute_gradient = TRUE, compute_hessian = FALSE)
+                             compute_gradient = TRUE, compute_hessian = FALSE,
+                             n_quad = n_quad)
   }, error = function(e) {
     if (verbose) cat("Error computing analytical gradient:", e$message, "\n")
     return(list(gradient = rep(NA, length(params))))
@@ -161,7 +171,7 @@ check_gradient_accuracy <- function(model_system, data, params, param_fixed = NU
   grad_analytical <- result$gradient
 
   # Get finite difference gradient
-  grad_fd <- finite_diff_gradient(model_system, data, params)
+  grad_fd <- finite_diff_gradient(model_system, data, params, n_quad = n_quad)
 
   # Compute errors
   abs_error <- abs(grad_analytical - grad_fd)
@@ -207,8 +217,9 @@ check_gradient_accuracy <- function(model_system, data, params, param_fixed = NU
 #' @param param_fixed Logical vector indicating which parameters are fixed (default: first is fixed)
 #' @param tol Tolerance for relative error
 #' @param verbose Print detailed diagnostics
+#' @param n_quad Number of quadrature points (default: 16)
 #' @return List with pass (logical), max_error (numeric), diagnostics (data.frame)
-check_hessian_accuracy <- function(model_system, data, params, param_fixed = NULL, tol = 1e-3, verbose = FALSE) {
+check_hessian_accuracy <- function(model_system, data, params, param_fixed = NULL, tol = 1e-3, verbose = FALSE, n_quad = 16) {
   # Default: fix factor variance (first parameter)
   if (is.null(param_fixed)) {
     param_fixed <- c(TRUE, rep(FALSE, length(params) - 1))
@@ -216,7 +227,8 @@ check_hessian_accuracy <- function(model_system, data, params, param_fixed = NUL
   # Get analytical Hessian
   result <- tryCatch({
     evaluate_likelihood_rcpp(model_system, data, params,
-                             compute_gradient = TRUE, compute_hessian = TRUE)
+                             compute_gradient = TRUE, compute_hessian = TRUE,
+                             n_quad = n_quad)
   }, error = function(e) {
     if (verbose) cat("Error computing analytical Hessian:", e$message, "\n")
     return(list(hessian = matrix(NA, length(params), length(params))))
@@ -235,7 +247,7 @@ check_hessian_accuracy <- function(model_system, data, params, param_fixed = NUL
   }
 
   # Get finite difference Hessian
-  hess_fd <- finite_diff_hessian(model_system, data, params)
+  hess_fd <- finite_diff_hessian(model_system, data, params, n_quad = n_quad)
 
   # Check ALL elements (upper triangle) of FREE parameters
   n_params <- length(params)
@@ -387,7 +399,8 @@ run_estimation_comparison <- function(model_system, data, true_params,
   if (verbose) cat("Evaluating likelihood at true parameters...\n")
   result_true_params <- tryCatch({
     evaluate_likelihood_rcpp(model_system, data, true_params,
-                            compute_gradient = FALSE, compute_hessian = FALSE)
+                            compute_gradient = FALSE, compute_hessian = FALSE,
+                            n_quad = 16)
   }, error = function(e) {
     if (verbose) cat("Error evaluating at true params:", e$message, "\n")
     return(list(loglik = NA))

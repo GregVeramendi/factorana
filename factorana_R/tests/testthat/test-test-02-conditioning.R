@@ -5,7 +5,7 @@
 
 test_that("only eval==1 and non-missing Y are used", {
   dat <- make_toy()
-  fm  <- define_factor_model(1, 1, 8)
+  fm  <- define_factor_model(1, 1)
 
   # inject NA in Y inside eval_y1 subset -> should fail validation
   idx <- which(dat$eval_y1 == 1L)[1:3]
@@ -26,7 +26,7 @@ test_that("only eval==1 and non-missing Y are used", {
 
 test_that("zero rows after conditioning throws a clear error", {
   dat <- make_toy()
-  fm  <- define_factor_model(1, 1, 8)
+  fm  <- define_factor_model(1, 1)
 
   # make eval_y1 all zeros -> no rows
   dat$eval_y1 <- 0L

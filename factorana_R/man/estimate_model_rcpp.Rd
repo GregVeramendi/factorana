@@ -9,7 +9,7 @@ estimate_model_rcpp(
   data,
   init_params = NULL,
   control = NULL,
-  optimizer = "nloptr",
+  optimizer = "nlminb",
   parallel = TRUE,
   verbose = TRUE
 )

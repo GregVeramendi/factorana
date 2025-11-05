@@ -359,7 +359,7 @@ as_kv <- function(x, ...) UseMethod("as_kv")
 
 
 # which fields define factor-model identity
-.factor_keys <- c("n_factors","n_types","n_quad_points","correlation","n_mixtures","nfac_param")
+.factor_keys <- c("n_factors","n_types","correlation","n_mixtures","nfac_param")
 
 # ---- estimation_control ----------------------------------------------------
 
@@ -367,9 +367,9 @@ as_kv <- function(x, ...) UseMethod("as_kv")
 #' @export
 as_kv.estimation_control <- function(x, ...) {
   # adjust keys to whatever your estimation_control actually stores in future if change
-  keys   <- c("num_cores")
-  values <- c(.to_chr(x$num_cores))
-  dtype  <- c("int")
+  keys   <- c("n_quad_points", "num_cores")
+  values <- c(.to_chr(x$n_quad_points), .to_chr(x$num_cores))
+  dtype  <- c("int", "int")
   data.frame(
     section   = "estimation_control",
     component = "",
@@ -383,14 +383,13 @@ as_kv.estimation_control <- function(x, ...) {
 #' @keywords internal
 #' @export
 as_kv.factor_model <- function(x, ...) {
-  keys <- c("n_factors","n_types","n_quad_points","correlation","n_mixtures","nfac_param")
+  keys <- c("n_factors","n_types","correlation","n_mixtures","nfac_param")
   vals <- c(.to_chr(x$n_factors),
             .to_chr(x$n_types),
-            .to_chr(x$n_quad_points),
             .to_chr(x$correlation),
             .to_chr(x$n_mixtures),
             .to_chr(x$nfac_param))
-  dtype <- c("int","int","int","bool","int","int")
+  dtype <- c("int","int","bool","int","int")
   data.frame(
     section   = "factor_model",
     component = "",

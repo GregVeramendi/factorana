@@ -1,16 +1,20 @@
 #' Define estimation control settings
 #'
-#' @param model_system Object of class model_system.
+#' @param n_quad_points Integer. Number of Gauss-Hermite quadrature points for numerical integration (default = 16)
 #' @param num_cores Integer. Number of processes to use for parallel estimation (default = 1)
 #'
 #' @return An object of class estimation_control containing control settings
 #' @export
-define_estimation_control <- function(num_cores = 1) {
+define_estimation_control <- function(n_quad_points = 16, num_cores = 1) {
+  if (!is.numeric(n_quad_points) || n_quad_points < 1) {
+    stop("n_quad_points must be a positive integer.")
+  }
   if (!is.numeric(num_cores) || num_cores < 1) {
     stop("num_cores must be a positive integer.")
   }
 
   out <- list(
+    n_quad_points = as.integer(n_quad_points),
     num_cores = as.integer(num_cores)
   )
 
@@ -64,6 +68,6 @@ define_estimation_control <- function(num_cores = 1) {
 print.estimation_control <- function(x, ...) {
   cat("Estimation Control\n")
   cat("------------------\n")
-#  cat("Number of unobserved types:", x$num_types, "\n")
+  cat("Number of quadrature points:", x$n_quad_points, "\n")
   cat("Number of cores for parallelization:", x$num_cores, "\n")
 }
