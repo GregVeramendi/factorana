@@ -182,6 +182,10 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         )
         coefs_no_int <- coef(fit)
       } else {
+        # No covariates: fit intercept-only model to get thresholds
+        fit <- suppressWarnings(
+          MASS::polr(as.ordered(outcome) ~ 1, method = "probit")
+        )
         coefs_no_int <- numeric(0)
       }
       thresholds_abs <- fit$zeta
