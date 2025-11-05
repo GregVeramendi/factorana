@@ -60,7 +60,7 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
     if (verbose) {
       message("Factor identification:")
       for (k in seq_len(n_factors)) {
-        status <- if (factor_variance_fixed[k]) "identified by unit loading (variance fixed to 1.0)" else "NOT identified (variance will be estimated)"
+        status <- if (factor_variance_fixed[k]) "identified by fixed loading (variance will be estimated)" else "NOT identified (variance fixed to 1.0)"
         message(sprintf("  Factor %d: %s", k, status))
       }
     }
