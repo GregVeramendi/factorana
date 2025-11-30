@@ -313,3 +313,54 @@ List get_parameter_info_cpp(SEXP fm_ptr) {
         Named("n_param_free") = fm->GetNParamFree()
     );
 }
+
+//' Evaluate log-likelihood for a single observation at given factor values
+//'
+//' Used for factor score estimation. The model parameters are held fixed,
+//' and the factor values are treated as the parameters to optimize.
+//'
+//' @param fm_ptr External pointer to FactorModel object
+//' @param iobs Observation index (0-based)
+//' @param factor_values Vector of factor values (size n_factors)
+//' @param model_params Vector of ALL model parameters (from previous estimation)
+//' @param compute_gradient Whether to compute gradient (default FALSE)
+//' @param compute_hessian Whether to compute Hessian (default FALSE)
+//' @return List with log-likelihood, gradient (if requested), and Hessian (if requested)
+//' @export
+// [[Rcpp::export]]
+List evaluate_factorscore_likelihood_cpp(SEXP fm_ptr,
+                                         int iobs,
+                                         NumericVector factor_values,
+                                         NumericVector model_params,
+                                         bool compute_gradient = false,
+                                         bool compute_hessian = false) {
+
+    // Get FactorModel object
+    Rcpp::XPtr<FactorModel> fm(fm_ptr);
+
+    // Convert to std::vector
+    std::vector<double> fac_vec = as<std::vector<double>>(factor_values);
+    std::vector<double> param_vec = as<std::vector<double>>(model_params);
+
+    // Determine flag
+    int iflag = 1;  // likelihood only
+    if (compute_gradient) iflag = 2;
+    if (compute_hessian) iflag = 3;
+
+    // Compute likelihood for single observation
+    double logLkhd;
+    std::vector<double> gradL, hessL;
+    fm->CalcLkhdSingleObs(iobs, fac_vec, param_vec, logLkhd, gradL, hessL, iflag);
+
+    // Return results
+    List result = List::create(Named("logLikelihood") = logLkhd);
+
+    if (compute_gradient) {
+        result["gradient"] = gradL;
+    }
+    if (compute_hessian) {
+        result["hessian"] = hessL;
+    }
+
+    return result;
+}

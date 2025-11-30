@@ -75,6 +75,28 @@ public:
     // Convenience wrapper that returns likelihood only
     double CalcLogLikelihood(const std::vector<double>& free_params);
 
+    // Factor score estimation: evaluate likelihood for single observation
+    // given factor values (no quadrature integration)
+    //
+    // Parameters:
+    //   iobs - Observation index (0-based)
+    //   factor_values - Vector of factor values (size nfac)
+    //   model_params - Vector of ALL model parameters (size nparam)
+    //   logLkhd - Output: log-likelihood value (includes factor prior)
+    //   gradL - Output: gradient w.r.t. factor values (size nfac)
+    //   hessL - Output: Hessian w.r.t. factor values (upper triangle, size nfac*(nfac+1)/2)
+    //   iflag - 1=likelihood only, 2=+gradient, 3=+Hessian
+    void CalcLkhdSingleObs(int iobs,
+                           const std::vector<double>& factor_values,
+                           const std::vector<double>& model_params,
+                           double& logLkhd,
+                           std::vector<double>& gradL,
+                           std::vector<double>& hessL,
+                           int iflag);
+
+    // Set model parameters (used for factor score estimation)
+    void SetModelParameters(const std::vector<double>& params);
+
     // Accessors
     int GetNObs() const { return nobs; }
     int GetNVar() const { return nvar; }

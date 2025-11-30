@@ -72,6 +72,22 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// evaluate_factorscore_likelihood_cpp
+List evaluate_factorscore_likelihood_cpp(SEXP fm_ptr, int iobs, NumericVector factor_values, NumericVector model_params, bool compute_gradient, bool compute_hessian);
+RcppExport SEXP _factorana_evaluate_factorscore_likelihood_cpp(SEXP fm_ptrSEXP, SEXP iobsSEXP, SEXP factor_valuesSEXP, SEXP model_paramsSEXP, SEXP compute_gradientSEXP, SEXP compute_hessianSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type fm_ptr(fm_ptrSEXP);
+    Rcpp::traits::input_parameter< int >::type iobs(iobsSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type factor_values(factor_valuesSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type model_params(model_paramsSEXP);
+    Rcpp::traits::input_parameter< bool >::type compute_gradient(compute_gradientSEXP);
+    Rcpp::traits::input_parameter< bool >::type compute_hessian(compute_hessianSEXP);
+    rcpp_result_gen = Rcpp::wrap(evaluate_factorscore_likelihood_cpp(fm_ptr, iobs, factor_values, model_params, compute_gradient, compute_hessian));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 RcppExport SEXP _rcpp_module_boot_factorana_module();
 
@@ -81,6 +97,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_factorana_evaluate_likelihood_cpp", (DL_FUNC) &_factorana_evaluate_likelihood_cpp, 4},
     {"_factorana_evaluate_loglik_only_cpp", (DL_FUNC) &_factorana_evaluate_loglik_only_cpp, 2},
     {"_factorana_get_parameter_info_cpp", (DL_FUNC) &_factorana_get_parameter_info_cpp, 1},
+    {"_factorana_evaluate_factorscore_likelihood_cpp", (DL_FUNC) &_factorana_evaluate_factorscore_likelihood_cpp, 6},
     {"_rcpp_module_boot_factorana_module", (DL_FUNC) &_rcpp_module_boot_factorana_module, 0},
     {NULL, NULL, 0}
 };

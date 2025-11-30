@@ -383,3 +383,164 @@ int FactorModel::GetMixtureWeightIndex(int imix)
     if (nmix == 1) return -1;  // No weights for single mixture
     return nmix * nfac * 2 + imix;
 }
+
+void FactorModel::SetModelParameters(const std::vector<double>& params)
+{
+    if (params.size() != nparam) {
+        throw std::runtime_error("Parameter vector size mismatch in SetModelParameters");
+    }
+    param = params;
+}
+
+void FactorModel::CalcLkhdSingleObs(int iobs,
+                                    const std::vector<double>& factor_values,
+                                    const std::vector<double>& model_params,
+                                    double& logLkhd,
+                                    std::vector<double>& gradL,
+                                    std::vector<double>& hessL,
+                                    int iflag)
+{
+    // ===== Factor score estimation mode =====
+    // Evaluates likelihood for a single observation at given factor values.
+    // No quadrature - factor values are the parameters we're optimizing.
+    // Includes factor prior: L = p(y|f,θ) * φ(f|0,σ²)
+
+    if (factor_values.size() != nfac) {
+        throw std::runtime_error("Factor values size mismatch");
+    }
+    if (model_params.size() != nparam) {
+        throw std::runtime_error("Model parameters size mismatch");
+    }
+
+    // Set the model parameters
+    param = model_params;
+
+    // Extract factor variances from param vector
+    std::vector<double> factor_var(nfac);
+    for (int ifac = 0; ifac < nfac; ifac++) {
+        factor_var[ifac] = std::fabs(param[ifac]);  // Enforce positivity
+    }
+
+    // Initialize outputs
+    logLkhd = 0.0;
+    if (iflag >= 2) {
+        gradL.resize(nfac, 0.0);
+        std::fill(gradL.begin(), gradL.end(), 0.0);
+    }
+    if (iflag == 3) {
+        // Upper triangle storage for nfac x nfac Hessian
+        hessL.resize(nfac * (nfac + 1) / 2, 0.0);
+        std::fill(hessL.begin(), hessL.end(), 0.0);
+    }
+
+    int iobs_offset = iobs * nvar;
+
+    // ===== Part 1: Observation likelihood p(y|f,θ) =====
+    // We compute log p(y|f) = sum_m log p_m(y_m|f) directly for numerical stability
+    double logObs = 0.0;  // Sum of log-likelihoods
+    std::vector<double> gradLogObs(nfac, 0.0);  // d(log L_obs)/df = sum_m d(log L_m)/df
+    std::vector<double> hessLogObs;
+    if (iflag == 3) {
+        hessLogObs.resize(nfac * nfac, 0.0);
+    }
+
+    // Temporary storage for model evaluation
+    std::vector<double> modEval;
+    std::vector<double> modHess;
+
+    // Evaluate all models at the given factor values
+    for (size_t imod = 0; imod < models.size(); imod++) {
+        int firstpar = param_model_start[imod];
+
+        // For factor score estimation, we only need derivatives w.r.t. factor values
+        // Pass iflag to get gradients/Hessians w.r.t. factors
+        models[imod]->Eval(iobs_offset, data, param, firstpar, factor_values,
+                          modEval, modHess, iflag);
+
+        // Get model likelihood
+        double Lm = modEval[0];
+        if (Lm < 1e-100) {
+            Lm = 1e-100;  // Prevent log(0)
+        }
+        logObs += std::log(Lm);
+
+        // Accumulate gradients: d(log L_obs)/df = sum_m (1/L_m) * dL_m/df
+        if (iflag >= 2) {
+            for (int ifac = 0; ifac < nfac; ifac++) {
+                // modEval[ifac + 1] is dL_m/df_ifac from this model
+                gradLogObs[ifac] += modEval[ifac + 1] / Lm;
+            }
+        }
+
+        // Accumulate Hessians: d²(log L_m)/df_i df_j = (1/L_m)*d²L_m/df² - (1/L_m²)*(dL_m/df_i)*(dL_m/df_j)
+        if (iflag == 3 && modHess.size() > 0) {
+            int nDimModHess = nfac + param_model_count[imod];
+            // Extract only the factor-factor part of the Hessian
+            for (int i = 0; i < nfac; i++) {
+                for (int j = i; j < nfac; j++) {
+                    int modhess_idx = i * nDimModHess + j;
+                    int hess_idx = i * nfac + j;
+
+                    double dLi = modEval[i + 1];  // dL_m/df_i
+                    double dLj = modEval[j + 1];  // dL_m/df_j
+                    double d2L = modHess[modhess_idx];  // d²L_m/df_i df_j
+
+                    // d²(log L_m)/df_i df_j = d²L_m/df_i df_j / L_m - (dL_m/df_i * dL_m/df_j) / L_m²
+                    hessLogObs[hess_idx] += d2L / Lm - (dLi * dLj) / (Lm * Lm);
+                }
+            }
+        }
+    }
+
+    // ===== Part 2: Factor prior φ(f|0,σ²) =====
+    // log φ(f|0,σ²) = -0.5 * Σ [f²/σ² + log(2π*σ²)]
+    // = -0.5 * Σ [f²/σ² + log(2π) + log(σ²)]
+    double logPrior = 0.0;
+    std::vector<double> gradPrior(nfac, 0.0);
+    std::vector<double> hessPrior(nfac, 0.0);  // Diagonal only for uncorrelated factors
+
+    for (int ifac = 0; ifac < nfac; ifac++) {
+        double f = factor_values[ifac];
+        double sigma2 = factor_var[ifac];
+
+        // Log-prior contribution
+        logPrior -= 0.5 * (f * f / sigma2 + std::log(2.0 * M_PI * sigma2));
+
+        // Gradient: d(logPrior)/df = -f/σ²
+        if (iflag >= 2) {
+            gradPrior[ifac] = -f / sigma2;
+        }
+
+        // Hessian: d²(logPrior)/df² = -1/σ²
+        if (iflag == 3) {
+            hessPrior[ifac] = -1.0 / sigma2;
+        }
+    }
+
+    // ===== Part 3: Combine log-likelihood and log-prior =====
+    // log(L_total) = log(L_obs) + log(L_prior)
+    logLkhd = logObs + logPrior;
+
+    // Gradient: d(log L_total)/df = d(log L_obs)/df + d(log L_prior)/df
+    if (iflag >= 2) {
+        for (int ifac = 0; ifac < nfac; ifac++) {
+            gradL[ifac] = gradLogObs[ifac] + gradPrior[ifac];
+        }
+    }
+
+    // Hessian: d²(log L_total)/df² = d²(log L_obs)/df² + d²(log L_prior)/df²
+    if (iflag == 3) {
+        int hess_out_idx = 0;
+        for (int i = 0; i < nfac; i++) {
+            for (int j = i; j < nfac; j++) {
+                int hess_idx = i * nfac + j;
+                double obs_hess = hessLogObs[hess_idx];
+
+                // Add prior Hessian (diagonal only for uncorrelated factors)
+                double prior_hess = (i == j) ? hessPrior[i] : 0.0;
+
+                hessL[hess_out_idx++] = obs_hess + prior_hess;
+            }
+        }
+    }
+}

@@ -52,3 +52,20 @@ get_parameter_info_cpp <- function(fm_ptr) {
     .Call(`_factorana_get_parameter_info_cpp`, fm_ptr)
 }
 
+#' Evaluate log-likelihood for a single observation at given factor values
+#'
+#' Used for factor score estimation. The model parameters are held fixed,
+#' and the factor values are treated as the parameters to optimize.
+#'
+#' @param fm_ptr External pointer to FactorModel object
+#' @param iobs Observation index (0-based)
+#' @param factor_values Vector of factor values (size n_factors)
+#' @param model_params Vector of ALL model parameters (from previous estimation)
+#' @param compute_gradient Whether to compute gradient (default FALSE)
+#' @param compute_hessian Whether to compute Hessian (default FALSE)
+#' @return List with log-likelihood, gradient (if requested), and Hessian (if requested)
+#' @export
+evaluate_factorscore_likelihood_cpp <- function(fm_ptr, iobs, factor_values, model_params, compute_gradient = FALSE, compute_hessian = FALSE) {
+    .Call(`_factorana_evaluate_factorscore_likelihood_cpp`, fm_ptr, iobs, factor_values, model_params, compute_gradient, compute_hessian)
+}
+
