@@ -23,22 +23,33 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
                  std::vector<double>& hess,
                  int flag)
 {
+    // Always clear vectors first to ensure no stale data persists
+    // This is critical for consistent behavior across different flag values
+    modEval.clear();
+    hess.clear();
+
+    // Count free factor loadings FIRST (needed for gradient vector sizing)
+    int ifreefac = 0;
+    for (size_t i = 0; i < facnorm.size(); i++) {
+        if (facnorm[i] <= -9998) ifreefac++;
+    }
+    if (facnorm.size() == 0) ifreefac = numfac + numtyp*(outcome_idx != -2);
+
     // Determine size of gradient vector
     if (flag >= 2) {
-        // General parameters: 1 (likelihood) + numfac (df/dtheta) + numfac (for later) +
-        // numtyp (types) + nregressors (df/dbeta)
-        int ngrad = 1 + 2*numfac + numtyp*(outcome_idx != -2) + nregressors;
+        // Layout: 1 (likelihood) + numfac (d/dtheta for factor variances) +
+        //         nregressors (d/dbeta) + ifreefac (d/dalpha for free loadings) +
+        //         model-specific parameters
+        int ngrad = 1 + numfac + nregressors + ifreefac;
 
         // Model-specific parameters
         if (modtype == ModelType::LINEAR) ngrad += 1;  // sigma
         if (modtype == ModelType::LOGIT && numchoice > 2) {
-            ngrad = 1 + numfac + (numchoice-1)*(numfac + numtyp*(outcome_idx!=-2) + nregressors);
+            ngrad = 1 + numfac + (numchoice-1)*(nregressors + ifreefac);
         }
         if (modtype == ModelType::OPROBIT) ngrad += (numchoice - 1);  // thresholds
 
-        modEval.resize(ngrad);
-        for (int i = 1; i < ngrad; i++) modEval[i] = 0.0;
-        if (flag == 3) hess.clear();
+        modEval.resize(ngrad, 0.0);  // Initialize all to 0.0
     } else {
         modEval.resize(1);
     }
@@ -60,14 +71,6 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
         numlogitchoice = numchoice;
     }
 
-    // Add factor/type terms to expression
-    // Count free factor loadings (ifreefac) FIRST
-    int ifreefac = 0;
-    for (size_t i = 0; i < facnorm.size(); i++) {
-        if (facnorm[i] <= -9998) ifreefac++;
-    }
-    if (facnorm.size() == 0) ifreefac = numfac + numtyp*(outcome_idx != -2);
-
     for (int ichoice = 0; ichoice < numlogitchoice - 1; ichoice++) {
         int ifree_local = 0;
         int nparamchoice = nregressors + ifreefac;
@@ -79,7 +82,11 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
         }
 
         // Add factor and type loadings
-        for (int i = 0; i < numfac + numtyp*(outcome_idx != -2); i++) {
+        // IMPORTANT: Loop bound must respect actual vector sizes to avoid out-of-bounds access
+        // When facnorm is provided, use its size; otherwise use numfac
+        // The numtyp term is legacy and not currently used in the R interface
+        int fac_loop_bound = (facnorm.size() > 0) ? (int)facnorm.size() : numfac;
+        for (int i = 0; i < fac_loop_bound; i++) {
             if (facnorm.size() == 0) {
                 // All loadings are free
                 expres[ichoice] += param[ifree_local + firstpar + ichoice*nparamchoice + nregressors] * fac[i];
@@ -153,7 +160,9 @@ void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
     double sigma2 = sigma * sigma;
     ifreefac = 0;
 
-    for (int i = 0; i < numfac + numtyp*(outcome_idx != -2); i++) {
+    // Use facnorm.size() as loop bound when provided, to avoid out-of-bounds access
+    int fac_loop_bound = (facnorm.size() > 0) ? (int)facnorm.size() : numfac;
+    for (int i = 0; i < fac_loop_bound; i++) {
         if (facnorm.size() == 0) {
             // All free
             if (i < numfac) {
@@ -284,7 +293,9 @@ void Model::EvalProbit(double expres, double obsSign, const std::vector<double>&
 
     // Compute gradients
     ifreefac = 0;
-    for (int i = 0; i < numfac + numtyp*(outcome_idx != -2); i++) {
+    // Use facnorm.size() as loop bound when provided, to avoid out-of-bounds access
+    int fac_loop_bound = (facnorm.size() > 0) ? (int)facnorm.size() : numfac;
+    for (int i = 0; i < fac_loop_bound; i++) {
         if (facnorm.size() == 0) {
             if (i < numfac) {
                 modEval[i+1] = pdf * obsSign * param[ifreefac + firstpar + nregressors] / cdf;
@@ -492,8 +503,10 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
     // Following legacy TModel.cc pattern exactly
 
     // Factor loadings - obsCat term and logitgrad
+    // Use facnorm.size() as loop bound when provided, to avoid out-of-bounds access
+    int fac_loop_bound = (facnorm.size() > 0) ? (int)facnorm.size() : numfac;
     int ifree = 0;
-    for (int ifac = 0; ifac < numfac + numtyp*(outcome_idx != -2); ifac++) {
+    for (int ifac = 0; ifac < fac_loop_bound; ifac++) {
         if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
             double fval = fac[ifac];
 
@@ -617,7 +630,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
 
                     // dtheta dalpha
                     int jfree = 0;
-                    for (int jfac = 0; jfac < numfac + numtyp*(outcome_idx != -2); jfac++) {
+                    for (int jfac = 0; jfac < fac_loop_bound; jfac++) {
                         if (facnorm.size() == 0 || facnorm[jfac] <= -9998) {
                             int index = jbase_idx + nregressors + jfree;
                             hess[ifac * npar + index] += -pdf[icat] * logitgrad[icat * npar + index] * loading_val;
@@ -651,7 +664,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                 for (int ireg = 0; ireg < nregressors; ireg++) {
                     double xval_i = data[iobs_offset + regressors[ireg]];
                     int jfree = 0;
-                    for (int jfac = 0; jfac < numfac + numtyp*(outcome_idx != -2); jfac++) {
+                    for (int jfac = 0; jfac < fac_loop_bound; jfac++) {
                         if (facnorm.size() == 0 || facnorm[jfac] <= -9998) {
                             int index1 = ibase_idx + ireg;
                             int index2 = jbase_idx + nregressors + jfree;
@@ -664,7 +677,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                 // dalpha dbeta (only for jcat > icat)
                 if (jcat > icat) {
                     int ifree = 0;
-                    for (int ifac = 0; ifac < numfac + numtyp*(outcome_idx != -2); ifac++) {
+                    for (int ifac = 0; ifac < fac_loop_bound; ifac++) {
                         if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
                             for (int jreg = 0; jreg < nregressors; jreg++) {
                                 int index1 = ibase_idx + nregressors + ifree;
@@ -678,10 +691,10 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
 
                 // dalpha dalpha
                 int ifree = 0;
-                for (int ifac = 0; ifac < numfac + numtyp*(outcome_idx != -2); ifac++) {
+                for (int ifac = 0; ifac < fac_loop_bound; ifac++) {
                     if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
                         int jfree = 0;
-                        for (int jfac = 0; jfac < numfac + numtyp*(outcome_idx != -2); jfac++) {
+                        for (int jfac = 0; jfac < fac_loop_bound; jfac++) {
                             if (facnorm.size() == 0 || facnorm[jfac] <= -9998) {
                                 if ((jcat > icat) || (jfac >= ifac)) {
                                     int index1 = ibase_idx + nregressors + ifree;
@@ -712,6 +725,9 @@ void Model::EvalOprobit(double expres, int outcome_value,
     }
     if (facnorm.size() == 0) ifreefac = numfac + numtyp*(outcome_idx != -2);
 
+    // Use facnorm.size() as loop bound when provided, to avoid out-of-bounds access
+    int fac_loop_bound = (facnorm.size() > 0) ? (int)facnorm.size() : numfac;
+
     // Observed category (1, 2, ..., numchoice)
     int obsCat = outcome_value;
 
@@ -721,13 +737,17 @@ void Model::EvalOprobit(double expres, int outcome_value,
     // Build thresholds by accumulating absolute values
     // threshold[0] = lower bound for this category
     // threshold[1] = upper bound for this category
+    // Use minimum increment of 0.01 for numerical stability
+    const double MIN_THRESH_INCREMENT = 0.01;
     double threshold[2];
     threshold[0] = param[thresh_idx];
     threshold[1] = param[thresh_idx];
 
     for (int icat = 2; icat <= obsCat; icat++) {
-        if (icat < obsCat) threshold[0] += std::fabs(param[thresh_idx + icat - 1]);
-        if (icat < numchoice) threshold[1] += std::fabs(param[thresh_idx + icat - 1]);
+        double incr = std::fabs(param[thresh_idx + icat - 1]);
+        if (incr < MIN_THRESH_INCREMENT) incr = MIN_THRESH_INCREMENT;
+        if (icat < obsCat) threshold[0] += incr;
+        if (icat < numchoice) threshold[1] += incr;
     }
 
     // Compute CDFs at thresholds
@@ -740,29 +760,47 @@ void Model::EvalOprobit(double expres, int outcome_value,
     }
 
     // Likelihood: Prob(Y = obsCat) = CDF[upper] - CDF[lower]
-    modEval[0] = CDF[1] - CDF[0];
+    double rawDiffCDF = CDF[1] - CDF[0];
 
-    // Fix numerical problems (will divide by CDF later)
-    if ((obsCat > 1) && (CDF[0] < 1.0e-50)) CDF[0] = 1.0e-50;
-    if (CDF[1] < 1.0e-50) CDF[1] = 1.0e-50;
-    double diffCDF = modEval[0];
-    if (diffCDF < 1.0e-50) diffCDF = 1.0e-50;
+    // Floor the probability to avoid numerical underflow
+    // This is critical for multi-factor models where probabilities are multiplied
+    const double MIN_PROB = 1.0e-50;
+    double diffCDF = rawDiffCDF;
+    if (diffCDF < MIN_PROB) diffCDF = MIN_PROB;
+
+    // Return floored probability as the likelihood
+    modEval[0] = diffCDF;
+
+    // Fix numerical problems for gradient computation (will divide by CDF later)
+    if ((obsCat > 1) && (CDF[0] < MIN_PROB)) CDF[0] = MIN_PROB;
+    if (CDF[1] < MIN_PROB) CDF[1] = MIN_PROB;
 
     if (flag < 2) return;
 
     // ===== GRADIENT CALCULATION =====
 
     // Compute PDFs and Z-values at both thresholds
+    // Add safeguards for extreme Z-values
+    const double MAX_Z = 35.0;  // Beyond this, PDF is essentially 0
+    const double MIN_PDF = 1.0e-50;
     double Z[2] = {-9999.0, -9999.0};
     double PDF[2] = {0.0, 0.0};
 
     if (obsCat > 1) {
         Z[0] = threshold[0] - expres;
+        // Bound Z to avoid extreme values in Hessian computation
+        if (Z[0] > MAX_Z) Z[0] = MAX_Z;
+        if (Z[0] < -MAX_Z) Z[0] = -MAX_Z;
         PDF[0] = normal_pdf(Z[0]);
+        if (PDF[0] < MIN_PDF) PDF[0] = MIN_PDF;
     }
     if (obsCat < numchoice) {
         Z[1] = threshold[1] - expres;
+        // Bound Z to avoid extreme values in Hessian computation
+        if (Z[1] > MAX_Z) Z[1] = MAX_Z;
+        if (Z[1] < -MAX_Z) Z[1] = -MAX_Z;
         PDF[1] = normal_pdf(Z[1]);
+        if (PDF[1] < MIN_PDF) PDF[1] = MIN_PDF;
     }
 
     int npar = numfac + nregressors + ifreefac + (numchoice - 1);  // includes thresholds
@@ -785,7 +823,7 @@ void Model::EvalOprobit(double expres, int outcome_value,
 
             // Gradients w.r.t. factor variance parameters and loadings
             int ifree = 0;
-            for (int ifac = 0; ifac < numfac + numtyp*(outcome_idx != -2); ifac++) {
+            for (int ifac = 0; ifac < fac_loop_bound; ifac++) {
                 if (facnorm.size() == 0 || facnorm[ifac] <= -9998.0) {
                     // Free loading
                     if (ifac < numfac) {
@@ -826,51 +864,70 @@ void Model::EvalOprobit(double expres, int outcome_value,
     }
 
     // ===== HESSIAN CALCULATION =====
+    // Using the same factorized approach as the legacy TModel.cc code
+    // Initialize tmphess to 1.0 and multiply by factors for each parameter
     if (flag == 3) {
         for (int iterm = 0; iterm < 2; iterm++) {
+            // Skip if end categories
             if (((obsCat > 1) && (iterm == 0)) || ((obsCat < numchoice) && (iterm == 1))) {
 
                 std::vector<double> tmphess(npar * npar, 1.0);
                 int obsSign = (iterm == 0) ? -1 : 1;
 
-                // Hessian terms for factor parameters
+                // Factor-specific Hessian terms (theta and alpha)
                 int ifree = 0;
-                for (int ifac = 0; ifac < numfac + numtyp*(outcome_idx != -2); ifac++) {
+                for (int ifac = 0; ifac < fac_loop_bound; ifac++) {
+                    // No normalizations (all free) or check if this one is free
                     if (facnorm.size() == 0 || facnorm[ifac] <= -9998.0) {
                         if (ifac < numfac) {
-                            // d²/dtheta² and cross terms
-                            for (int j = ifac; j < npar; j++)
+                            // lambda^L(theta) - lambda^Prob(theta) (row)
+                            for (int j = ifac; j < npar; j++) {
                                 tmphess[ifac*npar + j] *= -Z[iterm] * (-1.0 * param[ifree + firstpar + nregressors]) - modEval[1 + ifac];
-                            for (int j = 0; j <= ifac; j++)
+                            }
+                            // dZ/dtheta_i (col)
+                            for (int j = 0; j <= ifac; j++) {
                                 tmphess[j*npar + ifac] *= -1.0 * param[ifree + firstpar + nregressors];
+                            }
                         }
 
-                        // d²/dalpha² and cross terms
+                        // alpha_i index
                         int index = numfac + nregressors + ifree;
-                        for (int j = index; j < npar; j++)
+                        // lambda^L(alpha) - lambda^Prob(alpha) (row)
+                        for (int j = index; j < npar; j++) {
                             tmphess[index*npar + j] *= -Z[iterm] * (-1.0 * fac[ifac]) - modEval[1 + numfac + nregressors + ifree];
-                        for (int j = 0; j <= index; j++)
+                        }
+                        // dZ/dalpha (col)
+                        for (int j = 0; j <= index; j++) {
                             tmphess[j*npar + index] *= -1.0 * fac[ifac];
+                        }
 
                         ifree++;
                     } else {
-                        // Fixed loading terms
+                        // Fixed loading (facnorm[ifac] > -9998)
                         if (ifac < numfac) {
-                            for (int j = ifac; j < npar; j++)
+                            // lambda^L(theta) - lambda^Prob(theta) (row)
+                            for (int j = ifac; j < npar; j++) {
                                 tmphess[ifac*npar + j] *= -Z[iterm] * (-1.0 * facnorm[ifac]) - modEval[1 + ifac];
-                            for (int j = 0; j <= ifac; j++)
+                            }
+                            // dZ/dtheta_i (col)
+                            for (int j = 0; j <= ifac; j++) {
                                 tmphess[j*npar + ifac] *= -1.0 * facnorm[ifac];
+                            }
                         }
                     }
                 }
 
-                // Hessian for regression coefficients
+                // Hessian for regression coefficients (X's)
                 for (int ireg = 0; ireg < nregressors; ireg++) {
                     int index = numfac + ireg;
-                    for (int j = index; j < npar; j++)
+                    // lambda^L(X) - lambda^Prob(X) (row)
+                    for (int j = index; j < npar; j++) {
                         tmphess[index*npar + j] *= -Z[iterm] * (-1.0 * data[iobs_offset + regressors[ireg]]) - modEval[1 + ireg + numfac];
-                    for (int j = 0; j <= index; j++)
+                    }
+                    // dZ/dX_i (col)
+                    for (int j = 0; j <= index; j++) {
                         tmphess[j*npar + index] *= -1.0 * data[iobs_offset + regressors[ireg]];
+                    }
                 }
 
                 // Hessian for thresholds
@@ -881,17 +938,23 @@ void Model::EvalOprobit(double expres, int outcome_value,
                 for (int ithres = 0; ithres < numchoice - 1; ithres++) {
                     int index = thres_offset + ithres;
                     if (ithres < maxthresloop) {
-                        for (int j = index; j < npar; j++)
+                        // lambda^L(chi) - lambda^Prob(chi) (row)
+                        for (int j = index; j < npar; j++) {
                             tmphess[index*npar + j] *= -Z[iterm] - modEval[1 + thres_offset + ithres];
+                        }
                     } else {
-                        for (int j = index; j < npar; j++)
+                        // lambda^L(chi) - lambda^Prob(chi) (row)
+                        for (int j = index; j < npar; j++) {
                             tmphess[index*npar + j] *= -modEval[1 + thres_offset + ithres];
-                        for (int j = 0; j <= index; j++)
+                        }
+                        // dZ/dchi_i (col) - set to zero
+                        for (int j = 0; j <= index; j++) {
                             tmphess[j*npar + index] = 0.0;
+                        }
                     }
                 }
 
-                // Add cross-derivative terms d²/dtheta dalpha
+                // Add cross-derivative term dZ/dtheta dalpha = -1
                 ifree = 0;
                 for (int i = 0; i < numfac; i++) {
                     if (facnorm.size() == 0 || facnorm[i] <= -9998.0) {
@@ -901,7 +964,7 @@ void Model::EvalOprobit(double expres, int outcome_value,
                     }
                 }
 
-                // Add tmp Hessian to total, scaled by PDF[iterm]/diffCDF
+                // Add tmp hessian to totals, scaled by obsSign * PDF / diffCDF
                 for (int i = 0; i < npar; i++) {
                     for (int j = i; j < npar; j++) {
                         hess[i*npar + j] += obsSign * tmphess[i*npar + j] * PDF[iterm] / diffCDF;

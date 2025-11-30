@@ -7,7 +7,7 @@
 #' @return List with nodes and weights
 #' @export
 gauss_hermite_quadrature <- function(n) {
-    .Call('_factorana_gauss_hermite_quadrature', PACKAGE = 'factorana', n)
+    .Call(`_factorana_gauss_hermite_quadrature`, n)
 }
 
 #' Initialize a FactorModel C++ object from R model system
@@ -18,7 +18,7 @@ gauss_hermite_quadrature <- function(n) {
 #' @return External pointer to FactorModel object
 #' @export
 initialize_factor_model_cpp <- function(model_system, data, n_quad = 8L) {
-    .Call('_factorana_initialize_factor_model_cpp', PACKAGE = 'factorana', model_system, data, n_quad)
+    .Call(`_factorana_initialize_factor_model_cpp`, model_system, data, n_quad)
 }
 
 #' Evaluate log-likelihood for given parameters
@@ -30,7 +30,7 @@ initialize_factor_model_cpp <- function(model_system, data, n_quad = 8L) {
 #' @return List with log-likelihood, gradient (if requested), and Hessian (if requested)
 #' @export
 evaluate_likelihood_cpp <- function(fm_ptr, params, compute_gradient = FALSE, compute_hessian = FALSE) {
-    .Call('_factorana_evaluate_likelihood_cpp', PACKAGE = 'factorana', fm_ptr, params, compute_gradient, compute_hessian)
+    .Call(`_factorana_evaluate_likelihood_cpp`, fm_ptr, params, compute_gradient, compute_hessian)
 }
 
 #' Evaluate log-likelihood only (for optimization)
@@ -40,7 +40,7 @@ evaluate_likelihood_cpp <- function(fm_ptr, params, compute_gradient = FALSE, co
 #' @return Log-likelihood value
 #' @export
 evaluate_loglik_only_cpp <- function(fm_ptr, params) {
-    .Call('_factorana_evaluate_loglik_only_cpp', PACKAGE = 'factorana', fm_ptr, params)
+    .Call(`_factorana_evaluate_loglik_only_cpp`, fm_ptr, params)
 }
 
 #' Get parameter counts from FactorModel
@@ -49,6 +49,6 @@ evaluate_loglik_only_cpp <- function(fm_ptr, params) {
 #' @return List with parameter count information
 #' @export
 get_parameter_info_cpp <- function(fm_ptr) {
-    .Call('_factorana_get_parameter_info_cpp', PACKAGE = 'factorana', fm_ptr)
+    .Call(`_factorana_get_parameter_info_cpp`, fm_ptr)
 }
 

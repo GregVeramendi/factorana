@@ -65,26 +65,19 @@ build_parameter_metadata <- function(model_system) {
       }
     } else {
       # Standard handling for all other model types
-      # Intercept
-      if (comp$intercept) {
-        if (comp$model_type == "oprobit" && comp$num_choices > 2) {
-          n_intercepts <- comp$num_choices - 1
-          for (j in seq_len(n_intercepts)) {
-            param_names <- c(param_names, sprintf("%s_intercept_%d", comp_name, j))
-            param_types <- c(param_types, "intercept")
-            component_id <- c(component_id, i)
-          }
-        } else {
-          param_names <- c(param_names, sprintf("%s_intercept", comp_name))
-          param_types <- c(param_types, "intercept")
-          component_id <- c(component_id, i)
-        }
+      # Intercept (NOT for oprobit - intercepts are absorbed into thresholds)
+      if (comp$intercept && comp$model_type != "oprobit") {
+        param_names <- c(param_names, sprintf("%s_intercept", comp_name))
+        param_types <- c(param_types, "intercept")
+        component_id <- c(component_id, i)
       }
 
       # Covariate coefficients
       if (!is.null(comp$covariates) && length(comp$covariates) > 0) {
         for (cov in comp$covariates) {
-          if (cov != "intercept") {
+          # For oprobit, include intercept as a beta (fixed at 0 during optimization)
+          # because C++ expects all covariates including intercept
+          if (cov != "intercept" || comp$model_type == "oprobit") {
             param_names <- c(param_names, sprintf("%s_beta_%s", comp_name, cov))
             param_types <- c(param_types, "beta")
             component_id <- c(component_id, i)
@@ -110,17 +103,18 @@ build_parameter_metadata <- function(model_system) {
       }
     }
 
-    # Residual variance
-    if (comp$model_type %in% c("linear", "oprobit")) {
+    # Residual variance (only for linear models - oprobit has normalized variance)
+    if (comp$model_type == "linear") {
       param_names <- c(param_names, sprintf("%s_sigma", comp_name))
       param_types <- c(param_types, "sigma")
       component_id <- c(component_id, i)
     }
 
-    # Cutpoints
-    if (comp$model_type == "oprobit" && !is.null(comp$n_cutpoints)) {
-      for (j in seq_len(comp$n_cutpoints)) {
-        param_names <- c(param_names, sprintf("%s_cutpoint_%d", comp_name, j))
+    # Thresholds for ordered probit (num_choices - 1 thresholds for identification)
+    if (comp$model_type == "oprobit" && !is.null(comp$num_choices) && comp$num_choices > 1) {
+      n_thresholds <- comp$num_choices - 1
+      for (j in seq_len(n_thresholds)) {
+        param_names <- c(param_names, sprintf("%s_thresh_%d", comp_name, j))
         param_types <- c(param_types, "cutpoint")
         component_id <- c(component_id, i)
       }
@@ -136,7 +130,7 @@ build_parameter_metadata <- function(model_system) {
 }
 
 # Setup parameter bounds and identify fixed parameters
-setup_parameter_constraints <- function(model_system, init_params, param_metadata) {
+setup_parameter_constraints <- function(model_system, init_params, param_metadata, factor_variance_fixed = NULL, verbose = FALSE) {
   n_params <- length(init_params)
   n_factors <- model_system$factor$n_factors
 
@@ -144,16 +138,33 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
   upper_bounds <- rep(Inf, n_params)
 
   # Identify which factor variances are identified
-  # A factor is identified if at least one component has a fixed non-zero loading on that factor
-  factor_variance_identified <- rep(FALSE, n_factors)
-  for (comp in model_system$components) {
-    if (!is.null(comp$loading_normalization)) {
-      for (k in seq_len(n_factors)) {
-        if (!is.na(comp$loading_normalization[k]) &&
-            abs(comp$loading_normalization[k]) > 1e-6) {
-          factor_variance_identified[k] <- TRUE
+  # If factor_variance_fixed was passed from initialize_parameters, use it
+  # Otherwise, compute it by checking for fixed non-zero loadings
+  if (!is.null(factor_variance_fixed)) {
+    # Use the passed value: factor_variance_fixed=TRUE means variance is estimated (identified by loading)
+    # So factor_variance_identified = factor_variance_fixed
+    factor_variance_identified <- factor_variance_fixed
+    if (verbose) {
+      message(sprintf("Factor variance identification (from initialize_parameters): %s",
+                      paste(factor_variance_identified, collapse=", ")))
+    }
+  } else {
+    # Fallback: compute by checking for fixed non-zero loadings
+    # A factor is identified if at least one component has a fixed non-zero loading on that factor
+    factor_variance_identified <- rep(FALSE, n_factors)
+    for (comp in model_system$components) {
+      if (!is.null(comp$loading_normalization)) {
+        for (k in seq_len(n_factors)) {
+          if (!is.na(comp$loading_normalization[k]) &&
+              abs(comp$loading_normalization[k]) > 1e-6) {
+            factor_variance_identified[k] <- TRUE
+          }
         }
       }
+    }
+    if (verbose) {
+      message(sprintf("Factor variance identification (computed fallback): %s",
+                      paste(factor_variance_identified, collapse=", ")))
     }
   }
 
@@ -182,10 +193,21 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
     # Fix non-identified factor variances
     if (param_type == "factor_var") {
       factor_idx <- i
+      if (verbose) {
+        message(sprintf("  Constraint check: param %d (factor_var) -> factor_idx=%d, identified=%s",
+                        i, factor_idx, factor_variance_identified[factor_idx]))
+      }
       if (!factor_variance_identified[factor_idx]) {
         param_fixed[i] <- TRUE
         lower_bounds[i] <- init_params[i]
         upper_bounds[i] <- init_params[i]
+        if (verbose) {
+          message(sprintf("    -> FIXED at %.6f", init_params[i]))
+        }
+      } else {
+        # Set lower bound for free factor variances to prevent numerical issues
+        # (division by sqrt(factor_var) in gradient/Hessian chain rule)
+        lower_bounds[i] <- 0.01
       }
     }
 
@@ -206,6 +228,20 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
         cutpoint_counter[[comp_key]] <- cutpoint_counter[[comp_key]] + 1
         # Subsequent cutpoints are increments, must be positive
         lower_bounds[i] <- 0.01
+      }
+    }
+
+    # Fix oprobit intercepts at 0 (absorbed into thresholds)
+    if (param_type == "beta" && grepl("_beta_intercept$", param_metadata$names[i])) {
+      comp <- model_system$components[[comp_id]]
+      if (!is.null(comp) && comp$model_type == "oprobit") {
+        param_fixed[i] <- TRUE
+        lower_bounds[i] <- 0.0
+        upper_bounds[i] <- 0.0
+        if (verbose) {
+          message(sprintf("  Fixed oprobit intercept: param %d (%s) at 0",
+                          i, param_metadata$names[i]))
+        }
       }
     }
   }
@@ -329,10 +365,12 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   }
 
   # Get initial parameters if not provided
+  factor_variance_fixed <- NULL  # Will be set if we do initialization
   if (is.null(init_params)) {
     # Use smart initialization based on separate component estimation
     init_result <- initialize_parameters(model_system, data, verbose = verbose)
     init_params <- init_result$init_params
+    factor_variance_fixed <- init_result$factor_variance_fixed
 
     # Get parameter count from C++ object
     if (!is.null(cl)) {
@@ -353,7 +391,7 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   param_metadata <- build_parameter_metadata(model_system)
 
   # Setup constraints and identify fixed/free parameters
-  param_constraints <- setup_parameter_constraints(model_system, init_params, param_metadata)
+  param_constraints <- setup_parameter_constraints(model_system, init_params, param_metadata, factor_variance_fixed, verbose)
 
   if (verbose) {
     message(sprintf("Total parameters: %d", length(init_params)))
@@ -443,10 +481,27 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
 
     # Convert upper triangle vector to full symmetric matrix
     n_params_full <- length(params_full)
+    hess_vec_len <- length(hess)
+    expected_len <- n_params_full * (n_params_full + 1) / 2
+
+    if (verbose && hess_vec_len != expected_len) {
+      message(sprintf("WARNING: Hessian vector length mismatch!"))
+      message(sprintf("  Expected: %d (for %d params)", expected_len, n_params_full))
+      message(sprintf("  Actual: %d", hess_vec_len))
+      message(sprintf("  Difference: %d", expected_len - hess_vec_len))
+    }
+
     hess_mat_full <- matrix(0, n_params_full, n_params_full)
     idx <- 1
     for (i in 1:n_params_full) {
       for (j in i:n_params_full) {
+        if (idx > hess_vec_len) {
+          if (verbose) {
+            message(sprintf("ERROR: Trying to access hess[%d] but length is only %d", idx, hess_vec_len))
+            message(sprintf("  At position i=%d, j=%d", i, j))
+          }
+          stop("Hessian vector length insufficient for reconstruction")
+        }
         hess_mat_full[i, j] <- hess[idx]
         hess_mat_full[j, i] <- hess[idx]  # Symmetrize
         idx <- idx + 1
@@ -455,6 +510,17 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
 
     # Extract submatrix for free parameters only
     hess_mat_free <- hess_mat_full[param_constraints$free_idx, param_constraints$free_idx, drop = FALSE]
+
+    # Debug: Check for NA/NaN values
+    if (any(is.na(hess_mat_free)) || any(is.infinite(hess_mat_free))) {
+      if (verbose) {
+        message("WARNING: Hessian contains NA/NaN/Inf values!")
+        message(sprintf("  NA count: %d", sum(is.na(hess_mat_free))))
+        message(sprintf("  Inf count: %d", sum(is.infinite(hess_mat_free))))
+        message(sprintf("  params_full: %s", paste(head(params_full, 5), collapse=", ")))
+        message(sprintf("  hess vector (first 10): %s", paste(head(hess, 10), collapse=", ")))
+      }
+    }
 
     return(-hess_mat_free)  # Negative for minimization
   }
@@ -518,7 +584,7 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       control = list(
         trace = if (verbose) 1 else 0,
         eval.max = 5000,
-        iter.max = 2000
+        iter.max = 10000
       )
     )
 

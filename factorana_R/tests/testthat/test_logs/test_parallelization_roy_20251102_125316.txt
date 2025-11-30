@@ -1,4 +1,0 @@
-=== Test: test_parallelization_roy ===
-Timestamp: 2025-11-02 12:53:16.939016
-
---- Overall Result ---

@@ -122,7 +122,12 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8) {
         // Extract model component information
         std::string model_type_str = as<std::string>(comp["model_type"]);
         std::string outcome_name = as<std::string>(comp["outcome"]);
-        std::vector<std::string> covariate_names = as<std::vector<std::string>>(comp["covariates"]);
+
+        // Handle covariates = NULL case
+        std::vector<std::string> covariate_names;
+        if (!Rf_isNull(comp["covariates"])) {
+            covariate_names = as<std::vector<std::string>>(comp["covariates"]);
+        }
 
         // Find variable indices in data
         int outcome_idx = -1;

@@ -29,6 +29,13 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
     # Use previous-stage parameter values directly
     n_fixed_comps <- model_system$previous_stage_info$n_components
     init_params <- model_system$previous_stage_info$fixed_param_values
+    # Inherit names from previous stage if available
+    param_names <- if (!is.null(model_system$previous_stage_info$param_names)) {
+      model_system$previous_stage_info$param_names
+    } else {
+      names(init_params)
+    }
+    if (is.null(param_names)) param_names <- character(0)
 
     if (verbose) {
       message(sprintf("Using %d fixed parameters from previous stage", length(init_params)))
@@ -67,6 +74,7 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
 
     # Initialize factor variances to 1.0
     init_params <- rep(1.0, n_factors)
+    param_names <- paste0("factor_var_", seq_len(n_factors))
     start_comp_idx <- 1
   }
 
@@ -95,6 +103,7 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
 
     # Estimate model depending on type
     comp_params <- NULL
+    comp_param_names <- NULL
 
     if (comp$model_type == "linear") {
       # Linear regression
@@ -107,7 +116,16 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       }
 
       # For multinomial logit with factors, we need parameters per choice
-      comp_params <- c(coefs, rep(0.01, n_free_loadings), sigma)
+      comp_params <- c(coefs, rep(0.5, n_free_loadings), sigma)
+
+      # Build parameter names
+      coef_names <- paste0(comp$name, "_", comp$covariates)
+      loading_names <- character(0)
+      if (n_free_loadings > 0) {
+        free_factor_idx <- which(is.na(comp$loading_normalization))
+        loading_names <- paste0(comp$name, "_loading_", free_factor_idx)
+      }
+      comp_param_names <- c(coef_names, loading_names, paste0(comp$name, "_sigma"))
 
     } else if (comp$model_type == "probit") {
       # Binary probit
@@ -118,7 +136,16 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         message(sprintf("  Probit model: %d covariates", length(coefs)))
       }
 
-      comp_params <- c(coefs, rep(0.01, n_free_loadings))
+      comp_params <- c(coefs, rep(0.5, n_free_loadings))
+
+      # Build parameter names
+      coef_names <- paste0(comp$name, "_", comp$covariates)
+      loading_names <- character(0)
+      if (n_free_loadings > 0) {
+        free_factor_idx <- which(is.na(comp$loading_normalization))
+        loading_names <- paste0(comp$name, "_loading_", free_factor_idx)
+      }
+      comp_param_names <- c(coef_names, loading_names)
 
     } else if (comp$model_type == "logit") {
       if (comp$num_choices == 2) {
@@ -130,7 +157,16 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
           message(sprintf("  Binary logit: %d covariates", length(coefs)))
         }
 
-        comp_params <- c(coefs, rep(0.01, n_free_loadings))
+        comp_params <- c(coefs, rep(0.5, n_free_loadings))
+
+        # Build parameter names
+        coef_names <- paste0(comp$name, "_", comp$covariates)
+        loading_names <- character(0)
+        if (n_free_loadings > 0) {
+          free_factor_idx <- which(is.na(comp$loading_normalization))
+          loading_names <- paste0(comp$name, "_loading_", free_factor_idx)
+        }
+        comp_param_names <- c(coef_names, loading_names)
 
       } else {
         # Multinomial logit
@@ -147,6 +183,7 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
 
         # Flatten parameters: for each choice (except reference), add covariates + loadings
         comp_params <- c()
+        comp_param_names <- c()
         for (choice in seq_len(comp$num_choices - 1)) {
           # Get coefficients for this choice
           if (comp$num_choices == 2) {
@@ -156,7 +193,16 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
           }
 
           # Add covariates and loadings
-          comp_params <- c(comp_params, choice_coefs, rep(0.01, n_free_loadings))
+          comp_params <- c(comp_params, choice_coefs, rep(0.5, n_free_loadings))
+
+          # Build parameter names for this choice
+          coef_names <- paste0(comp$name, "_c", choice, "_", comp$covariates)
+          loading_names <- character(0)
+          if (n_free_loadings > 0) {
+            free_factor_idx <- which(is.na(comp$loading_normalization))
+            loading_names <- paste0(comp$name, "_c", choice, "_loading_", free_factor_idx)
+          }
+          comp_param_names <- c(comp_param_names, coef_names, loading_names)
         }
       }
 
@@ -199,7 +245,46 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         }
       }
 
+      # Scale thresholds to match factor model variance at initialization
+      # MASS::polr assumes Var(y*) = 1, but the factor model has:
+      # Var(y*) = sum(lambda_k^2 * sigma_k^2) + 1
+      # where lambda_k are loadings and sigma_k^2 are factor variances (all = 1.0 at init)
+
+      # Calculate expected variance contribution from factors at initialization
+      variance_from_factors <- 0.0
+
+      if (!is.null(comp$loading_normalization)) {
+        for (k in seq_along(comp$loading_normalization)) {
+          loading_value <- comp$loading_normalization[k]
+
+          if (is.na(loading_value)) {
+            # Free loading: will be initialized to 0.5
+            variance_from_factors <- variance_from_factors + (0.5^2) * 1.0
+          } else if (abs(loading_value) > 1e-6) {
+            # Fixed non-zero loading (e.g., 1.0)
+            variance_from_factors <- variance_from_factors + (loading_value^2) * 1.0
+          }
+          # Fixed zero loadings contribute 0
+        }
+      }
+
+      # Total variance at initialization: factor contributions + residual (1.0)
+      total_variance <- variance_from_factors + 1.0
+
+      # Scale thresholds if total variance differs from 1.0 (polr's assumption)
+      if (abs(total_variance - 1.0) > 0.01) {
+        scale_factor <- sqrt(total_variance)
+        thresholds <- thresholds * scale_factor
+
+        if (verbose) {
+          message(sprintf("  Scaling thresholds by %.3f (factor model variance = %.2f at initialization)",
+                          scale_factor, total_variance))
+        }
+      }
+
       # Build parameter vector: put intercept (0.0) first if it was in covariates
+      # Note: For oprobit, intercept is theoretically absorbed into thresholds,
+      # but we keep it in the parameter vector (as 0.0) to match C++ expectations
       if (length(intercept_col) > 0) {
         # Reconstruct in original order: intercept gets 0.0, others get fitted values
         coefs <- rep(0.0, ncol(X))
@@ -212,11 +297,26 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         message(sprintf("  Ordered probit: %d covariates, %d thresholds (incremental form)", length(coefs), length(thresholds)))
       }
 
-      comp_params <- c(coefs, rep(0.01, n_free_loadings), thresholds)
+      comp_params <- c(coefs, rep(0.5, n_free_loadings), thresholds)
+
+      # Build parameter names
+      coef_names <- character(0)
+      if (length(coefs) > 0 && length(comp$covariates) > 0) {
+        coef_names <- paste0(comp$name, "_", comp$covariates)
+      }
+      loading_names <- character(0)
+      if (n_free_loadings > 0) {
+        free_factor_idx <- which(is.na(comp$loading_normalization))
+        loading_names <- paste0(comp$name, "_loading_", free_factor_idx)
+      }
+      n_thresholds <- length(thresholds)
+      threshold_names <- paste0(comp$name, "_thresh_", seq_len(n_thresholds))
+      comp_param_names <- c(coef_names, loading_names, threshold_names)
     }
 
     # Add component parameters to overall parameter vector
     init_params <- c(init_params, comp_params)
+    param_names <- c(param_names, comp_param_names)
   }
 
   if (verbose) {
@@ -228,12 +328,16 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
     # For previous_stage, factor variance is always fixed
     factor_variance_fixed_status <- TRUE
   } else {
-    # Standard case: use the computed status
-    factor_variance_fixed_status <- factor_variance_fixed[1]
+    # Standard case: use the computed status (vector for multifactor models)
+    factor_variance_fixed_status <- factor_variance_fixed
   }
+
+  # Assign names to parameter vector
+  names(init_params) <- param_names
 
   list(
     init_params = init_params,
+    param_names = param_names,
     factor_variance_fixed = factor_variance_fixed_status
   )
 }

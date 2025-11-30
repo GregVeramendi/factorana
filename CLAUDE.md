@@ -341,3 +341,4 @@ microbenchmark(
 - **Evaluation Indicators**: Components can be evaluated on subsets via `evaluation_indicator` parameter (e.g., for treatment effect models with potential outcomes).
 - **File Formats**: The C++ backend historically read `.txt` files; recent R interface exports `.csv`. Update `makeprob` scripts accordingly if interfacing the two systems.
 - **KNITRO Configuration**: `bin/knitro.opt` contains solver parameters. Algorithm options: 0=auto, 1=interior direct, 2=interior CG, 3=active set.
+- **macOS Compatibility**: Do NOT use the `timeout` command in bash scripts - it is not available on macOS by default. Instead, use R's `setTimeLimit()` or run scripts directly without timeout wrappers.

@@ -278,6 +278,21 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                             }
 
                             hessilk[full_idx] += modHess[modhess_idx] * chain_factor;
+
+                            // For diagonal factor variance elements (i == j), add second derivative term
+                            // Full chain rule: d²L/d(σ²)² = d²L/df² * (df/d(σ²))² + dL/df * d²f/d(σ²)²
+                            // The first term is handled above. The second term is:
+                            //   dL/df * d²f/d(σ²)² where d²f/d(σ²)² = -x/(4σ³)
+                            // Note: f = σ*x = √(σ²)*x, so:
+                            //   df/d(σ²) = x/(2σ)
+                            //   d²f/d(σ²)² = d[x/(2σ)]/d(σ²) = -x/(4σ³)
+                            if (i < nfac && i == j) {
+                                double sigma = std::sqrt(factor_var[i]);
+                                double x_node = quad_nodes[facint[i]];
+                                double second_deriv_factor = -x_node / (4.0 * sigma * sigma * sigma);
+                                // modEval[i + 1] is dL/df_i from this model
+                                hessilk[full_idx] += modEval[i + 1] * second_deriv_factor;
+                            }
                         }
                     }
                 }
