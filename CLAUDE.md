@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **factorana** is a hybrid R/C++ system for estimating latent factor models with flexible measurement systems. There are two implementations:
 
-1. **NEW: Rcpp-based R Package** (Primary Development Focus)
+1. **Rcpp-based R Package** (Primary Implementation)
    - R handles model specification, optimization, and parallelization
    - C++ (via Rcpp) provides fast likelihood/gradient/Hessian evaluation
    - Works on Windows, Mac, Linux without external dependencies
@@ -42,7 +42,7 @@ The R package is self-contained and handles the entire estimation workflow:
 
 ### Key Components
 
-**R Package Structure** (`factorana_R_interface/`):
+**R Package Structure** (`factorana_R/`):
 - `R/define_factor_model.R` - Defines k factors with flexible loading normalization
 - `R/define_model_component.R` - Specifies individual measurement equations (linear/probit/logit/oprobit)
 - `R/define_model_system.R` - Bundles components and shared factor model
@@ -51,7 +51,7 @@ The R package is self-contained and handles the entire estimation workflow:
 - `R/write_files.R` - Exports CSV files for legacy C++ backend
 - `tests/testthat/` - Validation tests for inputs, conditioning, model types, multi-factor systems
 
-**Rcpp C++ Source** (`factorana_R_interface/src/`):
+**Rcpp C++ Source** (`factorana_R/src/`):
 - `Model.{h,cpp}` - Individual model likelihood evaluation (linear/probit/logit/oprobit)
   - Stripped-down version of legacy TModel
   - Only includes variables needed for likelihood calculation
@@ -71,29 +71,24 @@ The R package is self-contained and handles the entire estimation workflow:
 
 **Implementation Status**:
 
-✅ **COMPLETED (2025-11)**:
+✅ **COMPLETED**:
 - Multi-dimensional GH quadrature using "odometer" method for any number of factors
 - Complete gradient/Hessian accumulation with proper chain rule application
 - Parameter mapping: factor variances → model-specific parameters
 - R to C++ interface for model_component objects (variable name → index mapping)
-- Full end-to-end optimization workflow with analytical gradients
+- Full end-to-end optimization workflow with analytical gradients and Hessians
 - Linear model: full implementation with gradients/Hessians
 - Probit model: full implementation with gradients/Hessians
-- Integration with R optimizers (optim, nloptr)
+- Ordered probit: full implementation with gradients/Hessians
+- Logit model: full implementation with gradients/Hessians (binary and multinomial)
+- Integration with R optimizers (optim, nloptr, nlminb)
 - Parallel computation support via doParallel
-
-⏳ **TODO (Future Development)**:
-- **Linear model Hessian**: Missing sigma parameter terms (see HESSIAN_TODO.md)
-- **Probit model Hessian**: Full implementation using lambda function approach (see HESSIAN_TODO.md)
-- Logit model: gradient/Hessian implementation (currently placeholder)
-- Ordered probit: gradient/Hessian implementation (currently placeholder)
-- Mixture models (nmix > 1)
-- Correlated factors
-- Multinomial logit (numchoice > 2)
 - Standard error computation from Hessian
 - Hessian aggregation in parallel mode
 
-**Note:** See `factorana_R_interface/HESSIAN_TODO.md` for detailed implementation guide and mathematical background for completing Hessian calculations.
+⏳ **TODO (Future Development)**:
+- Mixture models (nmix > 1)
+- Correlated factors
 
 ## Development Commands
 
@@ -101,7 +96,7 @@ The R package is self-contained and handles the entire estimation workflow:
 
 ```r
 # Load package for development (compiles C++ automatically)
-setwd("factorana_R_interface")
+setwd("factorana_R")
 devtools::load_all()
 
 # Run all tests
@@ -123,7 +118,7 @@ install.packages(".", repos = NULL, type = "source")
 
 **Build from command line:**
 ```bash
-cd factorana_R_interface
+cd factorana_R
 R CMD INSTALL --no-multiarch --with-keep.source .
 ```
 
@@ -167,54 +162,27 @@ estimate_and_write(ms, fm, control, data)
 
 **Note:** `nlminb` and `trust` exploit analytical Hessian for 30-50% faster convergence with fewer iterations.
 
-### Test Scripts
+### Running Tests
 
-**test_rcpp_implementation.R** - Comprehensive unit tests for C++ implementation:
-```bash
-cd factorana_R_interface
-Rscript test_rcpp_implementation.R
+Run all automated tests:
+```r
+devtools::test()  # 118 tests covering all model types and configurations
 ```
-Tests:
-- Single factor linear model: initialization, likelihood, gradients
-- Multi-factor (k=2) linear model: multi-dimensional integration over 64 quadrature points
-- Single factor probit model: binary outcomes with proper gradient computation
-- All tests verify finite likelihood/gradient values and successful C++ initialization
 
-**test_estimation.R** - End-to-end optimization workflow:
-```bash
-cd factorana_R_interface
-Rscript test_estimation.R
+Run specific test subsets:
+```r
+devtools::test(filter = "modeltypes")    # Model type tests
+devtools::test(filter = "multifactor")   # Multi-factor CFA tests
+devtools::test(filter = "systematic")    # Comprehensive gradient/Hessian validation
 ```
-Features:
-- Generates synthetic data with known parameters (n=200)
-- Model: Y ~ intercept + x1 + x2 + factor + error
-- Tests full estimation pipeline: R specification → C++ initialization → optimization → results
-- Uses L-BFGS-B with analytical gradients from C++
-- Compares estimates to true parameters
-- Verifies convergence and log-likelihood improvement
 
-**test_gradient_validation.R** - Finite-difference validation of analytical derivatives:
-```bash
-cd factorana_R_interface
-Rscript test_gradient_validation.R
-```
-Validates analytical gradients against finite-difference approximations using central differences (based on TMinLkhd::TestGradient()):
-- **Test 1**: Single factor linear model (5 parameters)
-- **Test 2**: Hessian validation (documents that Hessian is placeholder)
-- **Test 3**: Probit model (4 parameters)
-- **Test 4**: Two-factor linear model (7 parameters)
-
-All gradient tests pass with relative error < 1e-7, confirming:
-- Correct chain rule application for factor variance derivatives
-- Proper gradient accumulation across models
-- Accurate multi-dimensional integration gradient computation
-- Valid implementation for both linear and probit models
-
-**Validation methodology:**
-- Step size: `h = delta * (|param| + 1.0)` where `delta = 1e-7`
-- Central difference: `grad_fd[i] = [f(x+h) - f(x-h)] / (2h)`
-- Relative error: `|analytical - finite_diff| / |finite_diff|`
-- Threshold: < 1e-4 (gradients achieve < 1e-7 in practice)
+The test suite validates:
+- Single and multi-factor models with all model types (linear, probit, logit, oprobit)
+- Analytical gradients vs finite-difference approximations (relative error < 1e-7)
+- Analytical Hessians vs finite-difference approximations
+- Parameter recovery from simulated data
+- Parallelization correctness
+- Two-stage/sequential estimation
 
 ### Modifying C++ Likelihood Code
 
@@ -297,18 +265,17 @@ This is critical for multi-factor models to be identifiable.
 2. Implement `Eval[NewType]()` method in `src/Model.cpp` with likelihood/gradient/Hessian
 3. Add dispatch case in `Model::Eval()` main method
 4. Update `src/rcpp_interface.cpp` to handle new type in initialization
-5. Add test cases in `factorana_R_interface/tests/testthat/`
+5. Add test cases in `factorana_R/tests/testthat/`
 6. Recompile and test: `devtools::clean_dll(); devtools::load_all()`
 
-### Extending to Multi-Dimensional Integration
+### Multi-Dimensional Integration
 
-Currently `FactorModel::CalcLkhd()` only supports 1D integration (single factor). To extend:
-
-1. Edit `src/FactorModel.cpp:CalcLkhd()` around line 160
-2. Replace single loop over quadrature points with nested loops for multiple factors
-3. Compute factor values as: `fac[i] = sigma[i] * nodes[index_i] + mean[i]`
-4. Weight is product of individual weights: `w = prod(weights[index_i])`
-5. See legacy `TMinLkhd::CalcLkhd()` around line 5600-5800 for reference
+`FactorModel::CalcLkhd()` supports multi-factor models using the "odometer" method:
+- Uses `nquad^nfactors` total integration points (e.g., 8 quadrature points × 2 factors = 64 points)
+- Factor indices cycle like an odometer: `facint[0]` increments first, then `facint[1]`, etc.
+- Each integration point computes: `fac[i] = sigma[i] * node[facint[i]] + mean[i]`
+- Weight is product of individual weights: `w = prod(weights[facint[i]])`
+- See `src/FactorModel.cpp:CalcLkhd()` lines 191-327 for implementation
 
 ### Comparing Rcpp vs Legacy Results
 

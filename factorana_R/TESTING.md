@@ -161,8 +161,8 @@ test_that("feature works correctly", {
 ## Test Results
 
 Current test suite status:
-- **Automated tests**: 11 test files covering core functionality
-  - **85 tests passing**, 0 failures, 0 warnings (as of last run)
+- **Automated tests**: 12 test files covering core functionality
+  - **118 tests passing**, 0 failures, 0 warnings (as of last run)
   - Includes parallelization test with Roy model (n=10,000)
   - Includes two-stage estimation test with Roy model
   - Quadrature test uses three-measurement system for proper identification
