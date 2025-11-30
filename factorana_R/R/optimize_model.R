@@ -821,8 +821,8 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     }
   }
 
-  # Return results
-  list(
+  # Return results with class for print/summary methods
+  result <- list(
     estimates = estimates,
     std_errors = std_errors,
     loglik = loglik,
@@ -830,6 +830,8 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     model_system = model_system,
     optimizer = optimizer
   )
+  class(result) <- "factorana_result"
+  result
 }
 
 

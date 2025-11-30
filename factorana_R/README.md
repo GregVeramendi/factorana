@@ -493,7 +493,137 @@ More detailed explanations within functions.
 - Estimates each component separately (ignoring factors) to get starting values
 - **Returns**: List with
   - `init_params`: Initial parameter vector
-  - `factor_variance_fixed`: Whether factor variance is identified 
+  - `factor_variance_fixed`: Whether factor variance is identified
+
+---
+
+## Displaying Results
+
+The package provides functions to display estimation results in formatted tables, either to the screen or as LaTeX output.
+
+### `components_table(result, components = NULL)`
+- Creates a table with model components as columns and parameter types as rows
+- Similar to SEM/CFA output format for easy comparison across components
+- `result`: Output from `estimate_model_rcpp()`
+- `components`: Optional character vector of component names to include (default: all)
+- **Returns**: Object of class `"components_table"` that prints nicely
+
+### `components_to_latex(result, components = NULL, caption = NULL, label = NULL, digits = 3)`
+- Exports the component table to LaTeX format (booktabs style)
+- Same parameters as `components_table()`, plus:
+  - `caption`: Optional table caption
+  - `label`: Optional LaTeX label for cross-referencing
+  - `digits`: Number of decimal places (default: 3)
+- **Returns**: Character string with LaTeX code
+
+### Example: Displaying All Components
+
+After estimating a Roy model (see Quick Start example):
+
+```r
+# Display all components in one table
+components_table(result_parallel)
+```
+
+Output:
+```
+Factor Model Results by Component
+=========================================================================================================
+
+Parameter          sector         wage1         wage0            T1            T2            T3
+---------------------------------------------------------------------------------------------
+beta_intercept                   2.531***      2.013***      1.998***      1.500***      0.994***
+                                  (0.043)       (0.035)       (0.012)       (0.016)       (0.011)
+beta_x1                          0.594***      0.498***
+                                  (0.048)       (0.035)
+beta_x2             0.416***                   0.299***
+                     (0.044)                    (0.030)
+Loading 1           0.807***      0.983***      0.521***      1.000         1.191***      0.797***
+                     (0.058)       (0.037)       (0.038)         (-)        (0.021)       (0.016)
+Sigma                             0.697***      0.609***      0.501***      0.600***      0.399***
+                                   (0.027)       (0.024)       (0.011)       (0.013)       (0.009)
+---------------------------------------------------------------------------------------------------------
+Significance: *** p<0.001, ** p<0.01, * p<0.05, . p<0.1
+```
+
+### Example: Splitting Components into Separate Tables
+
+For complex models, you may want to display the measurement system separately from the structural equations:
+
+```r
+# Table 1: Measurement system (test scores)
+components_table(result_parallel, components = c("T1", "T2", "T3"))
+
+# Table 2: Selection and outcome equations
+components_table(result_parallel, components = c("sector", "wage0", "wage1"))
+```
+
+**Measurement System Table:**
+```
+Factor Model Results by Component
+=============================================================================
+
+Parameter               T1            T2            T3
+-------------------------------------------------------------
+beta_intercept      1.998***      1.500***      0.994***
+                     (0.012)       (0.016)       (0.011)
+Loading 1           1.000         1.191***      0.797***
+                       (-)         (0.021)       (0.016)
+Sigma               0.501***      0.600***      0.399***
+                     (0.011)       (0.013)       (0.009)
+-----------------------------------------------------------------------------
+Significance: *** p<0.001, ** p<0.01, * p<0.05, . p<0.1
+```
+
+**Selection and Outcomes Table:**
+```
+Factor Model Results by Component
+=============================================================================
+
+Parameter          sector         wage1         wage0
+-------------------------------------------------------------
+beta_intercept                   2.531***      2.013***
+                                  (0.043)       (0.035)
+beta_x1                          0.594***      0.498***
+                                  (0.048)       (0.035)
+beta_x2             0.416***                   0.299***
+                     (0.044)                    (0.030)
+Loading 1           0.807***      0.983***      0.521***
+                     (0.058)       (0.037)       (0.038)
+Sigma                             0.697***      0.609***
+                                   (0.027)       (0.024)
+-----------------------------------------------------------------------------
+Significance: *** p<0.001, ** p<0.01, * p<0.05, . p<0.1
+```
+
+### Example: LaTeX Export
+
+```r
+# Export measurement system to LaTeX
+latex_code <- components_to_latex(
+  result_parallel,
+  components = c("T1", "T2", "T3"),
+  caption = "Measurement System Estimates",
+  label = "tab:measurement"
+)
+cat(latex_code)
+
+# Export selection/outcome to LaTeX
+latex_code2 <- components_to_latex(
+  result_parallel,
+  components = c("sector", "wage0", "wage1"),
+  caption = "Selection and Outcome Equations",
+  label = "tab:structural"
+)
+writeLines(latex_code2, "structural_table.tex")
+```
+
+### Other Display Functions
+
+- `print(result)` - Basic summary of estimation results
+- `summary(result)` - Detailed summary with z-values and p-values
+- `results_table(result1, result2, ...)` - Compare multiple model results side by side
+- `results_to_latex(result1, result2, ...)` - Export multi-model comparison to LaTeX
 
 ---
 
