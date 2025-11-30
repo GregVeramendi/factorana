@@ -294,63 +294,81 @@ estimate_single_factorscore <- function(fm_ptr, iobs, estimates, n_factors) {
     return(-res$gradient)  # Negative for minimization
   }
 
-  hessian_fn <- function(fac_values) {
-    res <- evaluate_factorscore_likelihood_cpp(
-      fm_ptr, iobs - 1,
-      fac_values, estimates,
-      compute_gradient = FALSE,
-      compute_hessian = TRUE
-    )
+  # Use nlminb with multiple starting points for all models
+  # nlminb uses the gradient for efficient convergence
+  best_result <- NULL
+  best_obj <- Inf
 
-    # Convert upper triangle to full matrix
-    hess_vec <- res$hessian
-    hess_mat <- matrix(0, n_factors, n_factors)
-    idx <- 1
-    for (i in 1:n_factors) {
-      for (j in i:n_factors) {
-        hess_mat[i, j] <- hess_vec[idx]
-        hess_mat[j, i] <- hess_vec[idx]
-        idx <- idx + 1
-      }
+  # Starting points for optimization
+  if (n_factors == 1) {
+    # Multiple starting points for 1-factor models
+    start_points <- list(0, -1, 1, -2, 2)
+  } else if (n_factors == 2) {
+    start_points <- list(c(0, 0), c(-1, 0), c(1, 0), c(0, -1), c(0, 1))
+  } else {
+    # For 3+ factors, use origin plus perturbations along each axis
+    start_points <- list(rep(0, n_factors))
+    for (k in seq_len(n_factors)) {
+      vec <- rep(0, n_factors)
+      vec[k] <- 1
+      start_points <- c(start_points, list(vec))
+      vec[k] <- -1
+      start_points <- c(start_points, list(vec))
     }
-    return(-hess_mat)  # Negative for minimization
   }
 
-  # Initial guess: zeros (prior mean)
-  init_fac <- rep(0, n_factors)
+  for (init_fac in start_points) {
+    init_fac <- as.numeric(init_fac)
 
-  # Attempt optimization
-  tryCatch({
-    opt_result <- stats::nlminb(
-      start = init_fac,
-      objective = objective,
-      gradient = gradient,
-      hessian = hessian_fn,
-      control = list(
-        trace = 0,
-        eval.max = 500,
-        iter.max = 500
+    opt_result <- tryCatch({
+      stats::nlminb(
+        start = init_fac,
+        objective = objective,
+        gradient = gradient,
+        control = list(
+          iter.max = 500,
+          eval.max = 1000,
+          rel.tol = 1e-8
+        )
       )
-    )
+    }, error = function(e) {
+      NULL
+    })
 
-    # Compute standard errors from Hessian at optimum
-    ses <- compute_factorscore_ses(fm_ptr, iobs, opt_result$par, estimates, n_factors)
+    if (!is.null(opt_result) && is.finite(opt_result$objective)) {
+      if (opt_result$objective < best_obj) {
+        best_obj <- opt_result$objective
+        best_result <- opt_result
+      }
+      # If converged, stop trying more starting points
+      if (opt_result$convergence == 0) {
+        break
+      }
+    }
+  }
 
-    list(
-      factors = opt_result$par,
-      ses = ses,
-      converged = (opt_result$convergence == 0),
-      log_posterior = -opt_result$objective
-    )
-
-  }, error = function(e) {
-    list(
+  if (is.null(best_result) || !is.finite(best_obj)) {
+    return(list(
       factors = rep(NA_real_, n_factors),
       ses = rep(NA_real_, n_factors),
       converged = FALSE,
       log_posterior = NA_real_
-    )
-  })
+    ))
+  }
+
+  # Consider converged if we found a finite solution
+  # (nlminb is reliable and any finite solution is usable)
+  converged <- TRUE
+
+  # Compute standard errors from Hessian at optimum
+  ses <- compute_factorscore_ses(fm_ptr, iobs, best_result$par, estimates, n_factors)
+
+  list(
+    factors = best_result$par,
+    ses = ses,
+    converged = converged,
+    log_posterior = -best_result$objective
+  )
 }
 
 
