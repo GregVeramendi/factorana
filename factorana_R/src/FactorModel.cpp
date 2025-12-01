@@ -13,9 +13,16 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
     data.resize(nobs * nvar);
 
     // Initialize with factor parameters
-    // For single mixture, uncorrelated: nfac factor variances
-    nparam = nfac;  // Start with factor parameters
-    nparam_free = nfac;  // All factor variances are free by default
+    // For single mixture: nfac factor variances
+    nparam = nfac;  // Start with factor variances
+
+    // Add correlation parameters if correlated factors
+    // For 2-factor correlated model: 1 correlation parameter
+    if (fac_corr && nfac == 2) {
+        nparam += 1;  // Add factor_corr_1_2
+    }
+
+    nparam_free = nparam;  // All factor parameters are free by default
 }
 
 void FactorModel::AddModel(std::shared_ptr<Model> model, int nparams)
@@ -144,12 +151,24 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     MapFreeToFull(free_params);
 
     // ===== STEP 2: Extract factor parameters from param vector =====
-    // Parameter organization: [factor_vars (nfac) | model_params (rest)]
-    // For single mixture (nmix=1), uncorrelated factors:
+    // Parameter organization: [factor_vars (nfac) | factor_corr (if correlated) | model_params (rest)]
+    // For single mixture (nmix=1):
     //   - param[0..nfac-1] = factor variances (sigma^2)
+    //   - param[nfac] = factor correlation (if fac_corr && nfac == 2)
     std::vector<double> factor_var(nfac);
     for (int ifac = 0; ifac < nfac; ifac++) {
         factor_var[ifac] = std::fabs(param[ifac]);  // Enforce positivity
+    }
+
+    // Factor correlation (for 2-factor correlated models)
+    double rho = 0.0;
+    double sqrt_1_minus_rho2 = 1.0;
+    if (fac_corr && nfac == 2) {
+        rho = param[nfac];  // Correlation parameter at index 2
+        // Clamp to valid range to prevent numerical issues
+        if (rho > 0.999) rho = 0.999;
+        if (rho < -0.999) rho = -0.999;
+        sqrt_1_minus_rho2 = std::sqrt(1.0 - rho * rho);
     }
 
     // Factor means (0 for single mixture)
@@ -205,13 +224,29 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
             // Compute factor values at this integration point
             std::vector<double> fac_val(nfac);
-            for (int ifac = 0; ifac < nfac; ifac++) {
-                double sigma = std::sqrt(factor_var[ifac]);
-                double x_node = quad_nodes[facint[ifac]];
-                // Factor transformation for GH quadrature
-                // Empirically, f = sigma * x gives correct parameter recovery
-                // (without sqrt(2) factor that theory suggests)
-                fac_val[ifac] = sigma * x_node + factor_mean[ifac];
+
+            if (fac_corr && nfac == 2) {
+                // Correlated 2-factor model: use Cholesky transformation
+                // f1 = σ1 * z1
+                // f2 = ρ*σ2*z1 + σ2*√(1-ρ²)*z2
+                // where z1, z2 are independent GH quadrature nodes
+                double sigma1 = std::sqrt(factor_var[0]);
+                double sigma2 = std::sqrt(factor_var[1]);
+                double z1 = quad_nodes[facint[0]];
+                double z2 = quad_nodes[facint[1]];
+
+                fac_val[0] = sigma1 * z1 + factor_mean[0];
+                fac_val[1] = rho * sigma2 * z1 + sigma2 * sqrt_1_minus_rho2 * z2 + factor_mean[1];
+            } else {
+                // Independent factors: standard transformation
+                for (int ifac = 0; ifac < nfac; ifac++) {
+                    double sigma = std::sqrt(factor_var[ifac]);
+                    double x_node = quad_nodes[facint[ifac]];
+                    // Factor transformation for GH quadrature
+                    // Empirically, f = sigma * x gives correct parameter recovery
+                    // (without sqrt(2) factor that theory suggests)
+                    fac_val[ifac] = sigma * x_node + factor_mean[ifac];
+                }
             }
 
             // ===== STEP 7: Evaluate all models =====
@@ -230,14 +265,45 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
                 // ===== STEP 8: Accumulate gradients =====
                 if (iflag >= 2) {
-                    // Gradients w.r.t. factor variances
-                    for (int ifac = 0; ifac < nfac; ifac++) {
-                        // Chain rule: d/d(sigma^2) = d/df * df/d(sigma^2)
-                        // where f = sigma * x + mean
-                        // df/d(sigma^2) = df/dσ · dσ/d(sigma^2) = x · 1/(2σ) = x/(2σ)
-                        double sigma = std::sqrt(factor_var[ifac]);
-                        double x_node = quad_nodes[facint[ifac]];
-                        gradilk[ifac] += modEval[ifac + 1] * x_node / (2.0 * sigma);
+                    // Gradients w.r.t. factor variances and correlation
+                    if (fac_corr && nfac == 2) {
+                        // Correlated 2-factor model: use Cholesky derivatives
+                        // f1 = σ1 * z1
+                        // f2 = ρ*σ2*z1 + σ2*√(1-ρ²)*z2
+                        double sigma1 = std::sqrt(factor_var[0]);
+                        double sigma2 = std::sqrt(factor_var[1]);
+                        double z1 = quad_nodes[facint[0]];
+                        double z2 = quad_nodes[facint[1]];
+
+                        // dL/df1 and dL/df2 from models
+                        double dL_df1 = modEval[1];
+                        double dL_df2 = modEval[2];
+
+                        // Gradient w.r.t. σ1² (factor variance 1)
+                        // df1/dσ1² = z1/(2σ1), df2/dσ1² = 0
+                        gradilk[0] += dL_df1 * z1 / (2.0 * sigma1);
+
+                        // Gradient w.r.t. σ2² (factor variance 2)
+                        // df2/dσ2² = (ρ*z1 + √(1-ρ²)*z2) / (2σ2)
+                        double df2_dsigma2sq = (rho * z1 + sqrt_1_minus_rho2 * z2) / (2.0 * sigma2);
+                        gradilk[1] += dL_df2 * df2_dsigma2sq;
+
+                        // Gradient w.r.t. ρ (correlation parameter at index 2)
+                        // df2/dρ = σ2*z1 + σ2 * d(√(1-ρ²))/dρ * z2
+                        //        = σ2*z1 - σ2*ρ*z2/√(1-ρ²)
+                        //        = σ2 * (z1 - ρ*z2/sqrt_1_minus_rho2)
+                        double df2_drho = sigma2 * (z1 - rho * z2 / sqrt_1_minus_rho2);
+                        gradilk[2] += dL_df2 * df2_drho;
+                    } else {
+                        // Independent factors: standard chain rule
+                        for (int ifac = 0; ifac < nfac; ifac++) {
+                            // Chain rule: d/d(sigma^2) = d/df * df/d(sigma^2)
+                            // where f = sigma * x + mean
+                            // df/d(sigma^2) = df/dσ · dσ/d(sigma^2) = x · 1/(2σ) = x/(2σ)
+                            double sigma = std::sqrt(factor_var[ifac]);
+                            double x_node = quad_nodes[facint[ifac]];
+                            gradilk[ifac] += modEval[ifac + 1] * x_node / (2.0 * sigma);
+                        }
                     }
 
                     // Gradients w.r.t. model parameters

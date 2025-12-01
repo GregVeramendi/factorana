@@ -75,6 +75,15 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
     # Initialize factor variances to 1.0
     init_params <- rep(1.0, n_factors)
     param_names <- paste0("factor_var_", seq_len(n_factors))
+
+    # Add correlation parameters if correlation = TRUE
+    if (isTRUE(model_system$factor$correlation) && n_factors == 2) {
+      # For 2-factor correlated model, add one correlation parameter
+      # Initialize to 0 (uncorrelated) as a neutral starting point
+      init_params <- c(init_params, 0.0)
+      param_names <- c(param_names, "factor_corr_1_2")
+    }
+
     start_comp_idx <- 1
   }
 

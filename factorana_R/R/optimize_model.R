@@ -6,13 +6,20 @@ build_parameter_metadata <- function(model_system) {
 
   # Initialize vectors
   param_names <- character(0)
-  param_types <- character(0)  # "factor_var", "intercept", "beta", "loading", "sigma", "cutpoint"
+  param_types <- character(0)  # "factor_var", "factor_corr", "intercept", "beta", "loading", "sigma", "cutpoint"
   component_id <- integer(0)
 
   # Add factor variances
   for (k in seq_len(n_factors)) {
     param_names <- c(param_names, sprintf("factor_var_%d", k))
     param_types <- c(param_types, "factor_var")
+    component_id <- c(component_id, 0)  # 0 = factor model
+  }
+
+  # Add factor correlation if correlation = TRUE and n_factors = 2
+  if (isTRUE(model_system$factor$correlation) && n_factors == 2) {
+    param_names <- c(param_names, "factor_corr_1_2")
+    param_types <- c(param_types, "factor_corr")
     component_id <- c(component_id, 0)  # 0 = factor model
   }
 
@@ -192,22 +199,36 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
 
     # Fix non-identified factor variances
     if (param_type == "factor_var") {
+      # For factor variances, check identification
+      # Only the first n_factors parameters are factor variances
       factor_idx <- i
-      if (verbose) {
-        message(sprintf("  Constraint check: param %d (factor_var) -> factor_idx=%d, identified=%s",
-                        i, factor_idx, factor_variance_identified[factor_idx]))
-      }
-      if (!factor_variance_identified[factor_idx]) {
-        param_fixed[i] <- TRUE
-        lower_bounds[i] <- init_params[i]
-        upper_bounds[i] <- init_params[i]
+      if (factor_idx <= length(factor_variance_identified)) {
         if (verbose) {
-          message(sprintf("    -> FIXED at %.6f", init_params[i]))
+          message(sprintf("  Constraint check: param %d (factor_var) -> factor_idx=%d, identified=%s",
+                          i, factor_idx, factor_variance_identified[factor_idx]))
         }
-      } else {
-        # Set lower bound for free factor variances to prevent numerical issues
-        # (division by sqrt(factor_var) in gradient/Hessian chain rule)
-        lower_bounds[i] <- 0.01
+        if (!factor_variance_identified[factor_idx]) {
+          param_fixed[i] <- TRUE
+          lower_bounds[i] <- init_params[i]
+          upper_bounds[i] <- init_params[i]
+          if (verbose) {
+            message(sprintf("    -> FIXED at %.6f", init_params[i]))
+          }
+        } else {
+          # Set lower bound for free factor variances to prevent numerical issues
+          # (division by sqrt(factor_var) in gradient/Hessian chain rule)
+          lower_bounds[i] <- 0.01
+        }
+      }
+    }
+
+    # Set bounds for factor correlation parameters
+    if (param_type == "factor_corr") {
+      # Correlation must be between -1 and 1
+      lower_bounds[i] <- -0.99
+      upper_bounds[i] <- 0.99
+      if (verbose) {
+        message(sprintf("  Constraint: param %d (factor_corr) -> bounds = [-0.99, 0.99]", i))
       }
     }
 
