@@ -316,48 +316,141 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 if (iflag == 3 && modHess.size() > 0) {
                     int nDimModHess = nfac + param_model_count[imod];
 
-                    // Model Hessian contribution (with chain rule for factor variances)
-                    for (int i = 0; i < nDimModHess; i++) {
-                        for (int j = i; j < nDimModHess; j++) {
-                            int modhess_idx = i * nDimModHess + j;
-                            int full_i = (i < nfac) ? i : (firstpar + i - nfac);
-                            int full_j = (j < nfac) ? j : (firstpar + j - nfac);
-                            int full_idx = full_i * nparam + full_j;
+                    if (fac_corr && nfac == 2) {
+                        // ===== Correlated 2-factor Hessian =====
+                        // Cholesky: f1 = σ1*z1, f2 = ρ*σ2*z1 + σ2*√(1-ρ²)*z2
+                        double sigma1 = std::sqrt(factor_var[0]);
+                        double sigma2 = std::sqrt(factor_var[1]);
+                        double z1 = quad_nodes[facint[0]];
+                        double z2 = quad_nodes[facint[1]];
 
-                            // Chain rule: d²L/dσᵢ²dσⱼ² = d²L/dfᵢdfⱼ * (dfᵢ/dσᵢ²) * (dfⱼ/dσⱼ²)
-                            // where f = sigma * x + mean
-                            // df/d(sigma^2) = x/(2σ)
-                            double chain_factor = 1.0;
+                        // Precompute derivatives for chain rule
+                        // df1/dσ1² = z1/(2σ1), df1/dσ2² = 0, df1/dρ = 0
+                        double df1_dsigma1sq = z1 / (2.0 * sigma1);
 
-                            if (i < nfac) {
-                                // i is a factor variance parameter
-                                double sigma_i = std::sqrt(factor_var[i]);
-                                double x_node_i = quad_nodes[facint[i]];
-                                chain_factor *= x_node_i / (2.0 * sigma_i);
+                        // df2/dσ1² = 0
+                        // df2/dσ2² = (ρ*z1 + √(1-ρ²)*z2)/(2σ2)
+                        // df2/dρ = σ2*(z1 - ρ*z2/√(1-ρ²))
+                        double df2_dsigma2sq = (rho * z1 + sqrt_1_minus_rho2 * z2) / (2.0 * sigma2);
+                        double df2_drho = sigma2 * (z1 - rho * z2 / sqrt_1_minus_rho2);
+
+                        // Second derivatives for factor 2 w.r.t. rho
+                        // d²f2/dρ² = -σ2*z2 / (1-ρ²)^{3/2}
+                        double d2f2_drho2 = -sigma2 * z2 / (sqrt_1_minus_rho2 * sqrt_1_minus_rho2 * sqrt_1_minus_rho2);
+
+                        // d²f2/dρdσ2² = (z1 - ρ*z2/√(1-ρ²)) / (2σ2)
+                        double d2f2_drho_dsigma2sq = (z1 - rho * z2 / sqrt_1_minus_rho2) / (2.0 * sigma2);
+
+                        // Get model second derivatives d²L/df_i df_j
+                        double d2L_df1df1 = modHess[0 * nDimModHess + 0];
+                        double d2L_df1df2 = modHess[0 * nDimModHess + 1];
+                        double d2L_df2df2 = modHess[1 * nDimModHess + 1];
+
+                        // Get model first derivatives dL/df_i
+                        double dL_df1 = modEval[1];
+                        double dL_df2 = modEval[2];
+
+                        // === d²L/d(σ1²)² ===
+                        // = d²L/df1² * (df1/dσ1²)² + dL/df1 * d²f1/d(σ1²)²
+                        double d2f1_dsigma1sq_sq = -z1 / (4.0 * sigma1 * sigma1 * sigma1);
+                        hessilk[0 * nparam + 0] += d2L_df1df1 * df1_dsigma1sq * df1_dsigma1sq
+                                                  + dL_df1 * d2f1_dsigma1sq_sq;
+
+                        // === d²L/d(σ1²)d(σ2²) ===
+                        // = d²L/df1df2 * (df1/dσ1²) * (df2/dσ2²)
+                        hessilk[0 * nparam + 1] += d2L_df1df2 * df1_dsigma1sq * df2_dsigma2sq;
+
+                        // === d²L/d(σ1²)dρ ===
+                        // = d²L/df1df2 * (df1/dσ1²) * (df2/dρ)
+                        hessilk[0 * nparam + 2] += d2L_df1df2 * df1_dsigma1sq * df2_drho;
+
+                        // === d²L/d(σ2²)² ===
+                        // = d²L/df2² * (df2/dσ2²)² + dL/df2 * d²f2/d(σ2²)²
+                        double d2f2_dsigma2sq_sq = -(rho * z1 + sqrt_1_minus_rho2 * z2) / (4.0 * sigma2 * sigma2 * sigma2);
+                        hessilk[1 * nparam + 1] += d2L_df2df2 * df2_dsigma2sq * df2_dsigma2sq
+                                                  + dL_df2 * d2f2_dsigma2sq_sq;
+
+                        // === d²L/d(σ2²)dρ ===
+                        // = d²L/df2² * (df2/dσ2²) * (df2/dρ) + dL/df2 * d²f2/d(σ2²)dρ
+                        hessilk[1 * nparam + 2] += d2L_df2df2 * df2_dsigma2sq * df2_drho
+                                                  + dL_df2 * d2f2_drho_dsigma2sq;
+
+                        // === d²L/dρ² ===
+                        // = d²L/df2² * (df2/dρ)² + dL/df2 * d²f2/dρ²
+                        hessilk[2 * nparam + 2] += d2L_df2df2 * df2_drho * df2_drho
+                                                  + dL_df2 * d2f2_drho2;
+
+                        // === Cross terms with model parameters ===
+                        for (int iparam = 0; iparam < param_model_count[imod]; iparam++) {
+                            int param_idx = firstpar + iparam;
+                            // d²L/df_i d(model_param) from modHess
+                            double d2L_df1_dparam = modHess[0 * nDimModHess + (nfac + iparam)];
+                            double d2L_df2_dparam = modHess[1 * nDimModHess + (nfac + iparam)];
+
+                            // d²L/d(σ1²)d(param) = d²L/df1dparam * df1/dσ1²
+                            hessilk[0 * nparam + param_idx] += d2L_df1_dparam * df1_dsigma1sq;
+
+                            // d²L/d(σ2²)d(param) = d²L/df2dparam * df2/dσ2²
+                            hessilk[1 * nparam + param_idx] += d2L_df2_dparam * df2_dsigma2sq;
+
+                            // d²L/dρd(param) = d²L/df2dparam * df2/dρ
+                            hessilk[2 * nparam + param_idx] += d2L_df2_dparam * df2_drho;
+                        }
+
+                        // === Model parameter cross-terms ===
+                        for (int i = 0; i < param_model_count[imod]; i++) {
+                            for (int j = i; j < param_model_count[imod]; j++) {
+                                int modhess_idx = (nfac + i) * nDimModHess + (nfac + j);
+                                int full_i = firstpar + i;
+                                int full_j = firstpar + j;
+                                hessilk[full_i * nparam + full_j] += modHess[modhess_idx];
                             }
+                        }
+                    } else {
+                        // ===== Independent factors Hessian (original code) =====
+                        // Model Hessian contribution (with chain rule for factor variances)
+                        for (int i = 0; i < nDimModHess; i++) {
+                            for (int j = i; j < nDimModHess; j++) {
+                                int modhess_idx = i * nDimModHess + j;
+                                int full_i = (i < nfac) ? i : (firstpar + i - nfac);
+                                int full_j = (j < nfac) ? j : (firstpar + j - nfac);
+                                int full_idx = full_i * nparam + full_j;
 
-                            if (j < nfac) {
-                                // j is a factor variance parameter
-                                double sigma_j = std::sqrt(factor_var[j]);
-                                double x_node_j = quad_nodes[facint[j]];
-                                chain_factor *= x_node_j / (2.0 * sigma_j);
-                            }
+                                // Chain rule: d²L/dσᵢ²dσⱼ² = d²L/dfᵢdfⱼ * (dfᵢ/dσᵢ²) * (dfⱼ/dσⱼ²)
+                                // where f = sigma * x + mean
+                                // df/d(sigma^2) = x/(2σ)
+                                double chain_factor = 1.0;
 
-                            hessilk[full_idx] += modHess[modhess_idx] * chain_factor;
+                                if (i < nfac) {
+                                    // i is a factor variance parameter
+                                    double sigma_i = std::sqrt(factor_var[i]);
+                                    double x_node_i = quad_nodes[facint[i]];
+                                    chain_factor *= x_node_i / (2.0 * sigma_i);
+                                }
 
-                            // For diagonal factor variance elements (i == j), add second derivative term
-                            // Full chain rule: d²L/d(σ²)² = d²L/df² * (df/d(σ²))² + dL/df * d²f/d(σ²)²
-                            // The first term is handled above. The second term is:
-                            //   dL/df * d²f/d(σ²)² where d²f/d(σ²)² = -x/(4σ³)
-                            // Note: f = σ*x = √(σ²)*x, so:
-                            //   df/d(σ²) = x/(2σ)
-                            //   d²f/d(σ²)² = d[x/(2σ)]/d(σ²) = -x/(4σ³)
-                            if (i < nfac && i == j) {
-                                double sigma = std::sqrt(factor_var[i]);
-                                double x_node = quad_nodes[facint[i]];
-                                double second_deriv_factor = -x_node / (4.0 * sigma * sigma * sigma);
-                                // modEval[i + 1] is dL/df_i from this model
-                                hessilk[full_idx] += modEval[i + 1] * second_deriv_factor;
+                                if (j < nfac) {
+                                    // j is a factor variance parameter
+                                    double sigma_j = std::sqrt(factor_var[j]);
+                                    double x_node_j = quad_nodes[facint[j]];
+                                    chain_factor *= x_node_j / (2.0 * sigma_j);
+                                }
+
+                                hessilk[full_idx] += modHess[modhess_idx] * chain_factor;
+
+                                // For diagonal factor variance elements (i == j), add second derivative term
+                                // Full chain rule: d²L/d(σ²)² = d²L/df² * (df/d(σ²))² + dL/df * d²f/d(σ²)²
+                                // The first term is handled above. The second term is:
+                                //   dL/df * d²f/d(σ²)² where d²f/d(σ²)² = -x/(4σ³)
+                                // Note: f = σ*x = √(σ²)*x, so:
+                                //   df/d(σ²) = x/(2σ)
+                                //   d²f/d(σ²)² = d[x/(2σ)]/d(σ²) = -x/(4σ³)
+                                if (i < nfac && i == j) {
+                                    double sigma = std::sqrt(factor_var[i]);
+                                    double x_node = quad_nodes[facint[i]];
+                                    double second_deriv_factor = -x_node / (4.0 * sigma * sigma * sigma);
+                                    // modEval[i + 1] is dL/df_i from this model
+                                    hessilk[full_idx] += modEval[i + 1] * second_deriv_factor;
+                                }
                             }
                         }
                     }

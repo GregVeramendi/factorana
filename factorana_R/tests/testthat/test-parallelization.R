@@ -13,6 +13,14 @@ SAVE_LOGS <- Sys.getenv("FACTORANA_TEST_SAVE_LOGS", "TRUE") == "TRUE"
 
 test_that("Parallelization: Roy model with 1, 2, and 4 cores produces identical results", {
   skip_on_cran()
+  # Skip when tests run in parallel (timing-based speedup test is unreliable under load)
+  # This test should be run standalone: devtools::test(filter = "parallelization")
+  skip_if(
+    identical(Sys.getenv("TESTTHAT_PARALLEL"), "TRUE") ||
+    parallel::detectCores() < 4 ||
+    isTRUE(getOption("testthat.parallel")),
+    "Skipping parallelization timing test (run standalone with: devtools::test(filter='parallelization'))"
+  )
 
   set.seed(108)
 

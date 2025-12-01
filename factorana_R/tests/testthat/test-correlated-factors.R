@@ -129,8 +129,10 @@ test_that("correlated two-factor linear model converges and recovers correlation
     verbose = FALSE
   )
 
-  # Check convergence
-  expect_equal(result$convergence, 0)
+  # Check convergence (0 = success)
+  # After fixing Hessian computation for correlated factors, convergence code 0 is expected
+  expect_equal(result$convergence, 0,
+    info = sprintf("Expected convergence code 0, got: %d", result$convergence))
 
   # Check correlation estimate is close to true value (within 0.2)
   est_corr <- result$estimates["factor_corr_1_2"]
@@ -265,8 +267,10 @@ test_that("negative correlation is recovered correctly", {
     verbose = FALSE
   )
 
-  # Check convergence
-  expect_equal(result$convergence, 0)
+  # Check convergence (0 = success)
+  # After fixing Hessian computation for correlated factors, convergence code 0 is expected
+  expect_equal(result$convergence, 0,
+    info = sprintf("Expected convergence code 0, got: %d", result$convergence))
 
   # Check that estimated correlation is negative and close to true value
   est_corr <- result$estimates["factor_corr_1_2"]
