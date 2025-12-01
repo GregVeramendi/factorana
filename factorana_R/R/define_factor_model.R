@@ -24,6 +24,10 @@ define_factor_model <- function(n_factors,
   if (!is.numeric(n_types) || n_types < 1) stop("n_types must be a positive integer")
   if (!is.logical(correlation)) stop("correlation must be either TRUE or FALSE")
   if (!n_mixtures %in% 1:3) stop("n_mixtures should be between 1-3") #currently this is the case, might change later
+  if (isTRUE(correlation) && n_factors > 2) {
+    stop("Correlated factor models are currently only supported for n_factors = 2. ",
+         "Models with 3+ correlated factors are not yet implemented.")
+  }
 
   # ---- 2. Compute number of variance/covariance parameters ----
   # If correlation = TRUE, include all unique covariance terms among k factors.

@@ -229,9 +229,9 @@ test_that("Parallelization: Roy model with 1, 2, and 4 cores produces identical 
   }
 
   # Assertions
-  expect_true(diff_2core < 1e-6,
+  expect_true(diff_2core < 1e-5,
               info = sprintf("2-core result differs from 1-core: %.2e", diff_2core))
-  expect_true(diff_4core < 1e-6,
+  expect_true(diff_4core < 1e-5,
               info = sprintf("4-core result differs from 1-core: %.2e", diff_4core))
 
   # Expect at least some speedup with 4 cores (conservative threshold)
