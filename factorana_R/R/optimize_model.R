@@ -23,6 +23,20 @@ build_parameter_metadata <- function(model_system) {
     component_id <- c(component_id, 0)  # 0 = factor model
   }
 
+  # Add type model loading parameters if n_types > 1
+  # Type model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
+  # (n_types - 1) * n_factors parameters (type 1 is reference)
+  n_types <- model_system$factor$n_types
+  if (!is.null(n_types) && n_types > 1L) {
+    for (t in 2:n_types) {
+      for (k in seq_len(n_factors)) {
+        param_names <- c(param_names, sprintf("type_%d_loading_%d", t, k))
+        param_types <- c(param_types, "type_loading")
+        component_id <- c(component_id, 0)  # 0 = factor model
+      }
+    }
+  }
+
   # Add component parameters
   for (i in seq_along(model_system$components)) {
     comp <- model_system$components[[i]]
@@ -123,6 +137,16 @@ build_parameter_metadata <- function(model_system) {
       for (j in seq_len(n_thresholds)) {
         param_names <- c(param_names, sprintf("%s_thresh_%d", comp_name, j))
         param_types <- c(param_types, "cutpoint")
+        component_id <- c(component_id, i)
+      }
+    }
+
+    # Type-specific intercepts for this component (if n_types > 1)
+    # Added after all other component parameters to match initialize_parameters.R ordering
+    if (!is.null(n_types) && n_types > 1L) {
+      for (t in 2:n_types) {
+        param_names <- c(param_names, sprintf("%s_type_%d_intercept", comp_name, t))
+        param_types <- c(param_types, "type_intercept")
         component_id <- c(component_id, i)
       }
     }
@@ -281,6 +305,95 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
   ))
 }
 
+# ---- Helper function for eigenvector-based saddle point escape ----
+
+#' Escape saddle point using eigenvector-based restarts
+#'
+#' When optimization converges to a saddle point (detected by positive Hessian
+#' eigenvalues), this function perturbs parameters in the direction of positive
+#' eigenvectors to escape the saddle point.
+#'
+#' @param params Current parameter estimates at saddle point
+#' @param hessian_fn Function to compute Hessian at given parameters
+#' @param objective_fn Function to compute objective at given parameters
+#' @param param_constraints List with lower/upper bounds and free_idx
+#' @param verbose Whether to print progress
+#' @return List with new_params and found_escape (TRUE if escape direction found)
+#' @keywords internal
+find_saddle_escape_direction <- function(params, hessian_fn, objective_fn,
+                                          param_constraints, verbose = FALSE) {
+  # Compute Hessian at current point
+  hess_mat <- hessian_fn(params)
+
+  # Get eigenvalue decomposition
+  eig <- eigen(hess_mat, symmetric = TRUE)
+
+  # For minimization: saddle point has at least one NEGATIVE eigenvalue
+
+  # (positive eigenvalues are good - they indicate local minimum directions)
+  neg_idx <- which(eig$values < -1e-6)
+
+  if (length(neg_idx) == 0) {
+    if (verbose) message("  No negative eigenvalues found - not a saddle point")
+    return(list(new_params = params, found_escape = FALSE))
+  }
+
+  if (verbose) {
+    message(sprintf("  Found %d negative eigenvalue(s): %s",
+                   length(neg_idx),
+                   paste(round(eig$values[neg_idx], 2), collapse = ", ")))
+  }
+
+  # Current objective value
+  current_obj <- objective_fn(params)
+  best_obj <- current_obj
+  best_params <- params
+
+  # Try moving in direction of negative eigenvector(s)
+  for (idx in neg_idx) {
+    eigvec <- eig$vectors[, idx]
+
+    # Scale step: use a minimum step size to avoid getting stuck with tiny steps
+    # Larger negative eigenvalues suggest steeper escape, but ensure at least 0.1
+    base_step <- max(0.1, min(1.0, sqrt(abs(eig$values[idx]))))
+
+    # Try both directions with different step sizes
+    for (direction in c(-1, 1)) {
+      for (step_mult in c(0.5, 1.0, 2.0, 5.0)) {
+        step <- base_step * step_mult
+
+        new_params <- params + direction * step * eigvec
+
+        # Apply bounds
+        new_params <- pmax(new_params, param_constraints$lower_bounds_free)
+        new_params <- pmin(new_params, param_constraints$upper_bounds_free)
+
+        # Evaluate objective at new point
+        new_obj <- tryCatch(
+          objective_fn(new_params),
+          error = function(e) Inf
+        )
+
+        if (is.finite(new_obj) && new_obj < best_obj) {
+          best_obj <- new_obj
+          best_params <- new_params
+          if (verbose) {
+            message(sprintf("    Eigenvector %d, dir=%+d, step=%.2f: obj %.4f -> %.4f",
+                           idx, direction, step, current_obj, new_obj))
+          }
+        }
+      }
+    }
+  }
+
+  found_escape <- best_obj < current_obj - 1e-6
+  if (verbose && found_escape) {
+    message(sprintf("  Found escape direction: obj improved by %.4f", current_obj - best_obj))
+  }
+
+  return(list(new_params = best_params, found_escape = found_escape))
+}
+
 # ---- Main estimation function ----
 
 #' Estimate factor model using R-based optimization
@@ -301,17 +414,24 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
 #'   }
 #' @param parallel Whether to use parallel computation (default TRUE)
 #' @param verbose Whether to print progress (default TRUE)
+#' @param max_restarts Maximum number of eigenvector-based restarts for escaping
+#'   saddle points (default 5). Set to 0 to disable.
 #'
 #' @details
 #' For maximum efficiency, use \code{optimizer = "nlminb"} or \code{optimizer = "trust"}
 #' which exploit the analytical Hessian computed in C++. The default L-BFGS methods
 #' only use the gradient and approximate the Hessian from gradient history.
 #'
+#' When optimization fails to converge (possibly at a saddle point), the function
+#' will attempt to escape by moving in the direction of negative Hessian eigenvalues.
+#' This is controlled by the \code{max_restarts} parameter.
+#'
 #' @return List with parameter estimates, standard errors, log-likelihood, etc.
 #' @export
 estimate_model_rcpp <- function(model_system, data, init_params = NULL,
                                 control = NULL, optimizer = "nlminb",
-                                parallel = TRUE, verbose = TRUE) {
+                                parallel = TRUE, verbose = TRUE,
+                                max_restarts = 5) {
 
   # WORKAROUND: Deep copy model_system to avoid C++ reuse bug
   # Use serialize/unserialize for true deep copy
@@ -546,112 +666,177 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     return(-hess_mat_free)  # Negative for minimization
   }
 
-  # Run optimization
+  # Run optimization with eigenvector-based restarts
   if (verbose) message(sprintf("Running optimization using %s...", optimizer))
 
-  if (optimizer == "nloptr") {
-    if (!requireNamespace("nloptr", quietly = TRUE)) {
-      stop("nloptr package required but not installed")
-    }
+  # Track current starting point for restarts
+  current_start <- init_params[param_constraints$free_idx]
+  n_restarts_used <- 0
 
-    result <- nloptr::nloptr(
-      x0 = init_params[param_constraints$free_idx],
-      eval_f = objective_fn,
-      eval_grad_f = gradient_fn,
-      lb = param_constraints$lower_bounds_free,
-      ub = param_constraints$upper_bounds_free,
-      opts = list(
-        algorithm = "NLOPT_LD_LBFGS",  # L-BFGS with analytical gradient (no Hessian)
-        maxeval = 1000,
-        xtol_rel = 1e-6,
-        print_level = if (verbose) 2 else 0
+  # Helper function to run one optimization attempt
+  run_one_optimization <- function(start_params, verbose_opt) {
+    if (optimizer == "nloptr") {
+      if (!requireNamespace("nloptr", quietly = TRUE)) {
+        stop("nloptr package required but not installed")
+      }
+
+      opt_result <- nloptr::nloptr(
+        x0 = start_params,
+        eval_f = objective_fn,
+        eval_grad_f = gradient_fn,
+        lb = param_constraints$lower_bounds_free,
+        ub = param_constraints$upper_bounds_free,
+        opts = list(
+          algorithm = "NLOPT_LD_LBFGS",
+          maxeval = 1000,
+          xtol_rel = 1e-6,
+          print_level = if (verbose_opt) 2 else 0
+        )
       )
-    )
+      return(list(
+        par = opt_result$solution,
+        value = opt_result$objective,
+        convergence = opt_result$status
+      ))
 
-    # Reconstruct full parameter vector
-    estimates <- init_params
-    estimates[param_constraints$free_idx] <- result$solution
-    loglik <- -result$objective
-    convergence <- result$status
-
-  } else if (optimizer == "optim") {
-    result <- stats::optim(
-      par = init_params[param_constraints$free_idx],
-      fn = objective_fn,
-      gr = gradient_fn,
-      method = "L-BFGS-B",  # Quasi-Newton (no Hessian)
-      lower = param_constraints$lower_bounds_free,
-      upper = param_constraints$upper_bounds_free,
-      control = list(trace = if (verbose) 1 else 0)
-    )
-
-    # Reconstruct full parameter vector
-    estimates <- init_params
-    estimates[param_constraints$free_idx] <- result$par
-    loglik <- -result$value
-    convergence <- result$convergence
-
-  } else if (optimizer == "nlminb") {
-    # nlminb can use analytical Hessian for more efficient optimization
-    if (verbose) message("  Using analytical gradient and Hessian")
-
-    result <- stats::nlminb(
-      start = init_params[param_constraints$free_idx],
-      objective = objective_fn,
-      gradient = gradient_fn,
-      hessian = hessian_fn,  # Uses analytical Hessian!
-      lower = param_constraints$lower_bounds_free,
-      upper = param_constraints$upper_bounds_free,
-      control = list(
-        trace = if (verbose) 1 else 0,
-        eval.max = 5000,
-        iter.max = 10000
+    } else if (optimizer == "optim") {
+      opt_result <- stats::optim(
+        par = start_params,
+        fn = objective_fn,
+        gr = gradient_fn,
+        method = "L-BFGS-B",
+        lower = param_constraints$lower_bounds_free,
+        upper = param_constraints$upper_bounds_free,
+        control = list(trace = if (verbose_opt) 1 else 0)
       )
-    )
+      return(list(
+        par = opt_result$par,
+        value = opt_result$value,
+        convergence = opt_result$convergence
+      ))
 
-    # Reconstruct full parameter vector
-    estimates <- init_params
-    estimates[param_constraints$free_idx] <- result$par
-    loglik <- -result$objective
-    convergence <- result$convergence
+    } else if (optimizer == "nlminb") {
+      if (verbose_opt) message("  Using analytical gradient and Hessian")
 
-  } else if (optimizer == "trust") {
-    # Trust region method - most efficient with analytical Hessian
-    if (!requireNamespace("trustOptim", quietly = TRUE)) {
-      stop("trustOptim package required but not installed. Install with: install.packages('trustOptim')")
-    }
-
-    # Warning: trust optimizer doesn't support parameter bounds
-    if (any(param_constraints$param_fixed)) {
-      warning("trust optimizer does not support fixed parameters. ",
-              "Fixed parameters may drift from their initial values. ",
-              "Consider using 'nlminb' or 'optim' instead.")
-    }
-
-    if (verbose) message("  Using trust region with analytical gradient and Hessian")
-
-    result <- trustOptim::trust.optim(
-      x = init_params[param_constraints$free_idx],
-      fn = objective_fn,
-      gr = gradient_fn,
-      hs = hessian_fn,  # Uses analytical Hessian!
-      method = "SR1",   # Symmetric rank-1 trust region
-      control = list(
-        report.level = if (verbose) 2 else 0,
-        maxit = 500
+      opt_result <- stats::nlminb(
+        start = start_params,
+        objective = objective_fn,
+        gradient = gradient_fn,
+        hessian = hessian_fn,
+        lower = param_constraints$lower_bounds_free,
+        upper = param_constraints$upper_bounds_free,
+        control = list(
+          trace = if (verbose_opt) 1 else 0,
+          eval.max = 5000,
+          iter.max = 10000
+        )
       )
-    )
+      return(list(
+        par = opt_result$par,
+        value = opt_result$objective,
+        convergence = opt_result$convergence
+      ))
 
-    # Reconstruct full parameter vector
-    estimates <- init_params
-    estimates[param_constraints$free_idx] <- result$solution
-    loglik <- -result$value
-    convergence <- result$converged
+    } else if (optimizer == "trust") {
+      if (!requireNamespace("trustOptim", quietly = TRUE)) {
+        stop("trustOptim package required but not installed. Install with: install.packages('trustOptim')")
+      }
 
-  } else {
-    stop("Unknown optimizer: ", optimizer, "\n",
-         "Available: 'nloptr' (L-BFGS), 'optim' (L-BFGS-B), 'nlminb' (uses Hessian), 'trust' (uses Hessian)")
+      if (any(param_constraints$param_fixed)) {
+        warning("trust optimizer does not support fixed parameters. ",
+                "Fixed parameters may drift from their initial values. ",
+                "Consider using 'nlminb' or 'optim' instead.")
+      }
+
+      if (verbose_opt) message("  Using trust region with analytical gradient and Hessian")
+
+      opt_result <- trustOptim::trust.optim(
+        x = start_params,
+        fn = objective_fn,
+        gr = gradient_fn,
+        hs = hessian_fn,
+        method = "SR1",
+        control = list(
+          report.level = if (verbose_opt) 2 else 0,
+          maxit = 500
+        )
+      )
+      return(list(
+        par = opt_result$solution,
+        value = opt_result$value,
+        convergence = if (opt_result$converged) 0 else 1
+      ))
+
+    } else {
+      stop("Unknown optimizer: ", optimizer, "\n",
+           "Available: 'nloptr' (L-BFGS), 'optim' (L-BFGS-B), 'nlminb' (uses Hessian), 'trust' (uses Hessian)")
+    }
   }
+
+  # Determine convergence success based on optimizer
+  is_converged <- function(conv_code) {
+    if (optimizer %in% c("optim", "nlminb")) {
+      return(conv_code == 0)
+    } else if (optimizer == "nloptr") {
+      return(conv_code >= 1 && conv_code <= 4)  # nloptr success codes
+    } else if (optimizer == "trust") {
+      return(conv_code == 0)  # Already converted to 0 = success
+    }
+    return(FALSE)
+  }
+
+  # Run initial optimization
+  opt_result <- run_one_optimization(current_start, verbose)
+  estimates_free <- opt_result$par
+  loglik <- -opt_result$value
+  convergence <- opt_result$convergence
+
+  # Eigenvector-based restart loop
+  if (max_restarts > 0 && !is_converged(convergence)) {
+    for (restart in seq_len(max_restarts)) {
+      if (verbose) {
+        message(sprintf("  Optimization did not converge. Attempting eigenvector-based restart %d/%d...",
+                       restart, max_restarts))
+      }
+
+      # Try to find escape direction using eigenvector analysis
+      escape_result <- find_saddle_escape_direction(
+        params = estimates_free,
+        hessian_fn = hessian_fn,
+        objective_fn = objective_fn,
+        param_constraints = param_constraints,
+        verbose = verbose
+      )
+
+      if (!escape_result$found_escape) {
+        if (verbose) message("  No escape direction found. Stopping restarts.")
+        break
+      }
+
+      n_restarts_used <- restart
+
+      # Restart from new point
+      current_start <- escape_result$new_params
+      opt_result <- run_one_optimization(current_start, verbose)
+      estimates_free <- opt_result$par
+      loglik <- -opt_result$value
+      convergence <- opt_result$convergence
+
+      if (verbose) {
+        message(sprintf("  Restart %d: loglik = %.4f, conv = %d",
+                       restart, loglik, convergence))
+      }
+
+      if (is_converged(convergence)) {
+        if (verbose) message(sprintf("  Converged after %d restart(s)!", restart))
+        break
+      }
+    }
+  }
+
+  # Reconstruct full parameter vector
+  estimates <- init_params
+  estimates[param_constraints$free_idx] <- estimates_free
 
   # Compute Hessian for standard errors
   if (verbose) message("Computing Hessian for standard errors...")
@@ -848,6 +1033,7 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     std_errors = std_errors,
     loglik = loglik,
     convergence = convergence,
+    n_restarts = n_restarts_used,
     model_system = model_system,
     optimizer = optimizer
   )

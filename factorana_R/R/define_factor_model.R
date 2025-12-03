@@ -41,7 +41,14 @@ define_factor_model <- function(n_factors,
                              (n_mixtures - 1L) * n_factors +
                              (n_mixtures - 1L))
 
-  # ---- 4. Construct the factor_model object ----
+  # ---- 4. Compute type model parameter count ----
+  # For n_types > 1, the type probability model has:
+  # - (n_types - 1) * n_factors factor loadings (type 1 is reference)
+  # Type model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
+  # Note: Type-specific intercepts are added per model component, not here.
+  ntyp_param <- if (n_types > 1L) as.integer((n_types - 1L) * n_factors) else 0L
+
+  # ---- 5. Construct the factor_model object ----
   # Bundle all parameters and metadata into a list, and assign class.
 
   out <- list(
@@ -50,6 +57,7 @@ define_factor_model <- function(n_factors,
     correlation = correlation,
     n_mixtures = as.integer(n_mixtures),
     nfac_param = nfac_param,
+    ntyp_param = ntyp_param,
     params = rep(0.0, nfac_param)
   )
 
@@ -67,6 +75,9 @@ print.factor_model <- function(x, ...) {
   cat("Correlation allowed?:", x$correlation, "\n")
   cat("Number of mixtures:", x$n_mixtures, "\n")
   cat("Number of parameters in latent factor distribution:", x$nfac_param, "\n")
+  if (x$n_types > 1L) {
+    cat("Number of parameters in type probability model:", x$ntyp_param, "\n")
+  }
   invisible(x)
 }
 

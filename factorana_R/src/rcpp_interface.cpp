@@ -223,13 +223,25 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8) {
         if (mtype == ModelType::LOGIT && n_choice > 2) {
             // Multinomial logit: each non-reference choice has its own parameters
             n_params = (n_choice - 1) * (regressor_idx.size() + n_free_loadings);
+            // For multinomial logit with types, each choice gets (n_types - 1) type-specific intercepts
+            if (n_types > 1) {
+                n_params += (n_choice - 1) * (n_types - 1);
+            }
         } else if (mtype == ModelType::OPROBIT) {
             // Ordered probit: shared coefficients + thresholds
             n_params = regressor_idx.size() + n_free_loadings + (n_choice - 1);
+            // Add type-specific intercepts for n_types > 1
+            if (n_types > 1) {
+                n_params += (n_types - 1);
+            }
         } else {
             // Binary models (linear, probit, binary logit)
             n_params = regressor_idx.size() + n_free_loadings;
             if (mtype == ModelType::LINEAR) n_params += 1;  // sigma
+            // Add type-specific intercepts for n_types > 1
+            if (n_types > 1) {
+                n_params += (n_types - 1);
+            }
         }
 
         fm->AddModel(model, n_params);

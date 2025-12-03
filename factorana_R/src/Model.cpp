@@ -21,7 +21,8 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
                  const std::vector<double>& fac,
                  std::vector<double>& modEval,
                  std::vector<double>& hess,
-                 int flag)
+                 int flag,
+                 double type_intercept)
 {
     // Always clear vectors first to ensure no stale data persists
     // This is critical for consistent behavior across different flag values
@@ -103,6 +104,12 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
                 }
             }
         }
+    }
+
+    // Add type-specific intercept to linear predictor(s)
+    // For models with multiple types, this shifts the index function
+    for (int ichoice = 0; ichoice < numlogitchoice - 1; ichoice++) {
+        expres[ichoice] += type_intercept;
     }
 
     // Dispatch to model-specific evaluation

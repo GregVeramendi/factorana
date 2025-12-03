@@ -29,6 +29,12 @@ private:
     int nmix;                          // Number of mixture components (default 1)
     bool fac_corr;                     // Whether factors are correlated
 
+    // Type model parameters (for n_types > 1)
+    // Type probability model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
+    // Total: (n_types - 1) * n_factors parameters
+    int ntyp_param;                    // Number of type model loading parameters
+    int type_param_start;              // Starting index for type model parameters
+
     // Quadrature
     int nquad_points;                  // Number of quadrature points per dimension
     std::vector<double> quad_nodes;    // GH quadrature nodes (scaled for different npoints)
@@ -120,6 +126,22 @@ private:
     int GetFactorVarianceIndex(int imix, int ifac);
     int GetFactorMeanIndex(int imix, int ifac);
     int GetMixtureWeightIndex(int imix);
+
+    // Helper: Get type model parameter indices
+    // Type model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
+    // Returns index of lambda_t_k (loading for type t on factor k)
+    // ityp: 0-based type index (0 = type 2 since type 1 is reference)
+    // ifac: 0-based factor index
+    int GetTypeLoadingIndex(int ityp, int ifac);
+
+    // Helper: Get type-specific intercept index for a given model
+    // ityp: 0-based type index (0 = type 2 since type 1 is reference)
+    // model_idx: 0-based model index
+    int GetTypeInterceptIndex(int ityp, int model_idx);
+
+    // Helper: Compute type probability from multinomial logit
+    // Returns vector of probabilities for each type given factor values
+    std::vector<double> ComputeTypeProbabilities(const std::vector<double>& fac);
 };
 
 #endif // FACTORMODEL_H

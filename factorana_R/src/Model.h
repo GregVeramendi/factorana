@@ -47,12 +47,14 @@ public:
     //   modEval - Output: [likelihood, gradient components]
     //   hess - Output: Hessian matrix (upper triangle)
     //   flag - 1=likelihood only, 2=+gradient, 3=+Hessian
+    //   type_intercept - Type-specific intercept to add to linear predictor (default 0)
     void Eval(int iobs_offset, const std::vector<double>& data,
               const std::vector<double>& param, int firstpar,
               const std::vector<double>& fac,
               std::vector<double>& modEval,
               std::vector<double>& hess,
-              int flag);
+              int flag,
+              double type_intercept = 0.0);
 
     // Accessors
     ModelType GetType() const { return modtype; }

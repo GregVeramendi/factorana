@@ -22,6 +22,18 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
         nparam += 1;  // Add factor_corr_1_2
     }
 
+    // Compute type model parameters
+    // Type model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
+    // For ntyp > 1: (ntyp - 1) * nfac loading parameters
+    if (ntyp > 1) {
+        ntyp_param = (ntyp - 1) * nfac;
+        type_param_start = nparam;  // Type params come after factor params
+        nparam += ntyp_param;
+    } else {
+        ntyp_param = 0;
+        type_param_start = -1;
+    }
+
     nparam_free = nparam;  // All factor parameters are free by default
 }
 
@@ -195,6 +207,9 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     std::vector<double> totalhess;
     if (iflag == 3) totalhess.resize(nparam * nparam, 0.0);
 
+    // Constant for quadrature transformation
+    const double sqrt_2 = std::sqrt(2.0);
+
     std::vector<double> gradilk(nparam, 0.0);  // Gradient at integration point
     std::vector<double> hessilk;
     if (iflag == 3) hessilk.resize(nparam * nparam, 0.0);
@@ -249,210 +264,524 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 }
             }
 
-            // ===== STEP 7: Evaluate all models =====
-            for (size_t imod = 0; imod < models.size(); imod++) {
-                int firstpar = param_model_start[imod];
+            // ===== STEP 7: Evaluate all models with type mixture =====
+            // For ntyp > 1: L = Σ_t π_t(f) × L_t(y|f) where L_t = Π_m L_m(y_m|f, intercept_t)
+            // For ntyp == 1: Standard case (no type mixture)
 
-                // If all parameters are fixed for this model, only compute likelihood (flag=1)
-                // This saves computation time in multi-stage estimation
-                int model_flag = models[imod]->GetAllParamsFixed() ? 1 : iflag;
+            // Compute type probabilities (returns [1.0] for ntyp == 1)
+            std::vector<double> type_probs = ComputeTypeProbabilities(fac_val);
 
-                models[imod]->Eval(iobs_offset, data, param, firstpar, fac_val,
-                                  modEval, modHess, model_flag);
+            // Accumulators for type-weighted contributions
+            double type_weighted_prob = 0.0;
+            std::vector<double> type_weighted_grad(nparam, 0.0);
+            std::vector<double> type_weighted_hess;
+            if (iflag == 3) type_weighted_hess.resize(nparam * nparam, 0.0);
 
-                // Multiply likelihood
-                probilk *= modEval[0];
+            // Loop over types
+            for (int ityp = 0; ityp < ntyp; ityp++) {
+                double type_prob = type_probs[ityp];
 
-                // ===== STEP 8: Accumulate gradients =====
-                if (iflag >= 2) {
-                    // Gradients w.r.t. factor variances and correlation
-                    if (fac_corr && nfac == 2) {
-                        // Correlated 2-factor model: use Cholesky derivatives
-                        // f1 = σ1 * z1
-                        // f2 = ρ*σ2*z1 + σ2*√(1-ρ²)*z2
-                        double sigma1 = std::sqrt(factor_var[0]);
-                        double sigma2 = std::sqrt(factor_var[1]);
-                        double z1 = quad_nodes[facint[0]];
-                        double z2 = quad_nodes[facint[1]];
+                // Likelihood product for this type
+                double prob_this_type = 1.0;
 
-                        // dL/df1 and dL/df2 from models
-                        double dL_df1 = modEval[1];
-                        double dL_df2 = modEval[2];
+                // Gradient accumulators for this type
+                std::vector<double> grad_this_type(nparam, 0.0);
+                std::vector<double> hess_this_type;
+                if (iflag == 3) hess_this_type.resize(nparam * nparam, 0.0);
 
-                        // Gradient w.r.t. σ1² (factor variance 1)
-                        // df1/dσ1² = z1/(2σ1), df2/dσ1² = 0
-                        gradilk[0] += dL_df1 * z1 / (2.0 * sigma1);
+                // Evaluate all models for this type
+                for (size_t imod = 0; imod < models.size(); imod++) {
+                    int firstpar = param_model_start[imod];
 
-                        // Gradient w.r.t. σ2² (factor variance 2)
-                        // df2/dσ2² = (ρ*z1 + √(1-ρ²)*z2) / (2σ2)
-                        double df2_dsigma2sq = (rho * z1 + sqrt_1_minus_rho2 * z2) / (2.0 * sigma2);
-                        gradilk[1] += dL_df2 * df2_dsigma2sq;
+                    // Get type-specific intercept for types > 1
+                    // Type 1 (ityp=0) is reference with intercept = 0
+                    double type_intercept = 0.0;
+                    if (ityp > 0 && ntyp > 1) {
+                        // Type intercepts are stored after base model parameters
+                        // ityp-1 because type 1 is reference (no intercept)
+                        int intercept_offset = GetTypeInterceptIndex(ityp - 1, imod);
+                        type_intercept = param[firstpar + intercept_offset];
+                    }
 
-                        // Gradient w.r.t. ρ (correlation parameter at index 2)
-                        // df2/dρ = σ2*z1 + σ2 * d(√(1-ρ²))/dρ * z2
-                        //        = σ2*z1 - σ2*ρ*z2/√(1-ρ²)
-                        //        = σ2 * (z1 - ρ*z2/sqrt_1_minus_rho2)
-                        double df2_drho = sigma2 * (z1 - rho * z2 / sqrt_1_minus_rho2);
-                        gradilk[2] += dL_df2 * df2_drho;
-                    } else {
-                        // Independent factors: standard chain rule
-                        for (int ifac = 0; ifac < nfac; ifac++) {
-                            // Chain rule: d/d(sigma^2) = d/df * df/d(sigma^2)
-                            // where f = sigma * x + mean
-                            // df/d(sigma^2) = df/dσ · dσ/d(sigma^2) = x · 1/(2σ) = x/(2σ)
-                            double sigma = std::sqrt(factor_var[ifac]);
-                            double x_node = quad_nodes[facint[ifac]];
-                            gradilk[ifac] += modEval[ifac + 1] * x_node / (2.0 * sigma);
+                    // If all parameters are fixed for this model, only compute likelihood (flag=1)
+                    int model_flag = models[imod]->GetAllParamsFixed() ? 1 : iflag;
+
+                    models[imod]->Eval(iobs_offset, data, param, firstpar, fac_val,
+                                      modEval, modHess, model_flag, type_intercept);
+
+                    // Multiply likelihood for this type
+                    prob_this_type *= modEval[0];
+
+                    // ===== STEP 8: Accumulate gradients for this type =====
+                    if (iflag >= 2) {
+                        // Gradients w.r.t. factor variances and correlation
+                        if (fac_corr && nfac == 2) {
+                            // Correlated 2-factor model: use Cholesky derivatives
+                            double sigma1 = std::sqrt(factor_var[0]);
+                            double sigma2 = std::sqrt(factor_var[1]);
+                            double z1 = quad_nodes[facint[0]];
+                            double z2 = quad_nodes[facint[1]];
+
+                            double dL_df1 = modEval[1];
+                            double dL_df2 = modEval[2];
+
+                            grad_this_type[0] += dL_df1 * z1 / (2.0 * sigma1);
+                            double df2_dsigma2sq = (rho * z1 + sqrt_1_minus_rho2 * z2) / (2.0 * sigma2);
+                            grad_this_type[1] += dL_df2 * df2_dsigma2sq;
+                            double df2_drho = sigma2 * (z1 - rho * z2 / sqrt_1_minus_rho2);
+                            grad_this_type[2] += dL_df2 * df2_drho;
+                        } else {
+                            // Independent factors: standard chain rule
+                            for (int ifac = 0; ifac < nfac; ifac++) {
+                                double sigma = std::sqrt(factor_var[ifac]);
+                                double x_node = quad_nodes[facint[ifac]];
+                                grad_this_type[ifac] += modEval[ifac + 1] * x_node / (2.0 * sigma);
+                            }
+                        }
+
+                        // Gradients w.r.t. model parameters (base params only, not type intercepts)
+                        // param_model_count includes type intercepts, but modEval only has base params
+                        int n_type_intercepts = (ntyp > 1) ? (ntyp - 1) : 0;
+                        int base_param_count = param_model_count[imod] - n_type_intercepts;
+                        for (int iparam = 0; iparam < base_param_count; iparam++) {
+                            grad_this_type[firstpar + iparam] += modEval[1 + nfac + iparam];
+                        }
+
+                        // Gradient w.r.t. this type's intercept (only for types > 1)
+                        // The gradient equals dL/d(linear_predictor) * 1
+                        // For models with an intercept covariate (=1), this equals the base intercept gradient
+                        if (ntyp > 1 && ityp > 0) {
+                            int type_intercept_idx = firstpar + base_param_count + (ityp - 1);
+                            // modEval[1 + nfac + 0] is gradient w.r.t. first covariate coefficient
+                            // When first covariate is intercept (=1), this equals dL/d(linear_predictor)
+                            grad_this_type[type_intercept_idx] += modEval[1 + nfac + 0];
                         }
                     }
 
-                    // Gradients w.r.t. model parameters
-                    for (int iparam = 0; iparam < param_model_count[imod]; iparam++) {
-                        gradilk[firstpar + iparam] += modEval[1 + nfac + iparam];
+                    // ===== STEP 9: Accumulate Hessians for this type =====
+                    if (iflag == 3 && modHess.size() > 0) {
+                        // Note: modHess from Model::Eval() only includes base parameters,
+                        // not type-specific intercepts
+                        int n_type_intercepts_hess = (ntyp > 1) ? (ntyp - 1) : 0;
+                        int base_param_count_hess = param_model_count[imod] - n_type_intercepts_hess;
+                        int nDimModHess = nfac + base_param_count_hess;
+
+                        if (fac_corr && nfac == 2) {
+                            // ===== Correlated 2-factor Hessian =====
+                            double sigma1 = std::sqrt(factor_var[0]);
+                            double sigma2 = std::sqrt(factor_var[1]);
+                            double z1 = quad_nodes[facint[0]];
+                            double z2 = quad_nodes[facint[1]];
+
+                            double df1_dsigma1sq = z1 / (2.0 * sigma1);
+                            double df2_dsigma2sq = (rho * z1 + sqrt_1_minus_rho2 * z2) / (2.0 * sigma2);
+                            double df2_drho = sigma2 * (z1 - rho * z2 / sqrt_1_minus_rho2);
+                            double d2f2_drho2 = -sigma2 * z2 / (sqrt_1_minus_rho2 * sqrt_1_minus_rho2 * sqrt_1_minus_rho2);
+                            double d2f2_drho_dsigma2sq = (z1 - rho * z2 / sqrt_1_minus_rho2) / (2.0 * sigma2);
+
+                            double d2L_df1df1 = modHess[0 * nDimModHess + 0];
+                            double d2L_df1df2 = modHess[0 * nDimModHess + 1];
+                            double d2L_df2df2 = modHess[1 * nDimModHess + 1];
+                            double dL_df1 = modEval[1];
+                            double dL_df2 = modEval[2];
+
+                            double d2f1_dsigma1sq_sq = -z1 / (4.0 * sigma1 * sigma1 * sigma1);
+                            hess_this_type[0 * nparam + 0] += d2L_df1df1 * df1_dsigma1sq * df1_dsigma1sq
+                                                              + dL_df1 * d2f1_dsigma1sq_sq;
+                            hess_this_type[0 * nparam + 1] += d2L_df1df2 * df1_dsigma1sq * df2_dsigma2sq;
+                            hess_this_type[0 * nparam + 2] += d2L_df1df2 * df1_dsigma1sq * df2_drho;
+
+                            double d2f2_dsigma2sq_sq = -(rho * z1 + sqrt_1_minus_rho2 * z2) / (4.0 * sigma2 * sigma2 * sigma2);
+                            hess_this_type[1 * nparam + 1] += d2L_df2df2 * df2_dsigma2sq * df2_dsigma2sq
+                                                              + dL_df2 * d2f2_dsigma2sq_sq;
+                            hess_this_type[1 * nparam + 2] += d2L_df2df2 * df2_dsigma2sq * df2_drho
+                                                              + dL_df2 * d2f2_drho_dsigma2sq;
+                            hess_this_type[2 * nparam + 2] += d2L_df2df2 * df2_drho * df2_drho
+                                                              + dL_df2 * d2f2_drho2;
+
+                            // Use base_param_count_hess for loop bounds since modHess
+                            // only contains base parameters, not type-specific intercepts
+                            for (int iparam = 0; iparam < base_param_count_hess; iparam++) {
+                                int param_idx = firstpar + iparam;
+                                double d2L_df1_dparam = modHess[0 * nDimModHess + (nfac + iparam)];
+                                double d2L_df2_dparam = modHess[1 * nDimModHess + (nfac + iparam)];
+                                hess_this_type[0 * nparam + param_idx] += d2L_df1_dparam * df1_dsigma1sq;
+                                hess_this_type[1 * nparam + param_idx] += d2L_df2_dparam * df2_dsigma2sq;
+                                hess_this_type[2 * nparam + param_idx] += d2L_df2_dparam * df2_drho;
+                            }
+
+                            for (int i = 0; i < base_param_count_hess; i++) {
+                                for (int j = i; j < base_param_count_hess; j++) {
+                                    int modhess_idx = (nfac + i) * nDimModHess + (nfac + j);
+                                    int full_i = firstpar + i;
+                                    int full_j = firstpar + j;
+                                    hess_this_type[full_i * nparam + full_j] += modHess[modhess_idx];
+                                }
+                            }
+                        } else {
+                            // ===== Independent factors Hessian =====
+                            for (int i = 0; i < nDimModHess; i++) {
+                                for (int j = i; j < nDimModHess; j++) {
+                                    int modhess_idx = i * nDimModHess + j;
+                                    int full_i = (i < nfac) ? i : (firstpar + i - nfac);
+                                    int full_j = (j < nfac) ? j : (firstpar + j - nfac);
+                                    int full_idx = full_i * nparam + full_j;
+
+                                    double chain_factor = 1.0;
+                                    if (i < nfac) {
+                                        double sigma_i = std::sqrt(factor_var[i]);
+                                        double x_node_i = quad_nodes[facint[i]];
+                                        chain_factor *= x_node_i / (2.0 * sigma_i);
+                                    }
+                                    if (j < nfac) {
+                                        double sigma_j = std::sqrt(factor_var[j]);
+                                        double x_node_j = quad_nodes[facint[j]];
+                                        chain_factor *= x_node_j / (2.0 * sigma_j);
+                                    }
+
+                                    hess_this_type[full_idx] += modHess[modhess_idx] * chain_factor;
+
+                                    if (i < nfac && i == j) {
+                                        double sigma = std::sqrt(factor_var[i]);
+                                        double x_node = quad_nodes[facint[i]];
+                                        double second_deriv_factor = -x_node / (4.0 * sigma * sigma * sigma);
+                                        hess_this_type[full_idx] += modEval[i + 1] * second_deriv_factor;
+                                    }
+                                }
+                            }
+                        }
+
+                        // ===== STEP 9b: Add Hessian terms for type-specific intercepts =====
+                        // Type-specific intercepts have the same derivative structure as base intercept.
+                        // The Hessian contribution mirrors that of the base intercept (index 0 in model params).
+                        if (ntyp > 1 && ityp > 0) {
+                            int type_intercept_idx = firstpar + base_param_count_hess + (ityp - 1);
+
+                            // Diagonal term: d²L/d(type_intercept)² = d²L/d(intercept)²
+                            // In modHess, intercept is at position (nfac, nfac) -> index nfac * nDimModHess + nfac
+                            double hess_intercept_diag = modHess[nfac * nDimModHess + nfac];
+                            hess_this_type[type_intercept_idx * nparam + type_intercept_idx] += hess_intercept_diag;
+
+                            // Cross-terms with factor variances: d²L/d(type_intercept)d(factor_var_k)
+                            for (int k = 0; k < nfac; k++) {
+                                // modHess[k * nDimModHess + nfac] = d²L/df_k d(intercept)
+                                double hess_fk_intercept = modHess[k * nDimModHess + nfac];
+
+                                // Apply chain rule for factor variance: df/d(sigma²) = x_node / (2*sigma)
+                                double sigma_k = std::sqrt(factor_var[k]);
+                                double x_node_k = quad_nodes[facint[k]];
+                                double chain_factor = x_node_k / (2.0 * sigma_k);
+
+                                // Hessian cross-term: d²L/d(factor_var_k)d(type_intercept)
+                                int full_idx = k * nparam + type_intercept_idx;
+                                hess_this_type[full_idx] += hess_fk_intercept * chain_factor;
+                            }
+
+                            // Cross-terms with base model parameters
+                            for (int iparam = 0; iparam < base_param_count_hess; iparam++) {
+                                int param_idx = firstpar + iparam;
+                                // modHess[(nfac + iparam) * nDimModHess + nfac] = d²L/d(param_iparam)d(intercept)
+                                // Note: Hessian is symmetric, upper triangular stored
+                                int mh_row = nfac;  // intercept row
+                                int mh_col = nfac + iparam;  // param column
+                                if (mh_row > mh_col) std::swap(mh_row, mh_col);
+                                double hess_param_intercept = modHess[mh_row * nDimModHess + mh_col];
+
+                                // Add to cross-term (type_intercept, param)
+                                int full_i = std::min(type_intercept_idx, param_idx);
+                                int full_j = std::max(type_intercept_idx, param_idx);
+                                hess_this_type[full_i * nparam + full_j] += hess_param_intercept;
+                            }
+                        }
+                    }
+                } // End of model loop for this type
+
+                // ===== Weight by type probability and accumulate =====
+                type_weighted_prob += type_prob * prob_this_type;
+
+                if (iflag >= 2) {
+                    // Gradient of type-weighted likelihood:
+                    // d(π_t * L_t)/dθ = (dπ_t/dθ) * L_t + π_t * (dL_t/dθ)
+                    // For model parameters: dπ_t/dθ = 0, so just π_t * (dL_t/dθ)
+                    for (int ipar = 0; ipar < nparam; ipar++) {
+                        type_weighted_grad[ipar] += type_prob * prob_this_type * grad_this_type[ipar];
+                    }
+
+                    // Gradient w.r.t. type model loadings (for types > 1)
+                    // π_t = exp(η_t) / (1 + Σ_s exp(η_s)) where η_t = Σ_k λ_{t,k} * f_k
+                    // dπ_ityp/dλ_{s,k} = π_ityp * (δ_{ityp,s} - π_s) * f_k
+                    if (ntyp > 1) {
+                        for (int t = 0; t < ntyp - 1; t++) {  // Types 2, 3, ... (t+1 in 1-indexed)
+                            for (int k = 0; k < nfac; k++) {
+                                int param_idx = GetTypeLoadingIndex(t, k);
+                                // ityp is 0-based (0 = type 1, 1 = type 2, etc.)
+                                // t is 0-based index for types with loadings (0 = type 2, etc.)
+                                // dπ_ityp/dη_{t+1} = π_ityp * (δ_{ityp,t+1} - π_{t+1})
+                                double dpi_dlambda = type_probs[ityp] *
+                                    ((ityp == t + 1 ? 1.0 : 0.0) - type_probs[t + 1]) * fac_val[k];
+                                type_weighted_grad[param_idx] += dpi_dlambda * prob_this_type;
+                            }
+                        }
+
+                        // Additional gradient for factor variance through type probabilities
+                        // dπ_t/dσ²_k = dπ_t/df_k * df_k/dσ²_k
+                        // where df_k/dσ²_k = x_q / (sqrt(2) * σ_k)
+                        // and dπ_t/df_k = Σ_s π_t * (δ_{t,s} - π_s) * λ_{s,k}
+                        for (int k = 0; k < nfac; k++) {
+                            double sigma_k = std::sqrt(factor_var[k]);
+                            double x_node_k = quad_nodes[facint[k]];
+                            double df_dsigma2 = x_node_k / (sqrt_2 * sigma_k);
+
+                            // Compute dπ_t/df_k = Σ_s π_t * (δ_{t,s} - π_s) * λ_{s,k}
+                            double dpi_df_k = 0.0;
+                            for (int s = 0; s < ntyp - 1; s++) {
+                                int lambda_idx = GetTypeLoadingIndex(s, k);
+                                double lambda_sk = param[lambda_idx];
+                                double delta_ts = (ityp == s + 1) ? 1.0 : 0.0;
+                                dpi_df_k += type_probs[ityp] * (delta_ts - type_probs[s + 1]) * lambda_sk;
+                            }
+
+                            // Add (dπ_t/dσ²_k) * L_t to factor variance gradient
+                            type_weighted_grad[k] += dpi_df_k * df_dsigma2 * prob_this_type;
+                        }
                     }
                 }
 
-                // ===== STEP 9: Accumulate Hessians =====
-                if (iflag == 3 && modHess.size() > 0) {
-                    int nDimModHess = nfac + param_model_count[imod];
-
-                    if (fac_corr && nfac == 2) {
-                        // ===== Correlated 2-factor Hessian =====
-                        // Cholesky: f1 = σ1*z1, f2 = ρ*σ2*z1 + σ2*√(1-ρ²)*z2
-                        double sigma1 = std::sqrt(factor_var[0]);
-                        double sigma2 = std::sqrt(factor_var[1]);
-                        double z1 = quad_nodes[facint[0]];
-                        double z2 = quad_nodes[facint[1]];
-
-                        // Precompute derivatives for chain rule
-                        // df1/dσ1² = z1/(2σ1), df1/dσ2² = 0, df1/dρ = 0
-                        double df1_dsigma1sq = z1 / (2.0 * sigma1);
-
-                        // df2/dσ1² = 0
-                        // df2/dσ2² = (ρ*z1 + √(1-ρ²)*z2)/(2σ2)
-                        // df2/dρ = σ2*(z1 - ρ*z2/√(1-ρ²))
-                        double df2_dsigma2sq = (rho * z1 + sqrt_1_minus_rho2 * z2) / (2.0 * sigma2);
-                        double df2_drho = sigma2 * (z1 - rho * z2 / sqrt_1_minus_rho2);
-
-                        // Second derivatives for factor 2 w.r.t. rho
-                        // d²f2/dρ² = -σ2*z2 / (1-ρ²)^{3/2}
-                        double d2f2_drho2 = -sigma2 * z2 / (sqrt_1_minus_rho2 * sqrt_1_minus_rho2 * sqrt_1_minus_rho2);
-
-                        // d²f2/dρdσ2² = (z1 - ρ*z2/√(1-ρ²)) / (2σ2)
-                        double d2f2_drho_dsigma2sq = (z1 - rho * z2 / sqrt_1_minus_rho2) / (2.0 * sigma2);
-
-                        // Get model second derivatives d²L/df_i df_j
-                        double d2L_df1df1 = modHess[0 * nDimModHess + 0];
-                        double d2L_df1df2 = modHess[0 * nDimModHess + 1];
-                        double d2L_df2df2 = modHess[1 * nDimModHess + 1];
-
-                        // Get model first derivatives dL/df_i
-                        double dL_df1 = modEval[1];
-                        double dL_df2 = modEval[2];
-
-                        // === d²L/d(σ1²)² ===
-                        // = d²L/df1² * (df1/dσ1²)² + dL/df1 * d²f1/d(σ1²)²
-                        double d2f1_dsigma1sq_sq = -z1 / (4.0 * sigma1 * sigma1 * sigma1);
-                        hessilk[0 * nparam + 0] += d2L_df1df1 * df1_dsigma1sq * df1_dsigma1sq
-                                                  + dL_df1 * d2f1_dsigma1sq_sq;
-
-                        // === d²L/d(σ1²)d(σ2²) ===
-                        // = d²L/df1df2 * (df1/dσ1²) * (df2/dσ2²)
-                        hessilk[0 * nparam + 1] += d2L_df1df2 * df1_dsigma1sq * df2_dsigma2sq;
-
-                        // === d²L/d(σ1²)dρ ===
-                        // = d²L/df1df2 * (df1/dσ1²) * (df2/dρ)
-                        hessilk[0 * nparam + 2] += d2L_df1df2 * df1_dsigma1sq * df2_drho;
-
-                        // === d²L/d(σ2²)² ===
-                        // = d²L/df2² * (df2/dσ2²)² + dL/df2 * d²f2/d(σ2²)²
-                        double d2f2_dsigma2sq_sq = -(rho * z1 + sqrt_1_minus_rho2 * z2) / (4.0 * sigma2 * sigma2 * sigma2);
-                        hessilk[1 * nparam + 1] += d2L_df2df2 * df2_dsigma2sq * df2_dsigma2sq
-                                                  + dL_df2 * d2f2_dsigma2sq_sq;
-
-                        // === d²L/d(σ2²)dρ ===
-                        // = d²L/df2² * (df2/dσ2²) * (df2/dρ) + dL/df2 * d²f2/d(σ2²)dρ
-                        hessilk[1 * nparam + 2] += d2L_df2df2 * df2_dsigma2sq * df2_drho
-                                                  + dL_df2 * d2f2_drho_dsigma2sq;
-
-                        // === d²L/dρ² ===
-                        // = d²L/df2² * (df2/dρ)² + dL/df2 * d²f2/dρ²
-                        hessilk[2 * nparam + 2] += d2L_df2df2 * df2_drho * df2_drho
-                                                  + dL_df2 * d2f2_drho2;
-
-                        // === Cross terms with model parameters ===
-                        for (int iparam = 0; iparam < param_model_count[imod]; iparam++) {
-                            int param_idx = firstpar + iparam;
-                            // d²L/df_i d(model_param) from modHess
-                            double d2L_df1_dparam = modHess[0 * nDimModHess + (nfac + iparam)];
-                            double d2L_df2_dparam = modHess[1 * nDimModHess + (nfac + iparam)];
-
-                            // d²L/d(σ1²)d(param) = d²L/df1dparam * df1/dσ1²
-                            hessilk[0 * nparam + param_idx] += d2L_df1_dparam * df1_dsigma1sq;
-
-                            // d²L/d(σ2²)d(param) = d²L/df2dparam * df2/dσ2²
-                            hessilk[1 * nparam + param_idx] += d2L_df2_dparam * df2_dsigma2sq;
-
-                            // d²L/dρd(param) = d²L/df2dparam * df2/dρ
-                            hessilk[2 * nparam + param_idx] += d2L_df2_dparam * df2_drho;
+                if (iflag == 3) {
+                    // ===== STEP 9c: Hessian for model parameters (original formula) =====
+                    // d²L_t/dθdφ = L_t * [d²(log L_t)/dθdφ + d(log L_t)/dθ * d(log L_t)/dφ]
+                    // Weighted by π_t: contribution to d²L_mix/dθdφ is π_t * d²L_t/dθdφ
+                    for (int i = 0; i < nparam; i++) {
+                        for (int j = i; j < nparam; j++) {
+                            int idx = i * nparam + j;
+                            // Accumulate Hessian weighted by type probability
+                            type_weighted_hess[idx] += type_prob * prob_this_type *
+                                (hess_this_type[idx] + grad_this_type[i] * grad_this_type[j]);
                         }
+                    }
 
-                        // === Model parameter cross-terms ===
-                        for (int i = 0; i < param_model_count[imod]; i++) {
-                            for (int j = i; j < param_model_count[imod]; j++) {
-                                int modhess_idx = (nfac + i) * nDimModHess + (nfac + j);
-                                int full_i = firstpar + i;
-                                int full_j = firstpar + j;
-                                hessilk[full_i * nparam + full_j] += modHess[modhess_idx];
-                            }
-                        }
-                    } else {
-                        // ===== Independent factors Hessian (original code) =====
-                        // Model Hessian contribution (with chain rule for factor variances)
-                        for (int i = 0; i < nDimModHess; i++) {
-                            for (int j = i; j < nDimModHess; j++) {
-                                int modhess_idx = i * nDimModHess + j;
-                                int full_i = (i < nfac) ? i : (firstpar + i - nfac);
-                                int full_j = (j < nfac) ? j : (firstpar + j - nfac);
-                                int full_idx = full_i * nparam + full_j;
+                    // ===== STEP 9d: Additional Hessian terms for type model loadings =====
+                    // The mixture L_mix = Σ_t π_t * L_t depends on type loadings through π_t
+                    // d²L_mix/dθdφ = Σ_t [d²π_t/dθdφ * L_t + dπ_t/dθ * dL_t/dφ + dπ_t/dφ * dL_t/dθ + π_t * d²L_t/dθdφ]
+                    // The last term is already handled above.
+                    // For type loading λ_{s,k}: dπ_t/dλ = π_t * (δ_{t,s} - π_s) * f_k
+                    // For model parameters: dπ_t/dθ = 0
+                    if (ntyp > 1) {
+                        // 1. Second derivative terms: d²π_t/dλdλ * L_t
+                        // d²π_t/dη_s dη_r = π_t * (δ_{t,s} - π_s) * (δ_{t,r} - π_r) - π_t * π_s * (δ_{s,r} - π_r)
+                        for (int s = 0; s < ntyp - 1; s++) {
+                            for (int r = s; r < ntyp - 1; r++) {  // r >= s for upper triangle
+                                double delta_ts = (ityp == s + 1) ? 1.0 : 0.0;
+                                double delta_tr = (ityp == r + 1) ? 1.0 : 0.0;
+                                double delta_sr = (s == r) ? 1.0 : 0.0;
 
-                                // Chain rule: d²L/dσᵢ²dσⱼ² = d²L/dfᵢdfⱼ * (dfᵢ/dσᵢ²) * (dfⱼ/dσⱼ²)
-                                // where f = sigma * x + mean
-                                // df/d(sigma^2) = x/(2σ)
-                                double chain_factor = 1.0;
+                                double d2pi_deta = type_probs[ityp] * (delta_ts - type_probs[s + 1])
+                                                                    * (delta_tr - type_probs[r + 1])
+                                                 - type_probs[ityp] * type_probs[s + 1]
+                                                                    * (delta_sr - type_probs[r + 1]);
 
-                                if (i < nfac) {
-                                    // i is a factor variance parameter
-                                    double sigma_i = std::sqrt(factor_var[i]);
-                                    double x_node_i = quad_nodes[facint[i]];
-                                    chain_factor *= x_node_i / (2.0 * sigma_i);
-                                }
+                                for (int k = 0; k < nfac; k++) {
+                                    for (int l = (s == r ? k : 0); l < nfac; l++) {
+                                        int param_idx_sk = GetTypeLoadingIndex(s, k);
+                                        int param_idx_rl = GetTypeLoadingIndex(r, l);
 
-                                if (j < nfac) {
-                                    // j is a factor variance parameter
-                                    double sigma_j = std::sqrt(factor_var[j]);
-                                    double x_node_j = quad_nodes[facint[j]];
-                                    chain_factor *= x_node_j / (2.0 * sigma_j);
-                                }
+                                        int pi = std::min(param_idx_sk, param_idx_rl);
+                                        int pj = std::max(param_idx_sk, param_idx_rl);
+                                        int idx = pi * nparam + pj;
 
-                                hessilk[full_idx] += modHess[modhess_idx] * chain_factor;
-
-                                // For diagonal factor variance elements (i == j), add second derivative term
-                                // Full chain rule: d²L/d(σ²)² = d²L/df² * (df/d(σ²))² + dL/df * d²f/d(σ²)²
-                                // The first term is handled above. The second term is:
-                                //   dL/df * d²f/d(σ²)² where d²f/d(σ²)² = -x/(4σ³)
-                                // Note: f = σ*x = √(σ²)*x, so:
-                                //   df/d(σ²) = x/(2σ)
-                                //   d²f/d(σ²)² = d[x/(2σ)]/d(σ²) = -x/(4σ³)
-                                if (i < nfac && i == j) {
-                                    double sigma = std::sqrt(factor_var[i]);
-                                    double x_node = quad_nodes[facint[i]];
-                                    double second_deriv_factor = -x_node / (4.0 * sigma * sigma * sigma);
-                                    // modEval[i + 1] is dL/df_i from this model
-                                    hessilk[full_idx] += modEval[i + 1] * second_deriv_factor;
+                                        double d2pi_dlambda = d2pi_deta * fac_val[k] * fac_val[l];
+                                        type_weighted_hess[idx] += d2pi_dlambda * prob_this_type;
+                                    }
                                 }
                             }
                         }
+
+                        // 2. Cross terms: dπ_t/dλ * dL_t/dθ (for λ × model_param)
+                        // Note: dL_t/dθ = L_t * d(log L_t)/dθ = prob_this_type * grad_this_type
+                        for (int s = 0; s < ntyp - 1; s++) {
+                            for (int k = 0; k < nfac; k++) {
+                                int type_loading_idx = GetTypeLoadingIndex(s, k);
+                                double delta_ts = (ityp == s + 1) ? 1.0 : 0.0;
+                                double dpi_dlambda = type_probs[ityp] * (delta_ts - type_probs[s + 1]) * fac_val[k];
+
+                                // Cross with model parameters (not type loadings)
+                                for (int ipar = 0; ipar < nparam; ipar++) {
+                                    // Skip if ipar is a type loading (handled in section 1)
+                                    if (ntyp_param > 0 && ipar >= type_param_start &&
+                                        ipar < type_param_start + ntyp_param) {
+                                        continue;
+                                    }
+
+                                    int pi = std::min(type_loading_idx, ipar);
+                                    int pj = std::max(type_loading_idx, ipar);
+                                    int idx = pi * nparam + pj;
+
+                                    // dπ_t/dλ * dL_t/dθ = dπ_t/dλ * L_t * d(log L_t)/dθ
+                                    type_weighted_hess[idx] += dpi_dlambda * prob_this_type * grad_this_type[ipar];
+                                }
+                            }
+                        }
+
+                        // 3. Hessian terms for factor variance through type probabilities
+                        // dπ_t/dσ²_k = dπ_t/df_k * df_k/dσ²_k
+                        for (int k = 0; k < nfac; k++) {
+                            double sigma_k = std::sqrt(factor_var[k]);
+                            double x_node_k = quad_nodes[facint[k]];
+                            double df_dsigma2_k = x_node_k / (sqrt_2 * sigma_k);
+
+                            // Compute dπ_t/df_k = Σ_s π_t * (δ_{t,s} - π_s) * λ_{s,k}
+                            double dpi_df_k = 0.0;
+                            for (int s = 0; s < ntyp - 1; s++) {
+                                int lambda_idx = GetTypeLoadingIndex(s, k);
+                                double lambda_sk = param[lambda_idx];
+                                double delta_ts = (ityp == s + 1) ? 1.0 : 0.0;
+                                dpi_df_k += type_probs[ityp] * (delta_ts - type_probs[s + 1]) * lambda_sk;
+                            }
+                            double dpi_dsigma2_k = dpi_df_k * df_dsigma2_k;
+
+                            // 3a. Cross terms: dπ_t/dσ²_k * dL_t/dθ (for σ² × model_param)
+                            for (int ipar = 0; ipar < nparam; ipar++) {
+                                // Skip type loadings (handled separately below)
+                                if (ntyp_param > 0 && ipar >= type_param_start &&
+                                    ipar < type_param_start + ntyp_param) {
+                                    continue;
+                                }
+                                // Skip factor variances (handled in 3b)
+                                if (ipar < nfac) continue;
+
+                                int pi = std::min(k, ipar);
+                                int pj = std::max(k, ipar);
+                                int idx = pi * nparam + pj;
+
+                                // dπ_t/dσ² * dL_t/dθ
+                                type_weighted_hess[idx] += dpi_dsigma2_k * prob_this_type * grad_this_type[ipar];
+                            }
+
+                            // 3b. Cross terms: dπ_t/dσ²_k * dL_t/dσ²_l (for σ²_k × σ²_l)
+                            // Plus second derivative d²π_t/dσ²_k dσ²_l * L_t
+                            for (int l = k; l < nfac; l++) {
+                                double sigma_l = std::sqrt(factor_var[l]);
+                                double x_node_l = quad_nodes[facint[l]];
+                                double df_dsigma2_l = x_node_l / (sqrt_2 * sigma_l);
+
+                                // Compute dπ_t/df_l
+                                double dpi_df_l = 0.0;
+                                for (int s = 0; s < ntyp - 1; s++) {
+                                    int lambda_idx = GetTypeLoadingIndex(s, l);
+                                    double lambda_sl = param[lambda_idx];
+                                    double delta_ts = (ityp == s + 1) ? 1.0 : 0.0;
+                                    dpi_df_l += type_probs[ityp] * (delta_ts - type_probs[s + 1]) * lambda_sl;
+                                }
+                                double dpi_dsigma2_l = dpi_df_l * df_dsigma2_l;
+
+                                int idx = k * nparam + l;
+
+                                // Cross term: dπ_t/dσ²_k * dL_t/dσ²_l + dπ_t/dσ²_l * dL_t/dσ²_k
+                                // Note: dL_t/dσ² = L_t * d(log L_t)/dσ² = prob_this_type * grad_this_type[factor_idx]
+                                if (k == l) {
+                                    // Diagonal: 2 * dπ_t/dσ² * dL_t/dσ² (but we only add once due to symmetry in sum)
+                                    type_weighted_hess[idx] += dpi_dsigma2_k * prob_this_type * grad_this_type[l];
+                                } else {
+                                    // Off-diagonal: add both cross terms
+                                    type_weighted_hess[idx] += dpi_dsigma2_k * prob_this_type * grad_this_type[l];
+                                    type_weighted_hess[idx] += dpi_dsigma2_l * prob_this_type * grad_this_type[k];
+                                }
+
+                                // Second derivative: d²π_t/dσ²_k dσ²_l * L_t
+                                // d²π_t/df_k df_l = Σ_s,r (d²π_t/dη_s dη_r) * λ_{s,k} * λ_{r,l}
+                                double d2pi_df_k_df_l = 0.0;
+                                for (int s = 0; s < ntyp - 1; s++) {
+                                    for (int r = 0; r < ntyp - 1; r++) {
+                                        int lambda_sk_idx = GetTypeLoadingIndex(s, k);
+                                        int lambda_rl_idx = GetTypeLoadingIndex(r, l);
+                                        double lambda_sk = param[lambda_sk_idx];
+                                        double lambda_rl = param[lambda_rl_idx];
+
+                                        double delta_ts = (ityp == s + 1) ? 1.0 : 0.0;
+                                        double delta_tr = (ityp == r + 1) ? 1.0 : 0.0;
+                                        double delta_sr = (s == r) ? 1.0 : 0.0;
+
+                                        double d2pi_deta_s_r = type_probs[ityp] * (delta_ts - type_probs[s + 1])
+                                                                                * (delta_tr - type_probs[r + 1])
+                                                             - type_probs[ityp] * type_probs[s + 1]
+                                                                                * (delta_sr - type_probs[r + 1]);
+                                        d2pi_df_k_df_l += d2pi_deta_s_r * lambda_sk * lambda_rl;
+                                    }
+                                }
+                                double d2pi_dsigma2_k_l = d2pi_df_k_df_l * df_dsigma2_k * df_dsigma2_l;
+                                type_weighted_hess[idx] += d2pi_dsigma2_k_l * prob_this_type;
+                            }
+
+                            // 3c. Cross terms: dπ_t/dσ²_k * dL_t/dλ_{s,l} + d²π_t/dσ²_k dλ_{s,l} * L_t
+                            // (for σ²_k × λ_{s,l})
+                            for (int s = 0; s < ntyp - 1; s++) {
+                                for (int l = 0; l < nfac; l++) {
+                                    int type_loading_idx = GetTypeLoadingIndex(s, l);
+
+                                    // Note: dL_t/dλ = 0 (type-specific likelihoods don't depend on type loadings)
+                                    // So we only need d²π_t/dσ²_k dλ_{s,l} * L_t
+
+                                    // d²π_t/df_k dλ_{s,l} = d²π_t/df_k dη_s * f_l + dπ_t/dη_s * δ_{k,l} * df/dσ² * dσ²/dσ²
+                                    //                     = (d²π_t/dη dη) * λ_{?,k} * f_l + ... (complex)
+                                    // Simpler: d(dπ_t/dλ_{s,l})/dσ²_k = d(π_t * (δ_{t,s} - π_s) * f_l)/dσ²_k
+                                    //        = (dπ_t/dσ²_k) * (δ_{t,s} - π_s) * f_l
+                                    //          + π_t * (-dπ_s/dσ²_k) * f_l
+                                    //          + π_t * (δ_{t,s} - π_s) * df_l/dσ²_k
+
+                                    double delta_ts = (ityp == s + 1) ? 1.0 : 0.0;
+                                    double delta_kl = (k == l) ? 1.0 : 0.0;
+
+                                    // df_l/dσ²_k = 0 if k != l, else x_node_k / (sqrt(2) * σ_k)
+                                    double df_l_dsigma2_k = delta_kl * df_dsigma2_k;
+
+                                    // dπ_s/dσ²_k (for the type s+1)
+                                    double dpi_s_df_k = 0.0;
+                                    for (int r = 0; r < ntyp - 1; r++) {
+                                        int lambda_rk_idx = GetTypeLoadingIndex(r, k);
+                                        double lambda_rk = param[lambda_rk_idx];
+                                        double delta_s1_r1 = (s == r) ? 1.0 : 0.0;
+                                        dpi_s_df_k += type_probs[s + 1] * (delta_s1_r1 - type_probs[r + 1]) * lambda_rk;
+                                    }
+                                    double dpi_s_dsigma2_k = dpi_s_df_k * df_dsigma2_k;
+
+                                    // d²(π_t*(δ_{t,s}-π_s)*f_l)/dσ²_k
+                                    double d2_term = dpi_dsigma2_k * (delta_ts - type_probs[s + 1]) * fac_val[l]
+                                                   - type_probs[ityp] * dpi_s_dsigma2_k * fac_val[l]
+                                                   + type_probs[ityp] * (delta_ts - type_probs[s + 1]) * df_l_dsigma2_k;
+
+                                    int pi = std::min(k, type_loading_idx);
+                                    int pj = std::max(k, type_loading_idx);
+                                    int idx = pi * nparam + pj;
+
+                                    type_weighted_hess[idx] += d2_term * prob_this_type;
+                                }
+                            }
+                        }
+                    }
+                }
+            } // End of type loop
+
+            // Use type-weighted values for the integration point
+            // probilk already contains w_q (quadrature weight), multiply by mixture likelihood
+            probilk *= type_weighted_prob;
+
+            // gradilk needs to be d(log L_mixture)/dθ = (1/L_mixture) * dL_mixture/dθ
+            // type_weighted_grad = dL_mixture/dθ = Σ_t π_t * dL_t/dθ
+            // type_weighted_prob = L_mixture = Σ_t π_t * L_t
+            if (iflag >= 2 && type_weighted_prob > 1e-100) {
+                for (int ipar = 0; ipar < nparam; ipar++) {
+                    gradilk[ipar] = type_weighted_grad[ipar] / type_weighted_prob;
+                }
+            }
+            if (iflag == 3 && type_weighted_prob > 1e-100) {
+                // hessilk needs d²(log L_mixture)/dθ² which involves complex chain rule
+                // For now, convert to log scale: H_log = (1/L)*H - (1/L²)*g*g^T
+                double L = type_weighted_prob;
+                for (int i = 0; i < nparam; i++) {
+                    for (int j = i; j < nparam; j++) {
+                        int idx = i * nparam + j;
+                        hessilk[idx] = type_weighted_hess[idx] / L
+                            - (type_weighted_grad[i] * type_weighted_grad[j]) / (L * L);
                     }
                 }
             }
@@ -470,7 +799,6 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 for (int i = 0; i < nparam; i++) {
                     for (int j = i; j < nparam; j++) {
                         int idx = i * nparam + j;
-                        // Chain rule: d²L/dθ² = prob * (d²f/dθ² + (df/dθ)²)
                         totalhess[idx] += probilk * (hessilk[idx] + gradilk[i] * gradilk[j]);
                     }
                 }
@@ -702,4 +1030,82 @@ void FactorModel::CalcLkhdSingleObs(int iobs,
             }
         }
     }
+}
+
+int FactorModel::GetTypeLoadingIndex(int ityp, int ifac)
+{
+    // Type model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
+    // ityp: 0-based type index (0 = type 2 since type 1 is reference)
+    // ifac: 0-based factor index
+    // Returns: index in parameter vector for lambda_{ityp+2, ifac+1}
+    if (ntyp <= 1 || type_param_start < 0) {
+        return -1;  // No type parameters
+    }
+    return type_param_start + ityp * nfac + ifac;
+}
+
+int FactorModel::GetTypeInterceptIndex(int ityp, int model_idx)
+{
+    // Type-specific intercepts are stored in each model's parameter block
+    // They come after the model's base parameters
+    // ityp: 0-based type index (0 = type 2 since type 1 is reference)
+    // model_idx: 0-based model index
+    //
+    // Note: The actual implementation depends on how model parameters are organized
+    // This returns the index within the model's parameter block
+    // The caller needs to add param_model_start[model_idx] to get the full index
+    if (ntyp <= 1) {
+        return -1;  // No type-specific intercepts
+    }
+    // Type intercepts come after base model parameters
+    // Each model has (ntyp - 1) type-specific intercepts
+    // param_model_count[model_idx] includes these, so we need to find the offset
+    // Base parameters for model = param_model_count[model_idx] - (ntyp - 1)
+    int base_params = param_model_count[model_idx] - (ntyp - 1);
+    return base_params + ityp;
+}
+
+std::vector<double> FactorModel::ComputeTypeProbabilities(const std::vector<double>& fac)
+{
+    // Compute type probabilities using multinomial logit
+    // Type model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
+    //
+    // P(type=1) = 1 / (1 + sum_{t=2}^T exp(sum_k lambda_t_k * f_k))
+    // P(type=t) = exp(sum_k lambda_t_k * f_k) / (1 + sum_{t=2}^T exp(sum_k lambda_t_k * f_k))
+
+    std::vector<double> probs(ntyp);
+
+    if (ntyp == 1) {
+        probs[0] = 1.0;
+        return probs;
+    }
+
+    // Compute log-odds for types 2, 3, ... relative to type 1
+    std::vector<double> log_odds(ntyp - 1);
+    double max_log_odds = 0.0;  // For numerical stability
+
+    for (int t = 0; t < ntyp - 1; t++) {
+        log_odds[t] = 0.0;
+        for (int k = 0; k < nfac; k++) {
+            int param_idx = GetTypeLoadingIndex(t, k);
+            log_odds[t] += param[param_idx] * fac[k];
+        }
+        if (log_odds[t] > max_log_odds) {
+            max_log_odds = log_odds[t];
+        }
+    }
+
+    // Compute denominator with log-sum-exp trick for numerical stability
+    double sum_exp = std::exp(-max_log_odds);  // This is exp(0 - max) for type 1
+    for (int t = 0; t < ntyp - 1; t++) {
+        sum_exp += std::exp(log_odds[t] - max_log_odds);
+    }
+
+    // Compute probabilities
+    probs[0] = std::exp(-max_log_odds) / sum_exp;  // Type 1 (reference)
+    for (int t = 0; t < ntyp - 1; t++) {
+        probs[t + 1] = std::exp(log_odds[t] - max_log_odds) / sum_exp;
+    }
+
+    return probs;
 }

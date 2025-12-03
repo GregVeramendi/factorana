@@ -24,6 +24,10 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
     message("Initializing parameters...")
   }
 
+  # Get n_types from factor model (needed in all code paths)
+  n_types <- model_system$factor$n_types
+  if (is.null(n_types)) n_types <- 1L
+
   # ---- 1. Handle previous_stage if present ----
   if (!is.null(model_system$previous_stage_info)) {
     # Use previous-stage parameter values directly
@@ -47,7 +51,6 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
   } else {
     # Standard initialization: start from scratch
     n_factors <- model_system$factor$n_factors
-    n_types <- model_system$factor$n_types
 
     # Check factor identification
     factor_variance_fixed <- rep(FALSE, n_factors)
@@ -82,6 +85,21 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       # Initialize to 0 (uncorrelated) as a neutral starting point
       init_params <- c(init_params, 0.0)
       param_names <- c(param_names, "factor_corr_1_2")
+    }
+
+    # Add type model parameters if n_types > 1
+    # Type model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
+    # (n_types - 1) * n_factors parameters (type 1 is reference)
+    if (n_types > 1L) {
+      type_loadings <- rep(0.0, (n_types - 1L) * n_factors)
+      type_loading_names <- character(0)
+      for (t in 2:n_types) {
+        for (k in seq_len(n_factors)) {
+          type_loading_names <- c(type_loading_names, paste0("type_", t, "_loading_", k))
+        }
+      }
+      init_params <- c(init_params, type_loadings)
+      param_names <- c(param_names, type_loading_names)
     }
 
     start_comp_idx <- 1
@@ -136,6 +154,16 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       }
       comp_param_names <- c(coef_names, loading_names, paste0(comp$name, "_sigma"))
 
+      # Add type-specific intercepts if n_types > 1
+      # Initialize to small non-zero values to make types distinguishable
+      # (avoids degenerate Hessian at initialization)
+      if (n_types > 1L) {
+        type_intercepts <- 0.1 * (seq_len(n_types - 1L))  # 0.1, 0.2, 0.3, ...
+        type_intercept_names <- paste0(comp$name, "_type_", 2:n_types, "_intercept")
+        comp_params <- c(comp_params, type_intercepts)
+        comp_param_names <- c(comp_param_names, type_intercept_names)
+      }
+
     } else if (comp$model_type == "probit") {
       # Binary probit
       fit <- glm(outcome ~ X - 1, family = binomial(link = "probit"))
@@ -155,6 +183,15 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         loading_names <- paste0(comp$name, "_loading_", free_factor_idx)
       }
       comp_param_names <- c(coef_names, loading_names)
+
+      # Add type-specific intercepts if n_types > 1
+      # Initialize to small non-zero values to make types distinguishable
+      if (n_types > 1L) {
+        type_intercepts <- 0.1 * (seq_len(n_types - 1L))  # 0.1, 0.2, 0.3, ...
+        type_intercept_names <- paste0(comp$name, "_type_", 2:n_types, "_intercept")
+        comp_params <- c(comp_params, type_intercepts)
+        comp_param_names <- c(comp_param_names, type_intercept_names)
+      }
 
     } else if (comp$model_type == "logit") {
       if (comp$num_choices == 2) {
@@ -176,6 +213,15 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
           loading_names <- paste0(comp$name, "_loading_", free_factor_idx)
         }
         comp_param_names <- c(coef_names, loading_names)
+
+        # Add type-specific intercepts if n_types > 1
+        # Initialize to small non-zero values to make types distinguishable
+        if (n_types > 1L) {
+          type_intercepts <- 0.1 * (seq_len(n_types - 1L))  # 0.1, 0.2, 0.3, ...
+          type_intercept_names <- paste0(comp$name, "_type_", 2:n_types, "_intercept")
+          comp_params <- c(comp_params, type_intercepts)
+          comp_param_names <- c(comp_param_names, type_intercept_names)
+        }
 
       } else {
         # Multinomial logit
@@ -212,6 +258,18 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
             loading_names <- paste0(comp$name, "_c", choice, "_loading_", free_factor_idx)
           }
           comp_param_names <- c(comp_param_names, coef_names, loading_names)
+        }
+
+        # Add type-specific intercepts if n_types > 1
+        # For multinomial logit, each non-reference choice gets type-specific intercepts
+        # Initialize to small non-zero values to make types distinguishable
+        if (n_types > 1L) {
+          for (choice in seq_len(comp$num_choices - 1)) {
+            type_intercepts <- 0.1 * (seq_len(n_types - 1L))  # 0.1, 0.2, 0.3, ...
+            type_intercept_names <- paste0(comp$name, "_c", choice, "_type_", 2:n_types, "_intercept")
+            comp_params <- c(comp_params, type_intercepts)
+            comp_param_names <- c(comp_param_names, type_intercept_names)
+          }
         }
       }
 
@@ -321,6 +379,16 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       n_thresholds <- length(thresholds)
       threshold_names <- paste0(comp$name, "_thresh_", seq_len(n_thresholds))
       comp_param_names <- c(coef_names, loading_names, threshold_names)
+
+      # Add type-specific intercepts if n_types > 1
+      # For oprobit, type-specific intercepts shift all thresholds by a constant
+      # Initialize to small non-zero values to make types distinguishable
+      if (n_types > 1L) {
+        type_intercepts <- 0.1 * (seq_len(n_types - 1L))  # 0.1, 0.2, 0.3, ...
+        type_intercept_names <- paste0(comp$name, "_type_", 2:n_types, "_intercept")
+        comp_params <- c(comp_params, type_intercepts)
+        comp_param_names <- c(comp_param_names, type_intercept_names)
+      }
     }
 
     # Add component parameters to overall parameter vector
