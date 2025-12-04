@@ -132,14 +132,23 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
     comp_params <- NULL
     comp_param_names <- NULL
 
+    # Get fixed coefficients list (may be empty)
+    fixed_coefs <- if (!is.null(comp$fixed_coefficients)) comp$fixed_coefficients else list()
+
     if (comp$model_type == "linear") {
       # Linear regression
       fit <- lm(outcome ~ X - 1)  # -1 because intercept is already in covariates
       coefs <- coef(fit)
       sigma <- summary(fit)$sigma
 
+      # Apply any fixed coefficient values
+      coefs <- apply_fixed_coefficients(coefs, comp$covariates, fixed_coefs)
+
       if (verbose) {
-        message(sprintf("  Linear model: %d covariates, sigma = %.4f", length(coefs), sigma))
+        n_fixed <- length(fixed_coefs)
+        msg <- sprintf("  Linear model: %d covariates, sigma = %.4f", length(coefs), sigma)
+        if (n_fixed > 0) msg <- paste0(msg, sprintf(" (%d fixed)", n_fixed))
+        message(msg)
       }
 
       # For multinomial logit with factors, we need parameters per choice
@@ -169,8 +178,14 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       fit <- glm(outcome ~ X - 1, family = binomial(link = "probit"))
       coefs <- coef(fit)
 
+      # Apply any fixed coefficient values
+      coefs <- apply_fixed_coefficients(coefs, comp$covariates, fixed_coefs)
+
       if (verbose) {
-        message(sprintf("  Probit model: %d covariates", length(coefs)))
+        n_fixed <- length(fixed_coefs)
+        msg <- sprintf("  Probit model: %d covariates", length(coefs))
+        if (n_fixed > 0) msg <- paste0(msg, sprintf(" (%d fixed)", n_fixed))
+        message(msg)
       }
 
       comp_params <- c(coefs, rep(0.5, n_free_loadings))
@@ -199,8 +214,14 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         fit <- glm(outcome ~ X - 1, family = binomial(link = "logit"))
         coefs <- coef(fit)
 
+        # Apply any fixed coefficient values
+        coefs <- apply_fixed_coefficients(coefs, comp$covariates, fixed_coefs)
+
         if (verbose) {
-          message(sprintf("  Binary logit: %d covariates", length(coefs)))
+          n_fixed <- length(fixed_coefs)
+          msg <- sprintf("  Binary logit: %d covariates", length(coefs))
+          if (n_fixed > 0) msg <- paste0(msg, sprintf(" (%d fixed)", n_fixed))
+          message(msg)
         }
 
         comp_params <- c(coefs, rep(0.5, n_free_loadings))
@@ -233,7 +254,10 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         coefs_mat <- coef(fit)
 
         if (verbose) {
-          message(sprintf("  Multinomial logit: %d choices, %d covariates", comp$num_choices, ncol(X)))
+          n_fixed <- length(fixed_coefs)
+          msg <- sprintf("  Multinomial logit: %d choices, %d covariates", comp$num_choices, ncol(X))
+          if (n_fixed > 0) msg <- paste0(msg, sprintf(" (%d fixed)", n_fixed))
+          message(msg)
         }
 
         # Flatten parameters: for each choice (except reference), add covariates + loadings
@@ -246,6 +270,9 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
           } else {
             choice_coefs <- coefs_mat[choice, ]
           }
+
+          # Apply any fixed coefficient values for this choice
+          choice_coefs <- apply_fixed_coefficients(choice_coefs, comp$covariates, fixed_coefs, choice = choice)
 
           # Add covariates and loadings
           comp_params <- c(comp_params, choice_coefs, rep(0.5, n_free_loadings))
@@ -360,8 +387,14 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         coefs <- coefs_no_int
       }
 
+      # Apply any fixed coefficient values
+      coefs <- apply_fixed_coefficients(coefs, comp$covariates, fixed_coefs)
+
       if (verbose) {
-        message(sprintf("  Ordered probit: %d covariates, %d thresholds (incremental form)", length(coefs), length(thresholds)))
+        n_fixed <- length(fixed_coefs)
+        msg <- sprintf("  Ordered probit: %d covariates, %d thresholds (incremental form)", length(coefs), length(thresholds))
+        if (n_fixed > 0) msg <- paste0(msg, sprintf(" (%d fixed)", n_fixed))
+        message(msg)
       }
 
       comp_params <- c(coefs, rep(0.5, n_free_loadings), thresholds)
@@ -417,4 +450,37 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
     param_names = param_names,
     factor_variance_fixed = factor_variance_fixed_status
   )
+}
+
+
+#' Apply fixed coefficient values to estimated coefficients
+#'
+#' Helper function to replace estimated coefficients with fixed values
+#' where specified in the component's fixed_coefficients list.
+#'
+#' @param coefs Named numeric vector of estimated coefficients
+#' @param covariates Character vector of covariate names (in order)
+#' @param fixed_coefficients List of fixed coefficient constraints from component
+#' @param choice Integer or NULL. For multinomial logit, which choice these coefs belong to.
+#' @return Numeric vector with fixed values applied
+#' @keywords internal
+apply_fixed_coefficients <- function(coefs, covariates, fixed_coefficients, choice = NULL) {
+  if (length(fixed_coefficients) == 0) {
+    return(coefs)
+  }
+
+  for (fc in fixed_coefficients) {
+    # Check if this constraint applies (matching choice for mlogit)
+    if (!identical(fc$choice, choice)) {
+      next
+    }
+
+    # Find the position of this covariate
+    pos <- match(fc$covariate, covariates)
+    if (!is.na(pos)) {
+      coefs[pos] <- fc$value
+    }
+  }
+
+  return(coefs)
 }

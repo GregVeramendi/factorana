@@ -12,13 +12,16 @@ RCPP_MODULE(factorana_module) {
     // Use function pointers to disambiguate overloaded methods
     void (FactorModel::*setData1)(const std::vector<double>&) = &FactorModel::SetData;
     void (FactorModel::*setData2)(const Eigen::MatrixXd&) = &FactorModel::SetData;
+    void (FactorModel::*setConstraints1)(const std::vector<bool>&) = &FactorModel::SetParameterConstraints;
+    void (FactorModel::*setConstraints2)(const std::vector<bool>&, const std::vector<double>&) = &FactorModel::SetParameterConstraints;
 
     class_<FactorModel>("FactorModel")
         .constructor<int, int, int, int, int, bool, int>("Create a FactorModel")
         .method("SetDataVector", setData1)
         .method("SetDataMatrix", setData2)
         .method("SetQuadrature", &FactorModel::SetQuadrature)
-        .method("SetParameterConstraints", &FactorModel::SetParameterConstraints)
+        .method("SetParameterConstraints", setConstraints1)
+        .method("SetParameterConstraintsWithValues", setConstraints2)
         .method("CalcLogLikelihood", &FactorModel::CalcLogLikelihood)
         .method("GetNObs", &FactorModel::GetNObs)
         .method("GetNParam", &FactorModel::GetNParam)
@@ -47,10 +50,12 @@ List gauss_hermite_quadrature(int n) {
 //' @param model_system R model_system object
 //' @param data Data frame or matrix with all variables
 //' @param n_quad Number of quadrature points
+//' @param init_params Optional initial parameter vector (used to set fixed parameter values)
 //' @return External pointer to FactorModel object
 //' @export
 // [[Rcpp::export]]
-SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8) {
+SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
+                                  Nullable<NumericVector> init_params = R_NilValue) {
 
     // Extract factor model information
     List factor_model = model_system["factor"];
@@ -247,10 +252,128 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8) {
         fm->AddModel(model, n_params);
     }
 
-    // Set parameter constraints (all free for now)
+    // Build parameter constraints based on fixed_coefficients from each component
     int total_params = fm->GetNParam();
-    std::vector<bool> param_fixed(total_params, false);
-    fm->SetParameterConstraints(param_fixed);
+    std::vector<bool> param_fixed_vec(total_params, false);
+
+    // Track parameter position as we go through components
+    // Start after factor variance parameters (and correlation/type params)
+    int param_offset = n_fac;  // Factor variances
+
+    // Add correlation parameter offset if present
+    if (correlation && n_fac == 2) {
+        param_offset += 1;  // One correlation parameter for 2-factor model
+    }
+
+    // Add type model parameters offset if n_types > 1
+    if (n_types > 1) {
+        param_offset += (n_types - 1) * n_fac;  // Type loadings
+    }
+
+    // Process each component's fixed coefficients
+    for (int i = 0; i < components.size(); i++) {
+        List comp = components[i];
+
+        std::string model_type_str = as<std::string>(comp["model_type"]);
+        std::vector<std::string> covariate_names;
+        if (!Rf_isNull(comp["covariates"])) {
+            covariate_names = as<std::vector<std::string>>(comp["covariates"]);
+        }
+
+        int n_choice = comp.containsElementNamed("num_choices") ?
+                      int(comp["num_choices"]) : 2;
+
+        // Count free loadings for this component
+        int n_free_loadings = 0;
+        if (comp.containsElementNamed("loading_normalization")) {
+            SEXP norm_sexp = comp["loading_normalization"];
+            if (!Rf_isNull(norm_sexp)) {
+                NumericVector norm_vec = as<NumericVector>(norm_sexp);
+                for (int j = 0; j < norm_vec.size(); j++) {
+                    if (NumericVector::is_na(norm_vec[j])) {
+                        n_free_loadings++;
+                    }
+                }
+            }
+        } else {
+            n_free_loadings = n_fac;
+        }
+
+        // Check for fixed_coefficients in this component
+        if (comp.containsElementNamed("fixed_coefficients") &&
+            !Rf_isNull(comp["fixed_coefficients"])) {
+            List fixed_coefs = comp["fixed_coefficients"];
+
+            for (int fc_idx = 0; fc_idx < fixed_coefs.size(); fc_idx++) {
+                List fc = fixed_coefs[fc_idx];
+                std::string cov_name = as<std::string>(fc["covariate"]);
+
+                // Find covariate position
+                int cov_pos = -1;
+                for (int k = 0; k < covariate_names.size(); k++) {
+                    if (covariate_names[k] == cov_name) {
+                        cov_pos = k;
+                        break;
+                    }
+                }
+
+                if (cov_pos >= 0) {
+                    // Determine parameter index based on model type and choice
+                    int param_idx;
+
+                    if (model_type_str == "logit" && n_choice > 2) {
+                        // Multinomial logit: check if choice is specified
+                        int choice = 1;  // Default to first non-reference choice
+                        if (fc.containsElementNamed("choice") && !Rf_isNull(fc["choice"])) {
+                            choice = as<int>(fc["choice"]);
+                        }
+                        // Each choice has: covariates + loadings
+                        int params_per_choice = covariate_names.size() + n_free_loadings;
+                        param_idx = param_offset + (choice - 1) * params_per_choice + cov_pos;
+                    } else {
+                        // Binary/linear/probit/oprobit: coefficients come first
+                        param_idx = param_offset + cov_pos;
+                    }
+
+                    // Mark as fixed
+                    if (param_idx < total_params) {
+                        param_fixed_vec[param_idx] = true;
+                    }
+                }
+            }
+        }
+
+        // Advance param_offset for next component
+        // Calculate n_params for this component (same logic as above)
+        int n_params_comp;
+        ModelType mtype;
+        if (model_type_str == "linear") mtype = ModelType::LINEAR;
+        else if (model_type_str == "probit") mtype = ModelType::PROBIT;
+        else if (model_type_str == "logit") mtype = ModelType::LOGIT;
+        else mtype = ModelType::OPROBIT;
+
+        if (mtype == ModelType::LOGIT && n_choice > 2) {
+            n_params_comp = (n_choice - 1) * (covariate_names.size() + n_free_loadings);
+            if (n_types > 1) n_params_comp += (n_choice - 1) * (n_types - 1);
+        } else if (mtype == ModelType::OPROBIT) {
+            n_params_comp = covariate_names.size() + n_free_loadings + (n_choice - 1);
+            if (n_types > 1) n_params_comp += (n_types - 1);
+        } else {
+            n_params_comp = covariate_names.size() + n_free_loadings;
+            if (mtype == ModelType::LINEAR) n_params_comp += 1;
+            if (n_types > 1) n_params_comp += (n_types - 1);
+        }
+        param_offset += n_params_comp;
+    }
+
+    // Set parameter constraints with optional initial values
+    if (init_params.isNotNull()) {
+        NumericVector ip(init_params);
+        std::vector<double> init_params_vec = as<std::vector<double>>(ip);
+        fm->SetParameterConstraints(param_fixed_vec, init_params_vec);
+    } else {
+        fm->SetParameterConstraints(param_fixed_vec);
+    }
 
     return fm;
 }
@@ -321,9 +444,45 @@ List get_parameter_info_cpp(SEXP fm_ptr) {
 
     return List::create(
         Named("n_obs") = fm->GetNObs(),
-        Named("n_param_total") = fm->GetNParam(),
+        Named("n_param") = fm->GetNParam(),
         Named("n_param_free") = fm->GetNParamFree()
     );
+}
+
+//' Extract free parameters from full parameter vector
+//'
+//' Given a full parameter vector (including fixed parameters),
+//' extract only the free parameters based on the model's fixed parameter mask.
+//'
+//' @param fm_ptr External pointer to FactorModel object
+//' @param full_params Full parameter vector (size n_param)
+//' @return Vector of free parameters only (size n_param_free)
+//' @export
+// [[Rcpp::export]]
+NumericVector extract_free_params_cpp(SEXP fm_ptr, NumericVector full_params) {
+    Rcpp::XPtr<FactorModel> fm(fm_ptr);
+
+    int n_param = fm->GetNParam();
+    int n_param_free = fm->GetNParamFree();
+
+    if (full_params.size() != n_param) {
+        Rcpp::stop("Full params size (%d) doesn't match expected (%d)",
+                   full_params.size(), n_param);
+    }
+
+    // Get the fixed parameter mask
+    const std::vector<bool>& param_fixed = fm->GetParamFixed();
+
+    // Extract free parameters
+    NumericVector free_params(n_param_free);
+    int ifree = 0;
+    for (int i = 0; i < n_param; i++) {
+        if (!param_fixed[i]) {
+            free_params[ifree++] = full_params[i];
+        }
+    }
+
+    return free_params;
 }
 
 //' Evaluate log-likelihood for a single observation at given factor values

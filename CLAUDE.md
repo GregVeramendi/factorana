@@ -46,6 +46,7 @@ The R package is self-contained and handles the entire estimation workflow:
 - `R/define_factor_model.R` - Defines k factors with flexible loading normalization
 - `R/define_model_component.R` - Specifies individual measurement equations (linear/probit/logit/oprobit)
 - `R/define_model_system.R` - Bundles components and shared factor model
+- `R/fix_coefficient.R` - Fix regression coefficients to specified values
 - `R/estimate_model.R` - Initializes parameters for all components (existing method)
 - `R/optimize_model.R` - **NEW**: Rcpp-based optimization with parallelization
 - `R/write_files.R` - Exports CSV files for legacy C++ backend
@@ -85,6 +86,7 @@ The R package is self-contained and handles the entire estimation workflow:
 - Parallel computation support via doParallel
 - Standard error computation from Hessian
 - Hessian aggregation in parallel mode
+- Fixed coefficients: ability to fix regression coefficients to specified values via `fix_coefficient()`
 
 ⏳ **TODO (Future Development)**:
 - Mixture models (nmix > 1)
@@ -166,7 +168,7 @@ estimate_and_write(ms, fm, control, data)
 
 Run all automated tests:
 ```r
-devtools::test()  # 118 tests covering all model types and configurations
+devtools::test()  # 254 tests covering all model types and configurations
 ```
 
 Run specific test subsets:
@@ -183,6 +185,7 @@ The test suite validates:
 - Parameter recovery from simulated data
 - Parallelization correctness
 - Two-stage/sequential estimation
+- Fixed coefficient constraints
 
 ### Modifying C++ Likelihood Code
 
@@ -258,6 +261,38 @@ Factor loadings require normalization for identification. In R API:
 This is critical for multi-factor models to be identifiable.
 
 ## Common Workflows
+
+### Fixing Regression Coefficients
+
+Use `fix_coefficient()` to constrain regression coefficients to specific values during estimation:
+
+```r
+# Define a model component
+mc <- define_model_component(
+  name = "Y", data = dat, outcome = "Y", factor = fm,
+  covariates = c("intercept", "x1", "x2"), model_type = "linear",
+  loading_normalization = NA_real_, evaluation_indicator = "eval"
+)
+
+# Fix intercept to 0
+mc <- fix_coefficient(mc, "intercept", 0)
+
+# Fix x1 coefficient to a specific value
+mc <- fix_coefficient(mc, "x1", 1.5)
+
+# For multinomial logit with multiple choices, specify which choice (1-indexed, excluding reference)
+mc_mlogit <- fix_coefficient(mc_mlogit, "x1", 0, choice = 1)  # Fix x1 for first non-reference choice
+
+# Build model system and estimate as usual
+ms <- define_model_system(components = list(mc), factor = fm)
+result <- estimate_model_rcpp(ms, dat, control)
+```
+
+**Notes:**
+- Fixed coefficients are held constant during optimization
+- Only regression coefficients (betas) can be fixed, not sigma, thresholds, or loadings
+- Multiple coefficients can be fixed by chaining `fix_coefficient()` calls
+- The function validates that the covariate exists in the component
 
 ### Adding a New Model Type to Rcpp Backend
 

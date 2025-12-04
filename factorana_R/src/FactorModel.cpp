@@ -93,6 +93,28 @@ void FactorModel::SetParameterConstraints(const std::vector<bool>& fixed)
     }
 }
 
+void FactorModel::SetParameterConstraints(const std::vector<bool>& fixed,
+                                          const std::vector<double>& fixed_values)
+{
+    if (fixed.size() != nparam) {
+        throw std::runtime_error("Parameter constraint size mismatch");
+    }
+    if (fixed_values.size() != nparam) {
+        throw std::runtime_error("Fixed values size mismatch");
+    }
+
+    param_fixed = fixed;
+    nparam_free = 0;
+    for (bool f : fixed) {
+        if (!f) nparam_free++;
+    }
+
+    // Initialize parameter vector with provided values
+    // For free parameters, these are defaults (will be overwritten by optimizer)
+    // For fixed parameters, these values are used permanently
+    param = fixed_values;
+}
+
 void FactorModel::MapFreeToFull(const std::vector<double>& free_params)
 {
     if (free_params.size() != nparam_free) {

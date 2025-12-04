@@ -23,15 +23,16 @@ BEGIN_RCPP
 END_RCPP
 }
 // initialize_factor_model_cpp
-SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad);
-RcppExport SEXP _factorana_initialize_factor_model_cpp(SEXP model_systemSEXP, SEXP dataSEXP, SEXP n_quadSEXP) {
+SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad, Nullable<NumericVector> init_params);
+RcppExport SEXP _factorana_initialize_factor_model_cpp(SEXP model_systemSEXP, SEXP dataSEXP, SEXP n_quadSEXP, SEXP init_paramsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< List >::type model_system(model_systemSEXP);
     Rcpp::traits::input_parameter< SEXP >::type data(dataSEXP);
     Rcpp::traits::input_parameter< int >::type n_quad(n_quadSEXP);
-    rcpp_result_gen = Rcpp::wrap(initialize_factor_model_cpp(model_system, data, n_quad));
+    Rcpp::traits::input_parameter< Nullable<NumericVector> >::type init_params(init_paramsSEXP);
+    rcpp_result_gen = Rcpp::wrap(initialize_factor_model_cpp(model_system, data, n_quad, init_params));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -72,6 +73,18 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// extract_free_params_cpp
+NumericVector extract_free_params_cpp(SEXP fm_ptr, NumericVector full_params);
+RcppExport SEXP _factorana_extract_free_params_cpp(SEXP fm_ptrSEXP, SEXP full_paramsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type fm_ptr(fm_ptrSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type full_params(full_paramsSEXP);
+    rcpp_result_gen = Rcpp::wrap(extract_free_params_cpp(fm_ptr, full_params));
+    return rcpp_result_gen;
+END_RCPP
+}
 // evaluate_factorscore_likelihood_cpp
 List evaluate_factorscore_likelihood_cpp(SEXP fm_ptr, int iobs, NumericVector factor_values, NumericVector model_params, bool compute_gradient, bool compute_hessian);
 RcppExport SEXP _factorana_evaluate_factorscore_likelihood_cpp(SEXP fm_ptrSEXP, SEXP iobsSEXP, SEXP factor_valuesSEXP, SEXP model_paramsSEXP, SEXP compute_gradientSEXP, SEXP compute_hessianSEXP) {
@@ -93,10 +106,11 @@ RcppExport SEXP _rcpp_module_boot_factorana_module();
 
 static const R_CallMethodDef CallEntries[] = {
     {"_factorana_gauss_hermite_quadrature", (DL_FUNC) &_factorana_gauss_hermite_quadrature, 1},
-    {"_factorana_initialize_factor_model_cpp", (DL_FUNC) &_factorana_initialize_factor_model_cpp, 3},
+    {"_factorana_initialize_factor_model_cpp", (DL_FUNC) &_factorana_initialize_factor_model_cpp, 4},
     {"_factorana_evaluate_likelihood_cpp", (DL_FUNC) &_factorana_evaluate_likelihood_cpp, 4},
     {"_factorana_evaluate_loglik_only_cpp", (DL_FUNC) &_factorana_evaluate_loglik_only_cpp, 2},
     {"_factorana_get_parameter_info_cpp", (DL_FUNC) &_factorana_get_parameter_info_cpp, 1},
+    {"_factorana_extract_free_params_cpp", (DL_FUNC) &_factorana_extract_free_params_cpp, 2},
     {"_factorana_evaluate_factorscore_likelihood_cpp", (DL_FUNC) &_factorana_evaluate_factorscore_likelihood_cpp, 6},
     {"_rcpp_module_boot_factorana_module", (DL_FUNC) &_rcpp_module_boot_factorana_module, 0},
     {NULL, NULL, 0}

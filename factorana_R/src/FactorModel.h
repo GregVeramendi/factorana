@@ -63,6 +63,10 @@ public:
     // Set which parameters are fixed
     void SetParameterConstraints(const std::vector<bool>& fixed);
 
+    // Set which parameters are fixed and their values
+    void SetParameterConstraints(const std::vector<bool>& fixed,
+                                 const std::vector<double>& fixed_values);
+
     // Main likelihood calculation
     // Computes likelihood, gradient, and Hessian for current parameter values
     //
@@ -109,6 +113,7 @@ public:
     int GetNFac() const { return nfac; }
     int GetNParam() const { return nparam; }
     int GetNParamFree() const { return nparam_free; }
+    const std::vector<bool>& GetParamFixed() const { return param_fixed; }
 
 private:
     // Helper: Map free parameters to full parameter vector

@@ -255,7 +255,8 @@ define_model_component <- function(name,
     nparam_model = nparam_model,
     k = k,
     loading = rep(NA_real_, k),
-    loading_normalization = loading_normalization
+    loading_normalization = loading_normalization,
+    fixed_coefficients = list()  # List of fixed coefficient constraints
   )
 
   class(out) <- "model_component"

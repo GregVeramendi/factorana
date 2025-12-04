@@ -15,10 +15,11 @@ gauss_hermite_quadrature <- function(n) {
 #' @param model_system R model_system object
 #' @param data Data frame or matrix with all variables
 #' @param n_quad Number of quadrature points
+#' @param init_params Optional initial parameter vector (used to set fixed parameter values)
 #' @return External pointer to FactorModel object
 #' @export
-initialize_factor_model_cpp <- function(model_system, data, n_quad = 8L) {
-    .Call(`_factorana_initialize_factor_model_cpp`, model_system, data, n_quad)
+initialize_factor_model_cpp <- function(model_system, data, n_quad = 8L, init_params = NULL) {
+    .Call(`_factorana_initialize_factor_model_cpp`, model_system, data, n_quad, init_params)
 }
 
 #' Evaluate log-likelihood for given parameters
@@ -50,6 +51,19 @@ evaluate_loglik_only_cpp <- function(fm_ptr, params) {
 #' @export
 get_parameter_info_cpp <- function(fm_ptr) {
     .Call(`_factorana_get_parameter_info_cpp`, fm_ptr)
+}
+
+#' Extract free parameters from full parameter vector
+#'
+#' Given a full parameter vector (including fixed parameters),
+#' extract only the free parameters based on the model's fixed parameter mask.
+#'
+#' @param fm_ptr External pointer to FactorModel object
+#' @param full_params Full parameter vector (size n_param)
+#' @return Vector of free parameters only (size n_param_free)
+#' @export
+extract_free_params_cpp <- function(fm_ptr, full_params) {
+    .Call(`_factorana_extract_free_params_cpp`, fm_ptr, full_params)
 }
 
 #' Evaluate log-likelihood for a single observation at given factor values

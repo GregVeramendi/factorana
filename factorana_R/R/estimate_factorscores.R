@@ -119,9 +119,9 @@ estimate_factorscores_serial <- function(model_system, data_mat, estimates,
   # Get parameter info
   param_info <- get_parameter_info_cpp(fm_ptr)
 
-  if (length(estimates) != param_info$n_param_total) {
+  if (length(estimates) != param_info$n_param) {
     stop(sprintf("Parameter count mismatch: result has %d, C++ expects %d",
-                 length(estimates), param_info$n_param_total))
+                 length(estimates), param_info$n_param))
   }
 
   # Initialize results storage

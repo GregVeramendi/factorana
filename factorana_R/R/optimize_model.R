@@ -471,6 +471,20 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     data_splits <- list(1:nrow(data_mat))
   }
 
+  # Get initial parameters FIRST (needed for fixed coefficient values in C++)
+  factor_variance_fixed <- NULL
+  full_init_params <- NULL  # Full parameter vector (including fixed)
+
+  if (is.null(init_params)) {
+    # Use smart initialization based on separate component estimation
+    init_result <- initialize_parameters(model_system, data, verbose = verbose)
+    full_init_params <- init_result$init_params
+    factor_variance_fixed <- init_result$factor_variance_fixed
+  } else {
+    # User provided init_params (assumed to be full vector)
+    full_init_params <- init_params
+  }
+
   # Initialize factor models on each worker
   if (verbose) message("Initializing C++ likelihood evaluators...")
 
@@ -479,7 +493,7 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
 
   if (!is.null(cl)) {
     # Export necessary objects to workers
-    parallel::clusterExport(cl, c("model_system", "data_mat", "n_quad", "data_splits"),
+    parallel::clusterExport(cl, c("model_system", "data_mat", "n_quad", "data_splits", "full_init_params"),
                            envir = environment())
     parallel::clusterEvalQ(cl, {
       library(factorana)
@@ -496,36 +510,51 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       worker_id <- .self_id
       idx <- data_splits[[worker_id]]
       data_subset <- data_mat[idx, , drop = FALSE]
-      .fm_ptr <- initialize_factor_model_cpp(model_system, data_subset, n_quad)
+      .fm_ptr <- initialize_factor_model_cpp(model_system, data_subset, n_quad, full_init_params)
     })
 
     fm_ptrs <- NULL  # Not used; pointers stored on workers
   } else {
     # Single worker initialization
-    fm_ptrs <- list(initialize_factor_model_cpp(model_system, data_mat, n_quad))
+    fm_ptrs <- list(initialize_factor_model_cpp(model_system, data_mat, n_quad, full_init_params))
   }
 
-  # Get initial parameters if not provided
-  factor_variance_fixed <- NULL  # Will be set if we do initialization
-  if (is.null(init_params)) {
-    # Use smart initialization based on separate component estimation
-    init_result <- initialize_parameters(model_system, data, verbose = verbose)
-    init_params <- init_result$init_params
-    factor_variance_fixed <- init_result$factor_variance_fixed
+  # Get parameter count and extract free parameters
+  if (!is.null(cl)) {
+    # For parallel case, get from first worker
+    param_info <- parallel::clusterEvalQ(cl, get_parameter_info_cpp(.fm_ptr))[[1]]
+  } else {
+    param_info <- get_parameter_info_cpp(fm_ptrs[[1]])
+  }
+  n_params_free <- param_info$n_param_free
+  n_params_total <- param_info$n_param
 
-    # Get parameter count from C++ object
+  # Extract free parameters from full init_params for the optimizer
+  if (n_params_free == n_params_total) {
+    # No fixed params - use full vector
+    init_params <- full_init_params
+  } else {
+    # Some params are fixed - extract only free ones
     if (!is.null(cl)) {
-      # For parallel case, get from first worker
-      param_info <- parallel::clusterEvalQ(cl, get_parameter_info_cpp(.fm_ptr))[[1]]
+      # For parallel case, use first worker to extract
+      parallel::clusterExport(cl, "full_init_params", envir = environment())
+      init_params <- parallel::clusterEvalQ(cl, {
+        extract_free_params_cpp(.fm_ptr, full_init_params)
+      })[[1]]
     } else {
-      param_info <- get_parameter_info_cpp(fm_ptrs[[1]])
+      init_params <- extract_free_params_cpp(fm_ptrs[[1]], full_init_params)
     }
-    n_params <- param_info$n_param_free
 
-    if (length(init_params) != n_params) {
-      stop(sprintf("Parameter initialization returned %d parameters but C++ expects %d",
-                   length(init_params), n_params))
+    if (verbose) {
+      n_fixed <- n_params_total - n_params_free
+      message(sprintf("  %d parameters total, %d fixed, %d free", n_params_total, n_fixed, n_params_free))
     }
+  }
+
+  # Validate parameter count
+  if (length(init_params) != n_params_free) {
+    stop(sprintf("Parameter initialization returned %d free parameters but C++ expects %d",
+                 length(init_params), n_params_free))
   }
 
   # Build parameter metadata (names, types, etc.)
