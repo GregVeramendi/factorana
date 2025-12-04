@@ -525,12 +525,12 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
                         // Additional gradient for factor variance through type probabilities
                         // dπ_t/dσ²_k = dπ_t/df_k * df_k/dσ²_k
-                        // where df_k/dσ²_k = x_q / (sqrt(2) * σ_k)
+                        // where df_k/dσ²_k = x_q / (2 * σ_k) since f = σ * x and dσ/dσ² = 1/(2σ)
                         // and dπ_t/df_k = Σ_s π_t * (δ_{t,s} - π_s) * λ_{s,k}
                         for (int k = 0; k < nfac; k++) {
                             double sigma_k = std::sqrt(factor_var[k]);
                             double x_node_k = quad_nodes[facint[k]];
-                            double df_dsigma2 = x_node_k / (sqrt_2 * sigma_k);
+                            double df_dsigma2 = x_node_k / (2.0 * sigma_k);
 
                             // Compute dπ_t/df_k = Σ_s π_t * (δ_{t,s} - π_s) * λ_{s,k}
                             double dpi_df_k = 0.0;
@@ -624,10 +624,11 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
                         // 3. Hessian terms for factor variance through type probabilities
                         // dπ_t/dσ²_k = dπ_t/df_k * df_k/dσ²_k
+                        // where df/dσ² = x_q / (2σ) since f = σ * x and dσ/dσ² = 1/(2σ)
                         for (int k = 0; k < nfac; k++) {
                             double sigma_k = std::sqrt(factor_var[k]);
                             double x_node_k = quad_nodes[facint[k]];
-                            double df_dsigma2_k = x_node_k / (sqrt_2 * sigma_k);
+                            double df_dsigma2_k = x_node_k / (2.0 * sigma_k);
 
                             // Compute dπ_t/df_k = Σ_s π_t * (δ_{t,s} - π_s) * λ_{s,k}
                             double dpi_df_k = 0.0;
@@ -662,7 +663,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                             for (int l = k; l < nfac; l++) {
                                 double sigma_l = std::sqrt(factor_var[l]);
                                 double x_node_l = quad_nodes[facint[l]];
-                                double df_dsigma2_l = x_node_l / (sqrt_2 * sigma_l);
+                                double df_dsigma2_l = x_node_l / (2.0 * sigma_l);
 
                                 // Compute dπ_t/df_l
                                 double dpi_df_l = 0.0;
@@ -731,7 +732,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                     double delta_ts = (ityp == s + 1) ? 1.0 : 0.0;
                                     double delta_kl = (k == l) ? 1.0 : 0.0;
 
-                                    // df_l/dσ²_k = 0 if k != l, else x_node_k / (sqrt(2) * σ_k)
+                                    // df_l/dσ²_k = 0 if k != l, else x_node_k / (2 * σ_k)
                                     double df_l_dsigma2_k = delta_kl * df_dsigma2_k;
 
                                     // dπ_s/dσ²_k (for the type s+1)

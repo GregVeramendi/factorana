@@ -387,12 +387,17 @@ void Model::EvalProbit(double expres, double obsSign, const std::vector<double>&
     }
 
     // Add cross-derivative terms for Hessian
+    // d²(log L)/df_k dλ_k = (-Z*λ - λ²) * λ_k * f_k + λ * s
+    // where λ = φ/Φ (Mills ratio), s = obsSign
+    // The first term comes from the multiplicative Hessian structure,
+    // but we need to add the second term λ * s = (pdf/cdf) * obsSign
     if (flag == 3) {
+        double lambda_val = pdf / cdf;  // Mills ratio
         ifreefac = 0;
         for (int i = 0; i < numfac; i++) {
             if (facnorm.size() == 0 || facnorm[i] <= -9998) {
                 int index = numfac + nregressors + ifreefac;
-                hess[i*npar + index] += obsSign;
+                hess[i*npar + index] += lambda_val * obsSign;
                 ifreefac++;
             }
         }
