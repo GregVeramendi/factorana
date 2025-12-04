@@ -870,18 +870,29 @@ print(result$estimates)
 - Complex models with many components
 - Multiple local optimizations (e.g., testing initial values)
 
-**Typical speedups** (n=10,000 Roy model):
+**Typical speedups** (n=10,000 Roy model on laptop):
 - 2 cores: 1.7x speedup (85% efficiency)
 - 4 cores: 3.0x speedup (75% efficiency)
-- 8 cores: Diminishing returns due to overhead
+
+**Note**: Speedup depends on several factors:
+- CPU architecture and speed
+- System load (other processes running)
+- Number of observations and model complexity
+- Memory bandwidth
+
+For complex models with large datasets, higher core counts can be beneficial. Running with 32 cores on a server has been effective for very complex models.
 
 **Best practices**:
 ```r
-# Use 1 core for small datasets
+# Use 1 core for small datasets or quick tests
 ctrl <- define_estimation_control(num_cores = 1)
 
-# Use multiple cores for large datasets
-n_cores <- min(4, parallel::detectCores() - 1)  # Leave 1 core free
+# On a shared server, be considerate of other users
+n_cores <- min(8, parallel::detectCores() / 2)
+ctrl <- define_estimation_control(num_cores = n_cores)
+
+# On a dedicated machine with no other users, use all available cores
+n_cores <- parallel::detectCores()
 ctrl <- define_estimation_control(num_cores = n_cores)
 
 # Enable parallel mode
