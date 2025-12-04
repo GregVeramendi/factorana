@@ -1,4 +1,13 @@
 *.o
+*.o.tmp
+*.so
 *~
 *#
 .Rproj.user
+
+# Local-only documentation (not tracked in git)
+factorana_R/CLAUDE.md
+factorana_R/ISSUES.md
+factorana_R/OPTIMIZER_CONVERGENCE.md
+factorana_R/PLAN_*.md
+factorana_R/tests/testthat/test_logs/

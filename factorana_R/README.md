@@ -58,6 +58,7 @@ devtools::install_github("GregVeramendi/factorana",
 ## Features
 - Define any number of latent factors with flexible loading normalization
 - Specify model components independently (linear, logit, probit, oprobit)
+- Fix regression coefficients to specific values via `fix_coefficient()`
 - Multi-stage/sequential estimation with fixed early-stage parameters
 - Automatically initialize parameters using component-by-component estimation
 - Fast C++ backend with R-level parallelization for large datasets
@@ -444,6 +445,30 @@ More detailed explanations within functions.
 - `model_type`: `"linear"`, `"probit"`, `"logit"`, `"oprobit"`.
 - `loading_normalization`: Normalization for factor loadings (NA or NA_real_ = free, numeric = fixed)
 - Returns a `"model_component"` with pointers to `factor`.
+
+### `fix_coefficient(component, covariate, value, choice = NULL)`
+- Fixes a regression coefficient to a specified value during estimation.
+- **Parameters**:
+  - `component`: Model component from `define_model_component()`
+  - `covariate`: Name of the covariate whose coefficient should be fixed
+  - `value`: Numeric value to fix the coefficient to
+  - `choice`: For multinomial logit only - which choice (1-indexed, excluding reference)
+- **Returns**: Modified model component with the constraint added
+- **Example**:
+  ```r
+  # Fix intercept to 0
+  mc <- fix_coefficient(mc, "intercept", 0)
+
+  # Fix x1 coefficient to a specific value
+  mc <- fix_coefficient(mc, "x1", 1.5)
+
+  # For multinomial logit: fix x1 for first non-reference choice
+  mc <- fix_coefficient(mc, "x1", 0, choice = 1)
+  ```
+- **Notes**:
+  - Multiple coefficients can be fixed by chaining calls
+  - Only regression coefficients (betas) can be fixed, not sigma, thresholds, or loadings
+  - Fixed coefficients are held constant during optimization
 
 ### `define_model_system(components, factor, previous_stage = NULL)`
 - Bundles components and the shared factor model into a `"model_system"`.

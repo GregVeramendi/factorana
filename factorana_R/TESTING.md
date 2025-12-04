@@ -58,11 +58,15 @@ source("dev/validation/check_gradient_at_true.R")
 
 ### Automated Tests (`tests/testthat/`)
 - **test-components.R** - Model component functionality
+- **test-correlated-factors.R** - Correlated two-factor models
+- **test-factorscores.R** - Factor score estimation (MAP estimates)
+- **test-fixed-coefficients.R** - Fixed coefficient constraints
 - **test-parallelization.R** - Parallel estimation correctness and performance
 - **test-parameter-constraints.R** - Parameter constraint system
 - **test-quadrature.R** - Gauss-Hermite quadrature accuracy with three-measurement system
 - **test-systematic-suite.R** - Systematic model validation
 - **test-two-stage.R** - Multi-stage/sequential estimation with Roy model
+- **test-types.R** - Latent types models
 - **test-test-01-validation.R** - Basic validation
 - **test-test-02-conditioning.R** - Conditioning tests
 - **test-test-03-modeltypes.R** - Different model types (linear, probit, ordered probit)
@@ -161,11 +165,15 @@ test_that("feature works correctly", {
 ## Test Results
 
 Current test suite status:
-- **Automated tests**: 12 test files covering core functionality
-  - **118 tests passing**, 0 failures, 0 warnings (as of last run)
+- **Automated tests**: 17 test files covering core functionality
+  - **254 tests passing**, 0 failures, 0 warnings (as of last run)
   - Includes parallelization test with Roy model (n=10,000)
   - Includes two-stage estimation test with Roy model
   - Quadrature test uses three-measurement system for proper identification
+  - Fixed coefficient constraints tests
+  - Factor score estimation tests
+  - Correlated factor model tests
+  - Latent types model tests
 - **Manual tests**: 26 comprehensive tests
   - Model types: linear, probit, logit, oprobit
   - Complex models: Roy selection, multiple components
