@@ -124,6 +124,17 @@ test_that("Parallelization: Roy model with 1, 2, and 4 cores produces identical 
     cat("Parameters:", length(true_params), "\n\n")
   }
 
+  # Warm-up run to trigger JIT compilation (not timed)
+  # This ensures fair timing comparisons by pre-compiling R bytecode
+  if (VERBOSE) cat("Warm-up run (JIT compilation)...\n")
+  ctrl_warmup <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+  suppressMessages(estimate_model_rcpp(
+    model_system = ms, data = dat, init_params = NULL,
+    control = ctrl_warmup, parallel = FALSE, optimizer = "nlminb",
+    verbose = FALSE
+  ))
+  if (VERBOSE) cat("Warm-up complete.\n\n")
+
   # Test with 1, 2, and 4 cores
   test_cores <- c(1, 2, 4)
   results <- list()
@@ -151,7 +162,11 @@ test_that("Parallelization: Roy model with 1, 2, and 4 cores produces identical 
     if (VERBOSE) {
       cat(sprintf("  Time: %.2f seconds\n", timings[i]))
       cat(sprintf("  Log-likelihood: %.4f\n", results[[i]]$loglik))
-      cat(sprintf("  Convergence: %d\n\n", results[[i]]$convergence))
+      cat(sprintf("  Convergence: %d\n", results[[i]]$convergence))
+      if (!is.null(results[[i]]$iterations)) {
+        cat(sprintf("  Iterations: %d\n", results[[i]]$iterations))
+      }
+      cat("\n")
     }
   }
 

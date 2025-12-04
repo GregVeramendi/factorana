@@ -734,7 +734,9 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       return(list(
         par = opt_result$par,
         value = opt_result$objective,
-        convergence = opt_result$convergence
+        convergence = opt_result$convergence,
+        iterations = opt_result$iterations,
+        evaluations = opt_result$evaluations
       ))
 
     } else if (optimizer == "trust") {
@@ -1034,6 +1036,8 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     loglik = loglik,
     convergence = convergence,
     n_restarts = n_restarts_used,
+    iterations = opt_result$iterations,
+    evaluations = opt_result$evaluations,
     model_system = model_system,
     optimizer = optimizer
   )
