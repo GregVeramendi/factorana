@@ -101,21 +101,21 @@ define_model_component <- function(name,
   # model_type, intercept, num_choices, nrank
   model_type <- match.arg(model_type)
 
-  #intercept: is it a boolean?
+  # intercept: is it a boolean?
   if (!is.logical(intercept) || length(intercept) != 1L) {
     stop("`intercept` must be a single TRUE/FALSE.")
   }
 
-  #num_choices: is it within X? (speciy X later)
+  # num_choices: basic validation (detailed validation against data comes later)
   num_choices <- as.integer(num_choices)
-  if (model_type == "probit" && num_choices != 2L) {
-    stop("For binary ", model_type, ", `num_choices` must be 2.")
+  if (is.na(num_choices) || num_choices < 2L) {
+    stop("`num_choices` must be an integer >= 2.")
   }
-  if (model_type == "logit" && num_choices < 2L) {
-    stop("For logit, `num_choices` must be >= 2.")
+  if (num_choices > 50L) {
+    stop("`num_choices` cannot exceed 50. Found: ", num_choices)
   }
 
-  #n_rank: is it either NULL or > 1
+  # n_rank: is it either NULL or > 1
   if (!is.null(nrank)) {
     nrank <- as.integer(nrank)
     if (!is.finite(nrank) || nrank < 1L) stop("`nrank` must be a positive integer when provided.")
@@ -186,14 +186,84 @@ define_model_component <- function(name,
   }
 
 
-  # ---- 9. Model-type specific validity checks ----
-  y <- data[[outcome]]
-  if (model_type == "probit" && !all(y %in% c(0, 1))) {
-    stop("Outcome for probit must be coded 0/1.")
+  # ---- 8b. Multicollinearity check ----
+  # Build design matrix and check for rank deficiency and near-collinearity
+  # Note: Users must provide their own intercept column in covariates if needed.
+  # The `intercept` parameter is metadata for the model, not auto-added to design matrix.
+
+  if (length(covariates) > 0) {
+    # Build design matrix from user-provided covariates only
+    X <- as.matrix(data[idx, covariates, drop = FALSE])
+    col_names <- covariates
+
+    expected_rank <- ncol(X)
+    actual_rank <- qr(X)$rank
+
+    if (actual_rank < expected_rank) {
+      # Find which columns are linearly dependent
+      # Use QR decomposition with pivoting to identify problematic columns
+      qr_result <- qr(X, LAPACK = TRUE)
+      pivot_order <- qr_result$pivot
+      dependent_cols <- col_names[pivot_order[(actual_rank + 1):expected_rank]]
+
+      stop("Design matrix is rank deficient (multicollinearity detected).\n",
+           "  Expected rank: ", expected_rank, ", Actual rank: ", actual_rank, "\n",
+           "  Problematic column(s): ", paste(dependent_cols, collapse = ", "), "\n",
+           "  Remove or combine collinear variables.")
+    }
+
+    # Check for near-collinearity using condition number of X'X
+    # Condition number > 30 is often considered problematic
+    # Condition number > 1000 indicates severe multicollinearity
+    if (nrow(X) > ncol(X)) {
+      XtX <- crossprod(X)
+      eigenvalues <- eigen(XtX, symmetric = TRUE, only.values = TRUE)$values
+
+      # Condition number is ratio of largest to smallest eigenvalue
+      # Use absolute values to handle numerical precision issues
+      eigenvalues <- abs(eigenvalues)
+      if (min(eigenvalues) > .Machine$double.eps) {
+        condition_number <- max(eigenvalues) / min(eigenvalues)
+
+        if (condition_number > 1e12) {
+          warning("Severe multicollinearity detected (condition number = ",
+                  format(condition_number, scientific = TRUE, digits = 2), ").\n",
+                  "  This may cause numerical instability in estimation.\n",
+                  "  Consider removing or combining highly correlated variables.")
+        } else if (condition_number > 1e6) {
+          warning("Moderate multicollinearity detected (condition number = ",
+                  format(condition_number, scientific = TRUE, digits = 2), ").\n",
+                  "  Standard errors may be inflated.")
+        }
+      }
+    }
   }
 
-  if (model_type == "logit" && !all(y %in% 0:(max(y)))) {
-    stop("Outcome for logit must be integers 0,...,K.")
+
+  # ---- 9. Model-type specific validity checks ----
+  y <- data[[outcome]]
+
+  if (model_type == "probit") {
+    if (!all(y %in% c(0, 1))) {
+      stop("Outcome for probit must be coded 0/1.")
+    }
+    if (num_choices != 2L) {
+      stop("Probit model requires num_choices = 2. Found: ", num_choices)
+    }
+  }
+
+  if (model_type == "logit") {
+    unique_vals <- sort(unique(na.omit(y)))
+    if (!all(unique_vals %in% 0:(max(unique_vals)))) {
+      stop("Outcome for logit must be integers 0,...,K.")
+    }
+    n_unique <- length(unique_vals)
+    if (n_unique > 50L) {
+      stop("Logit outcome has too many unique values (", n_unique, "). Maximum supported: 50.")
+    }
+    if (num_choices != n_unique) {
+      stop("num_choices (", num_choices, ") does not match detected unique outcome values (", n_unique, ").")
+    }
   }
 
 
@@ -217,6 +287,12 @@ define_model_component <- function(name,
     }
     n_cats <- length(levels(y_sub))
     if (n_cats < 2L) stop("oprobit needs at least 2 ordered categories.")
+    if (n_cats > 50L) {
+      stop("Ordered probit outcome has too many categories (", n_cats, "). Maximum supported: 50.")
+    }
+    if (num_choices != n_cats) {
+      stop("num_choices (", num_choices, ") does not match detected outcome categories (", n_cats, ").")
+    }
     # (Optional) replace in data to keep consistency downstream:
     data[[outcome]] <- y_sub
   }

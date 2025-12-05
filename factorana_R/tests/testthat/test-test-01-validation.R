@@ -34,3 +34,36 @@ test_that("define_model_component validates inputs", {
     regexp = "evaluation_indicator"
   )
 })
+
+test_that("define_model_component detects multicollinearity", {
+  set.seed(123)
+  n <- 100
+
+  # Create data with perfectly collinear columns
+  dat <- data.frame(
+    Y = rnorm(n),
+    X1 = rnorm(n),
+    X2 = rnorm(n),
+    eval = 1
+  )
+  # X3 is a linear combination of X1 and X2
+  dat$X3 <- 2 * dat$X1 + 3 * dat$X2
+
+  fm <- define_factor_model(n_factors = 1, n_types = 1)
+
+  # Should error on perfect collinearity
+  expect_error(
+    define_model_component("Y", dat, "Y", fm,
+                           covariates = c("X1", "X2", "X3"),
+                           model_type = "linear",
+                           evaluation_indicator = "eval"),
+    regexp = "rank deficient|multicollinearity"
+  )
+
+  # Should work without the collinear column
+  mc <- define_model_component("Y", dat, "Y", fm,
+                               covariates = c("X1", "X2"),
+                               model_type = "linear",
+                               evaluation_indicator = "eval")
+  expect_s3_class(mc, "model_component")
+})

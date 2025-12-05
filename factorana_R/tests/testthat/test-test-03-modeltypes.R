@@ -24,7 +24,8 @@ test_that("ordered probit returns J-1 ordered cutpoints", {
   mc <- define_model_component("Y_ord", dat, "Yord", fm,
                                evaluation_indicator = "eval_y1",
                                covariates = "X1",
-                               model_type = "oprobit")
+                               model_type = "oprobit",
+                               num_choices = 4)
 
   # Create model system for initialization
   ms <- define_model_system(components = list(mc), factor = fm)
@@ -55,6 +56,7 @@ test_that("oprobit works with multi-factor loading normalization", {
     evaluation_indicator = "eval_y1",
     covariates = "X1",
     model_type = "oprobit",
+    num_choices = 4,
     loading_normalization = c(NA, 1)
   )
 
