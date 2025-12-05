@@ -33,8 +33,9 @@ define_model_component <- function(name,
   # ---- 1. Basic argument checks ----
   # Confirm data types and presence of required columns/objects
 
-  #is the data a dataframe?
-  if (!is.data.frame(data)) stop("`data` must be a data.frame.")
+  # Accept data.frame, data.table, or tibble - convert to plain data.frame for consistent behavior
+  if (!is.data.frame(data)) stop("`data` must be a data.frame (or data.table/tibble).")
+  data <- as.data.frame(data)
 
   #Does 'outcome' exist in data.frame
   if (!(outcome %in% names(data))) stop("outcome must be a column in data.frame")
@@ -123,7 +124,7 @@ define_model_component <- function(name,
 
 
   # ---- 6. Evaluation subset conditioning ----
-  # Restrict data to rows where evaluation_indicator = TRUE/1 and non-missing outcomes
+  # Restrict data to rows where evaluation_indicator = TRUE/1
 
   idx <- rep(TRUE, nrow(data))  # default: check all rows
   if (!is.null(evaluation_indicator)) {
@@ -170,7 +171,7 @@ define_model_component <- function(name,
   }
 
   # ---- 8. Missing value checks ----
-  # Ensure no NAs remain in the outcome or covariates within the evaluation subset
+  # Error if NAs found in outcome or covariates (users must handle missing data explicitly)
 
   if (anyNA(data[[outcome]][idx])) {
     stop("Missing values in outcome variable within evaluation subset.")
