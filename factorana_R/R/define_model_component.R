@@ -318,6 +318,9 @@ define_model_component <- function(name,
     if (model_type == "linear") nparam_model <- nparam_model + 1  # Add sigma
   }
 
+  # Number of observations used (after evaluation indicator filtering)
+  n_obs <- nrow(data)
+
   out <- list(
     name = name,
     data = as.data.frame(data),
@@ -330,6 +333,7 @@ define_model_component <- function(name,
     num_choices = num_choices,
     nrank = nrank,
     nparam_model = nparam_model,
+    n_obs = n_obs,
     k = k,
     loading = rep(NA_real_, k),
     loading_normalization = loading_normalization,
@@ -389,6 +393,7 @@ print.model_component <- function(x, ...) {
     cat("Covariates:               (none - factor-only model)\n")
   }
 
+  cat("Observations:            ", x$n_obs, "\n")
   cat("Total parameters:        ", x$nparam_model, "\n")
   invisible(x)
 }

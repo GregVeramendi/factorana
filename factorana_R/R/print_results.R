@@ -670,10 +670,25 @@ components_table <- function(result, digits = 3, show_se = TRUE, stars = TRUE) {
     }
   }
 
+  # Collect n_obs for each component from model_system
+  n_obs_vec <- integer(length(components))
+  names(n_obs_vec) <- components
+  for (i in seq_along(components)) {
+    comp_name <- components[i]
+    # Find matching component in model_system
+    for (comp in result$model_system$components) {
+      if (comp$name == comp_name) {
+        n_obs_vec[i] <- comp$n_obs
+        break
+      }
+    }
+  }
+
   # Add factor variance info as separate section
   factor_params <- param_df[param_df$component == "Factor Model", ]
   attr(result_df, "factor_params") <- factor_params
   attr(result_df, "components") <- components
+  attr(result_df, "n_obs") <- n_obs_vec
   attr(result_df, "show_se") <- show_se
   attr(result_df, "loglik") <- result$loglik
   attr(result_df, "digits") <- digits
@@ -692,6 +707,7 @@ components_table <- function(result, digits = 3, show_se = TRUE, stars = TRUE) {
 print.components_table <- function(x, ...) {
   components <- attr(x, "components")
   factor_params <- attr(x, "factor_params")
+  n_obs <- attr(x, "n_obs")
   show_se <- attr(x, "show_se")
   digits <- attr(x, "digits")
   loglik <- attr(x, "loglik")
@@ -750,9 +766,13 @@ print.components_table <- function(x, ...) {
     }
   }
 
-  # Print log-likelihood
+  # Print n_obs row
   cat("\n")
   cat(paste(rep("-", 15 + n_cols * (col_width + 1)), collapse = ""), "\n")
+  row_fmt <- paste0("%-15s", paste(rep(sprintf(" %%%ds", col_width), n_cols), collapse = ""), "\n")
+  cat(do.call(sprintf, c(list(row_fmt, "N"), as.list(as.character(n_obs)))))
+
+  # Print log-likelihood
   cat(sprintf("Log-likelihood: %.2f\n", loglik))
   cat("\n")
   if (show_se) {
@@ -786,6 +806,7 @@ components_to_latex <- function(result, digits = 3, file = NULL, caption = NULL,
   tbl <- components_table(result, digits = digits, show_se = TRUE, stars = stars)
   components <- attr(tbl, "components")
   factor_params <- attr(tbl, "factor_params")
+  n_obs <- attr(tbl, "n_obs")
   loglik <- attr(tbl, "loglik")
   n_cols <- length(components)
 
@@ -865,12 +886,16 @@ components_to_latex <- function(result, digits = 3, file = NULL, caption = NULL,
     }
   }
 
-  # Log-likelihood row
+  # N and Log-likelihood rows
   if (booktabs) {
     lines <- c(lines, "\\midrule")
   } else {
     lines <- c(lines, "\\hline")
   }
+
+  # N row (observations per component)
+  n_row <- paste(c("N", as.character(n_obs)), collapse = " & ")
+  lines <- c(lines, paste0(n_row, " \\\\"))
 
   loglik_row <- paste(c("Log-likelihood", sprintf("%.2f", loglik),
                         rep("", n_cols - 1)), collapse = " & ")
