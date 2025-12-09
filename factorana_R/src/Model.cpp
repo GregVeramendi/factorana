@@ -7,13 +7,28 @@
 Model::Model(ModelType type, int outcome, int missing,
              const std::vector<int>& regs, int nfac, int ntyp,
              const std::vector<double>& fnorm,
-             int nchoice, int nrank, bool params_fixed)
+             int nchoice, int nrank, bool params_fixed,
+             FactorSpec fspec)
     : modtype(type), outcome_idx(outcome), missing_idx(missing),
       regressors(regs), numfac(nfac), numtyp(ntyp),
       facnorm(fnorm), numchoice(nchoice), numrank(nrank),
-      ignore(false), all_params_fixed(params_fixed)
+      ignore(false), all_params_fixed(params_fixed),
+      factor_spec(fspec)
 {
     nregressors = regressors.size();
+
+    // Compute number of quadratic and interaction loadings based on factor_spec
+    if (factor_spec == FactorSpec::QUADRATIC || factor_spec == FactorSpec::FULL) {
+        n_quadratic_loadings = numfac;
+    } else {
+        n_quadratic_loadings = 0;
+    }
+
+    if ((factor_spec == FactorSpec::INTERACTIONS || factor_spec == FactorSpec::FULL) && numfac >= 2) {
+        n_interaction_loadings = numfac * (numfac - 1) / 2;
+    } else {
+        n_interaction_loadings = 0;
+    }
 }
 
 void Model::Eval(int iobs_offset, const std::vector<double>& data,
@@ -39,14 +54,15 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
     // Determine size of gradient vector
     if (flag >= 2) {
         // Layout: 1 (likelihood) + numfac (d/dtheta for factor variances) +
-        //         nregressors (d/dbeta) + ifreefac (d/dalpha for free loadings) +
+        //         nregressors (d/dbeta) + ifreefac (d/dalpha for free linear loadings) +
+        //         n_quadratic_loadings (d/dalpha_quad) + n_interaction_loadings (d/dalpha_inter) +
         //         model-specific parameters
-        int ngrad = 1 + numfac + nregressors + ifreefac;
+        int ngrad = 1 + numfac + nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings;
 
         // Model-specific parameters
         if (modtype == ModelType::LINEAR) ngrad += 1;  // sigma
         if (modtype == ModelType::LOGIT && numchoice > 2) {
-            ngrad = 1 + numfac + (numchoice-1)*(nregressors + ifreefac);
+            ngrad = 1 + numfac + (numchoice-1)*(nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings);
         }
         if (modtype == ModelType::OPROBIT) ngrad += (numchoice - 1);  // thresholds
 
@@ -74,7 +90,7 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
 
     for (int ichoice = 0; ichoice < numlogitchoice - 1; ichoice++) {
         int ifree_local = 0;
-        int nparamchoice = nregressors + ifreefac;
+        int nparamchoice = nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings;
 
         // Add regressor terms
         for (int i = 0; i < nregressors; i++) {
@@ -104,6 +120,28 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
                 }
             }
         }
+
+        // Add quadratic factor terms: sum(lambda_quad_k * f_k^2)
+        if (n_quadratic_loadings > 0) {
+            int quad_start = nregressors + ifreefac;
+            for (int k = 0; k < numfac; k++) {
+                double fk_sq = fac[k] * fac[k];
+                expres[ichoice] += param[firstpar + ichoice*nparamchoice + quad_start + k] * fk_sq;
+            }
+        }
+
+        // Add interaction factor terms: sum(lambda_inter_jk * f_j * f_k) for j < k
+        if (n_interaction_loadings > 0) {
+            int inter_start = nregressors + ifreefac + n_quadratic_loadings;
+            int inter_idx = 0;
+            for (int j = 0; j < numfac - 1; j++) {
+                for (int k = j + 1; k < numfac; k++) {
+                    double fj_fk = fac[j] * fac[k];
+                    expres[ichoice] += param[firstpar + ichoice*nparamchoice + inter_start + inter_idx] * fj_fk;
+                    inter_idx++;
+                }
+            }
+        }
     }
 
     // Add type-specific intercept to linear predictor(s)
@@ -116,7 +154,7 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
     if (modtype == ModelType::LINEAR) {
         double Z = 0.0;
         if (outcome_idx > -1) Z = data[iobs_offset + outcome_idx] - expres[0];
-        double sigma = std::fabs(param[firstpar + nregressors + ifreefac]);
+        double sigma = std::fabs(param[firstpar + nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings]);
         EvalLinear(Z, sigma, fac, param, firstpar, modEval, hess, flag, data, iobs_offset);
     }
     else if (modtype == ModelType::PROBIT) {
@@ -151,7 +189,7 @@ void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
     }
     if (facnorm.size() == 0) ifreefac = numfac + numtyp*(outcome_idx != -2);
 
-    int npar = numfac + nregressors + ifreefac + 1; // +1 for sigma
+    int npar = numfac + nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings + 1; // +1 for sigma
 
     // Initialize Hessian if needed
     if (flag == 3) {
@@ -245,12 +283,64 @@ void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
         }
     }
 
+    // Gradients w.r.t. quadratic factor loadings (lambda_quad_k)
+    // d(logL)/d(lambda_quad_k) = Z * f_k^2 / sigma^2
+    if (n_quadratic_loadings > 0) {
+        int quad_grad_start = 1 + numfac + nregressors + ifreefac;
+        for (int k = 0; k < numfac; k++) {
+            double fk_sq = fac[k] * fac[k];
+            modEval[quad_grad_start + k] = Z * fk_sq / sigma2;
+
+            if (flag == 3) {
+                int index = numfac + nregressors + ifreefac + k;
+                for (int j = index; j < npar; j++)
+                    hess[index*npar + j] *= fk_sq;
+                for (int j = 0; j <= index; j++)
+                    hess[j*npar + index] *= fk_sq;
+
+                // Cross-derivative d^2(logL)/(d(theta_k) d(lambda_quad_k)) = 2 * f_k * lambda_quad_k / sigma^2
+                // The factor variance gradient uses chain rule with lambda_quad * 2 * f
+                // Adding to existing Hessian structure (d(theta_k)/d(lambda_quad_k) cross term)
+                double lambda_quad_k = param[firstpar + nregressors + ifreefac + k];
+                hess[k*npar + index] += 2.0 * fac[k] * Z / sigma2;
+            }
+        }
+    }
+
+    // Gradients w.r.t. interaction factor loadings (lambda_inter_jk) for j < k
+    // d(logL)/d(lambda_inter_jk) = Z * f_j * f_k / sigma^2
+    if (n_interaction_loadings > 0) {
+        int inter_grad_start = 1 + numfac + nregressors + ifreefac + n_quadratic_loadings;
+        int inter_idx = 0;
+        for (int j = 0; j < numfac - 1; j++) {
+            for (int k = j + 1; k < numfac; k++) {
+                double fj_fk = fac[j] * fac[k];
+                modEval[inter_grad_start + inter_idx] = Z * fj_fk / sigma2;
+
+                if (flag == 3) {
+                    int index = numfac + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                    for (int jj = index; jj < npar; jj++)
+                        hess[index*npar + jj] *= fj_fk;
+                    for (int jj = 0; jj <= index; jj++)
+                        hess[jj*npar + index] *= fj_fk;
+
+                    // Cross-derivatives d^2(logL)/(d(theta) d(lambda_inter))
+                    double lambda_inter = param[firstpar + nregressors + ifreefac + n_quadratic_loadings + inter_idx];
+                    hess[j*npar + index] += fac[k] * Z / sigma2;  // d(theta_j)/d(lambda_inter_jk)
+                    hess[k*npar + index] += fac[j] * Z / sigma2;  // d(theta_k)/d(lambda_inter_jk)
+                }
+                inter_idx++;
+            }
+        }
+    }
+
     // Gradient w.r.t. sigma
-    modEval[1 + numfac + nregressors + ifreefac] = (Z*Z / sigma - sigma) / sigma2;
+    int sigma_grad_idx = 1 + numfac + nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings;
+    modEval[sigma_grad_idx] = (Z*Z / sigma - sigma) / sigma2;
 
     // Hessian for sigma
     if (flag == 3) {
-        int sigma_index = numfac + nregressors + ifreefac;
+        int sigma_index = numfac + nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings;
 
         // Multiply sigma row and column by 2*Z/sigma for cross-derivatives
         for (int j = sigma_index; j < npar; j++) {
@@ -287,7 +377,7 @@ void Model::EvalProbit(double expres, double obsSign, const std::vector<double>&
     }
     if (facnorm.size() == 0) ifreefac = numfac + numtyp*(outcome_idx != -2);
 
-    int npar = numfac + nregressors + ifreefac;
+    int npar = numfac + nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings;
 
     if (flag == 3) {
         hess.resize(npar * npar, 0.0);
@@ -297,6 +387,9 @@ void Model::EvalProbit(double expres, double obsSign, const std::vector<double>&
             }
         }
     }
+
+    // Common term for probit gradients: d(logL)/d(xb) = phi/Phi * obsSign
+    double dlogL_dxb = pdf * obsSign / cdf;
 
     // Compute gradients
     ifreefac = 0;
@@ -386,6 +479,59 @@ void Model::EvalProbit(double expres, double obsSign, const std::vector<double>&
         }
     }
 
+    // Gradients w.r.t. quadratic factor loadings (lambda_quad_k)
+    // d(logL)/d(lambda_quad_k) = dlogL_dxb * f_k^2
+    if (n_quadratic_loadings > 0) {
+        int quad_grad_start = 1 + numfac + nregressors + ifreefac;
+        for (int k = 0; k < numfac; k++) {
+            double fk_sq = fac[k] * fac[k];
+            modEval[quad_grad_start + k] = dlogL_dxb * fk_sq;
+
+            if (flag == 3) {
+                double lambda_val = pdf / cdf;
+                int index = numfac + nregressors + ifreefac + k;
+                double dZ_dtheta = obsSign * fk_sq;
+                double row_mult = (-Z * lambda_val - lambda_val * lambda_val) * dZ_dtheta;
+                for (int j = index; j < npar; j++)
+                    hess[index*npar + j] *= row_mult;
+                for (int j = 0; j <= index; j++)
+                    hess[j*npar + index] *= dZ_dtheta;
+
+                // Cross-derivative d(theta_k)/d(lambda_quad_k) = 2 * f_k * lambda_quad_k
+                hess[k*npar + index] += 2.0 * fac[k] * lambda_val * obsSign;
+            }
+        }
+    }
+
+    // Gradients w.r.t. interaction factor loadings (lambda_inter_jk) for j < k
+    // d(logL)/d(lambda_inter_jk) = dlogL_dxb * f_j * f_k
+    if (n_interaction_loadings > 0) {
+        int inter_grad_start = 1 + numfac + nregressors + ifreefac + n_quadratic_loadings;
+        int inter_idx = 0;
+        for (int j = 0; j < numfac - 1; j++) {
+            for (int k = j + 1; k < numfac; k++) {
+                double fj_fk = fac[j] * fac[k];
+                modEval[inter_grad_start + inter_idx] = dlogL_dxb * fj_fk;
+
+                if (flag == 3) {
+                    double lambda_val = pdf / cdf;
+                    int index = numfac + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                    double dZ_dtheta = obsSign * fj_fk;
+                    double row_mult = (-Z * lambda_val - lambda_val * lambda_val) * dZ_dtheta;
+                    for (int jj = index; jj < npar; jj++)
+                        hess[index*npar + jj] *= row_mult;
+                    for (int jj = 0; jj <= index; jj++)
+                        hess[jj*npar + index] *= dZ_dtheta;
+
+                    // Cross-derivatives d(theta)/d(lambda_inter)
+                    hess[j*npar + index] += fac[k] * lambda_val * obsSign;
+                    hess[k*npar + index] += fac[j] * lambda_val * obsSign;
+                }
+                inter_idx++;
+            }
+        }
+    }
+
     // Add cross-derivative terms for Hessian
     // d²(log L)/df_k dλ_k = (-Z*λ - λ²) * λ_k * f_k + λ * s
     // where λ = φ/Φ (Mills ratio), s = obsSign
@@ -432,7 +578,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
     if (facnorm.size() == 0) ifreefac = numfac + numtyp*(outcome_idx != -2);
 
     // Number of parameters per choice
-    int nparamchoice = nregressors + ifreefac;
+    int nparamchoice = nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings;
 
     // Compute logit denominator: 1 + sum_{k=1}^{K-1} exp(Z_k)
     double logitdenom = 1.0;
@@ -583,6 +729,78 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         }
     }
 
+    // Quadratic factor loadings - obsCat term and logitgrad
+    if (n_quadratic_loadings > 0) {
+        for (int k = 0; k < numfac; k++) {
+            double fk_sq = fac[k] * fac[k];
+            int quad_offset = nregressors + ifreefac + k;
+
+            // obsCat term for gradient
+            if (obsCat > 0) {
+                int base_idx = numfac + (obsCat - 1) * nparamchoice;
+                modEval[1 + base_idx + quad_offset] += fk_sq;
+            }
+
+            // logitgrad update
+            if (flag == 3) {
+                for (int jcat = 1; jcat < numchoice; jcat++) {
+                    int jbase_idx = numfac + (jcat - 1) * nparamchoice;
+                    logitgrad[jcat * npar + jbase_idx + quad_offset] += fk_sq;
+                }
+            }
+
+            // All categories term
+            for (int icat = 1; icat < numchoice; icat++) {
+                int base_idx = numfac + (icat - 1) * nparamchoice;
+                modEval[1 + base_idx + quad_offset] += -pdf[icat] * fk_sq;
+
+                if (flag == 3) {
+                    for (int jcat = 0; jcat < numchoice; jcat++) {
+                        logitgrad[jcat * npar + base_idx + quad_offset] += -pdf[icat] * fk_sq;
+                    }
+                }
+            }
+        }
+    }
+
+    // Interaction factor loadings - obsCat term and logitgrad
+    if (n_interaction_loadings > 0) {
+        int inter_idx = 0;
+        for (int j = 0; j < numfac - 1; j++) {
+            for (int k = j + 1; k < numfac; k++) {
+                double fj_fk = fac[j] * fac[k];
+                int inter_offset = nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+
+                // obsCat term for gradient
+                if (obsCat > 0) {
+                    int base_idx = numfac + (obsCat - 1) * nparamchoice;
+                    modEval[1 + base_idx + inter_offset] += fj_fk;
+                }
+
+                // logitgrad update
+                if (flag == 3) {
+                    for (int jcat = 1; jcat < numchoice; jcat++) {
+                        int jbase_idx = numfac + (jcat - 1) * nparamchoice;
+                        logitgrad[jcat * npar + jbase_idx + inter_offset] += fj_fk;
+                    }
+                }
+
+                // All categories term
+                for (int icat = 1; icat < numchoice; icat++) {
+                    int base_idx = numfac + (icat - 1) * nparamchoice;
+                    modEval[1 + base_idx + inter_offset] += -pdf[icat] * fj_fk;
+
+                    if (flag == 3) {
+                        for (int jcat_inner = 0; jcat_inner < numchoice; jcat_inner++) {
+                            logitgrad[jcat_inner * npar + base_idx + inter_offset] += -pdf[icat] * fj_fk;
+                        }
+                    }
+                }
+                inter_idx++;
+            }
+        }
+    }
+
     // ===== HESSIAN CALCULATION =====
     if (flag == 3) {
         hess.resize(npar * npar, 0.0);
@@ -611,6 +829,48 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
             }
         }
 
+        // Second-order derivative terms for d(theta)/d(lambda_quad): d^2Z/dtheta_k dlambda_quad_k = 2*f_k
+        if (n_quadratic_loadings > 0) {
+            if (obsCat > 0) {
+                for (int k = 0; k < numfac; k++) {
+                    int index = numfac + (obsCat - 1) * nparamchoice + nregressors + ifreefac + k;
+                    hess[k * npar + index] += 2.0 * fac[k];
+                }
+            }
+            for (int icat = 1; icat < numchoice; icat++) {
+                for (int k = 0; k < numfac; k++) {
+                    int index = numfac + (icat - 1) * nparamchoice + nregressors + ifreefac + k;
+                    hess[k * npar + index] += -pdf[icat] * 2.0 * fac[k];
+                }
+            }
+        }
+
+        // Second-order derivative terms for d(theta)/d(lambda_inter): d^2Z/dtheta_j dlambda_inter_jk = f_k (and similar for k)
+        if (n_interaction_loadings > 0) {
+            if (obsCat > 0) {
+                int inter_idx = 0;
+                for (int j = 0; j < numfac - 1; j++) {
+                    for (int k = j + 1; k < numfac; k++) {
+                        int index = numfac + (obsCat - 1) * nparamchoice + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                        hess[j * npar + index] += fac[k];  // d(theta_j)/d(lambda_inter_jk)
+                        hess[k * npar + index] += fac[j];  // d(theta_k)/d(lambda_inter_jk)
+                        inter_idx++;
+                    }
+                }
+            }
+            for (int icat = 1; icat < numchoice; icat++) {
+                int inter_idx = 0;
+                for (int j = 0; j < numfac - 1; j++) {
+                    for (int k = j + 1; k < numfac; k++) {
+                        int index = numfac + (icat - 1) * nparamchoice + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                        hess[j * npar + index] += -pdf[icat] * fac[k];
+                        hess[k * npar + index] += -pdf[icat] * fac[j];
+                        inter_idx++;
+                    }
+                }
+            }
+        }
+
         // First-order derivative Hessian terms
         // dtheta d...
         for (int ifac = 0; ifac < numfac; ifac++) {
@@ -630,7 +890,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                     hess[ifac * npar + jfac] += -pdf[icat] * logitgrad[icat * npar + jfac] * loading_val;
                 }
 
-                // dtheta dalpha and dtheta dbeta for each category
+                // dtheta dalpha, dtheta dbeta, dtheta dquad, dtheta dinter for each category
                 for (int jcat = 1; jcat < numchoice; jcat++) {
                     int jbase_idx = numfac + (jcat - 1) * nparamchoice;
 
@@ -647,6 +907,22 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                             int index = jbase_idx + nregressors + jfree;
                             hess[ifac * npar + index] += -pdf[icat] * logitgrad[icat * npar + index] * loading_val;
                             jfree++;
+                        }
+                    }
+
+                    // dtheta dquad
+                    if (n_quadratic_loadings > 0) {
+                        for (int k = 0; k < numfac; k++) {
+                            int index = jbase_idx + nregressors + ifreefac + k;
+                            hess[ifac * npar + index] += -pdf[icat] * logitgrad[icat * npar + index] * loading_val;
+                        }
+                    }
+
+                    // dtheta dinter
+                    if (n_interaction_loadings > 0) {
+                        for (int inter_idx = 0; inter_idx < n_interaction_loadings; inter_idx++) {
+                            int index = jbase_idx + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                            hess[ifac * npar + index] += -pdf[icat] * logitgrad[icat * npar + index] * loading_val;
                         }
                     }
                 }
@@ -719,6 +995,156 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                         ifree++;
                     }
                 }
+
+                // dbeta dquad
+                if (n_quadratic_loadings > 0) {
+                    for (int ireg = 0; ireg < nregressors; ireg++) {
+                        double xval_i = data[iobs_offset + regressors[ireg]];
+                        for (int k = 0; k < numfac; k++) {
+                            int index1 = ibase_idx + ireg;
+                            int index2 = jbase_idx + nregressors + ifreefac + k;
+                            hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * xval_i;
+                        }
+                    }
+                }
+
+                // dbeta dinter
+                if (n_interaction_loadings > 0) {
+                    for (int ireg = 0; ireg < nregressors; ireg++) {
+                        double xval_i = data[iobs_offset + regressors[ireg]];
+                        for (int inter_idx = 0; inter_idx < n_interaction_loadings; inter_idx++) {
+                            int index1 = ibase_idx + ireg;
+                            int index2 = jbase_idx + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                            hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * xval_i;
+                        }
+                    }
+                }
+
+                // dalpha dquad
+                if (n_quadratic_loadings > 0) {
+                    ifree = 0;
+                    for (int ifac = 0; ifac < fac_loop_bound; ifac++) {
+                        if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
+                            for (int k = 0; k < numfac; k++) {
+                                int index1 = ibase_idx + nregressors + ifree;
+                                int index2 = jbase_idx + nregressors + ifreefac + k;
+                                hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fac[ifac];
+                            }
+                            ifree++;
+                        }
+                    }
+                }
+
+                // dalpha dinter
+                if (n_interaction_loadings > 0) {
+                    ifree = 0;
+                    for (int ifac = 0; ifac < fac_loop_bound; ifac++) {
+                        if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
+                            for (int inter_idx = 0; inter_idx < n_interaction_loadings; inter_idx++) {
+                                int index1 = ibase_idx + nregressors + ifree;
+                                int index2 = jbase_idx + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                                hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fac[ifac];
+                            }
+                            ifree++;
+                        }
+                    }
+                }
+
+                // dquad dbeta (for jcat > icat), dquad dalpha, dquad dquad, dquad dinter
+                if (n_quadratic_loadings > 0) {
+                    for (int ik = 0; ik < numfac; ik++) {
+                        double fk_sq_i = fac[ik] * fac[ik];
+                        int index1 = ibase_idx + nregressors + ifreefac + ik;
+
+                        // dquad dbeta (for jcat > icat)
+                        if (jcat > icat) {
+                            for (int jreg = 0; jreg < nregressors; jreg++) {
+                                int index2 = jbase_idx + jreg;
+                                hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fk_sq_i;
+                            }
+                        }
+
+                        // dquad dalpha (for jcat > icat)
+                        if (jcat > icat) {
+                            int jfree = 0;
+                            for (int jfac = 0; jfac < fac_loop_bound; jfac++) {
+                                if (facnorm.size() == 0 || facnorm[jfac] <= -9998) {
+                                    int index2 = jbase_idx + nregressors + jfree;
+                                    hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fk_sq_i;
+                                    jfree++;
+                                }
+                            }
+                        }
+
+                        // dquad dquad
+                        for (int jk = 0; jk < numfac; jk++) {
+                            if ((jcat > icat) || (jk >= ik)) {
+                                int index2 = jbase_idx + nregressors + ifreefac + jk;
+                                hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fk_sq_i;
+                            }
+                        }
+
+                        // dquad dinter
+                        if (n_interaction_loadings > 0) {
+                            for (int inter_idx = 0; inter_idx < n_interaction_loadings; inter_idx++) {
+                                int index2 = jbase_idx + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                                hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fk_sq_i;
+                            }
+                        }
+                    }
+                }
+
+                // dinter dbeta, dinter dalpha, dinter dquad, dinter dinter
+                if (n_interaction_loadings > 0) {
+                    int i_inter_idx = 0;
+                    for (int ij = 0; ij < numfac - 1; ij++) {
+                        for (int ik = ij + 1; ik < numfac; ik++) {
+                            double fj_fk_i = fac[ij] * fac[ik];
+                            int index1 = ibase_idx + nregressors + ifreefac + n_quadratic_loadings + i_inter_idx;
+
+                            // dinter dbeta (for jcat > icat)
+                            if (jcat > icat) {
+                                for (int jreg = 0; jreg < nregressors; jreg++) {
+                                    int index2 = jbase_idx + jreg;
+                                    hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fj_fk_i;
+                                }
+                            }
+
+                            // dinter dalpha (for jcat > icat)
+                            if (jcat > icat) {
+                                int jfree = 0;
+                                for (int jfac = 0; jfac < fac_loop_bound; jfac++) {
+                                    if (facnorm.size() == 0 || facnorm[jfac] <= -9998) {
+                                        int index2 = jbase_idx + nregressors + jfree;
+                                        hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fj_fk_i;
+                                        jfree++;
+                                    }
+                                }
+                            }
+
+                            // dinter dquad (for jcat > icat)
+                            if (jcat > icat && n_quadratic_loadings > 0) {
+                                for (int jk = 0; jk < numfac; jk++) {
+                                    int index2 = jbase_idx + nregressors + ifreefac + jk;
+                                    hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fj_fk_i;
+                                }
+                            }
+
+                            // dinter dinter
+                            int j_inter_idx = 0;
+                            for (int jj = 0; jj < numfac - 1; jj++) {
+                                for (int jk = jj + 1; jk < numfac; jk++) {
+                                    if ((jcat > icat) || (j_inter_idx >= i_inter_idx)) {
+                                        int index2 = jbase_idx + nregressors + ifreefac + n_quadratic_loadings + j_inter_idx;
+                                        hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fj_fk_i;
+                                    }
+                                    j_inter_idx++;
+                                }
+                            }
+                            i_inter_idx++;
+                        }
+                    }
+                }
             }
         }
     }
@@ -743,8 +1169,8 @@ void Model::EvalOprobit(double expres, int outcome_value,
     // Observed category (1, 2, ..., numchoice)
     int obsCat = outcome_value;
 
-    // Threshold parameters come after betas and alphas
-    int thresh_idx = firstpar + nregressors + ifreefac;
+    // Threshold parameters come after betas, alphas, and second-order loadings
+    int thresh_idx = firstpar + nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings;
 
     // Build thresholds by accumulating absolute values
     // threshold[0] = lower bound for this category
@@ -815,7 +1241,7 @@ void Model::EvalOprobit(double expres, int outcome_value,
         if (PDF[1] < MIN_PDF) PDF[1] = MIN_PDF;
     }
 
-    int npar = numfac + nregressors + ifreefac + (numchoice - 1);  // includes thresholds
+    int npar = numfac + nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings + (numchoice - 1);  // includes thresholds
 
     if (flag == 3) {
         hess.resize(npar * npar, 0.0);
@@ -856,6 +1282,28 @@ void Model::EvalOprobit(double expres, int outcome_value,
             // Gradients w.r.t. regression coefficients
             for (int ireg = 0; ireg < nregressors; ireg++) {
                 tmpgrad[ireg + numfac] = (-1.0 * data[iobs_offset + regressors[ireg]]) * PDF[iterm] / diffCDF;
+            }
+
+            // Gradients w.r.t. quadratic factor loadings
+            if (n_quadratic_loadings > 0) {
+                int quad_grad_start = numfac + nregressors + ifreefac;
+                for (int k = 0; k < numfac; k++) {
+                    double fk_sq = fac[k] * fac[k];
+                    tmpgrad[quad_grad_start + k] = (-1.0 * fk_sq) * PDF[iterm] / diffCDF;
+                }
+            }
+
+            // Gradients w.r.t. interaction factor loadings
+            if (n_interaction_loadings > 0) {
+                int inter_grad_start = numfac + nregressors + ifreefac + n_quadratic_loadings;
+                int inter_idx = 0;
+                for (int j = 0; j < numfac - 1; j++) {
+                    for (int k = j + 1; k < numfac; k++) {
+                        double fj_fk = fac[j] * fac[k];
+                        tmpgrad[inter_grad_start + inter_idx] = (-1.0 * fj_fk) * PDF[iterm] / diffCDF;
+                        inter_idx++;
+                    }
+                }
             }
 
             // Gradients w.r.t. threshold parameters
@@ -942,6 +1390,44 @@ void Model::EvalOprobit(double expres, int outcome_value,
                     }
                 }
 
+                // Hessian for quadratic factor loadings
+                if (n_quadratic_loadings > 0) {
+                    int quad_offset = numfac + nregressors + ifreefac;
+                    for (int k = 0; k < numfac; k++) {
+                        double fk_sq = fac[k] * fac[k];
+                        int index = quad_offset + k;
+                        // lambda^L(quad) - lambda^Prob(quad) (row)
+                        for (int j = index; j < npar; j++) {
+                            tmphess[index*npar + j] *= -Z[iterm] * (-1.0 * fk_sq) - modEval[1 + quad_offset + k];
+                        }
+                        // dZ/dquad_k (col)
+                        for (int j = 0; j <= index; j++) {
+                            tmphess[j*npar + index] *= -1.0 * fk_sq;
+                        }
+                    }
+                }
+
+                // Hessian for interaction factor loadings
+                if (n_interaction_loadings > 0) {
+                    int inter_offset = numfac + nregressors + ifreefac + n_quadratic_loadings;
+                    int inter_idx = 0;
+                    for (int ij = 0; ij < numfac - 1; ij++) {
+                        for (int ik = ij + 1; ik < numfac; ik++) {
+                            double fj_fk = fac[ij] * fac[ik];
+                            int index = inter_offset + inter_idx;
+                            // lambda^L(inter) - lambda^Prob(inter) (row)
+                            for (int j = index; j < npar; j++) {
+                                tmphess[index*npar + j] *= -Z[iterm] * (-1.0 * fj_fk) - modEval[1 + inter_offset + inter_idx];
+                            }
+                            // dZ/dinter_jk (col)
+                            for (int j = 0; j <= index; j++) {
+                                tmphess[j*npar + index] *= -1.0 * fj_fk;
+                            }
+                            inter_idx++;
+                        }
+                    }
+                }
+
                 // Hessian for thresholds
                 int thres_offset = npar - (numchoice - 1);
                 int maxthresloop = obsCat;
@@ -973,6 +1459,29 @@ void Model::EvalOprobit(double expres, int outcome_value,
                         int index = numfac + nregressors + ifree;
                         tmphess[i*npar + index] += -1.0;
                         ifree++;
+                    }
+                }
+
+                // Add cross-derivative term dZ/dtheta_k dlambda_quad_k = -2*f_k
+                if (n_quadratic_loadings > 0) {
+                    int quad_offset = numfac + nregressors + ifreefac;
+                    for (int k = 0; k < numfac; k++) {
+                        int index = quad_offset + k;
+                        tmphess[k*npar + index] += -2.0 * fac[k];
+                    }
+                }
+
+                // Add cross-derivative terms dZ/dtheta dlambda_inter
+                if (n_interaction_loadings > 0) {
+                    int inter_offset = numfac + nregressors + ifreefac + n_quadratic_loadings;
+                    int inter_idx = 0;
+                    for (int ij = 0; ij < numfac - 1; ij++) {
+                        for (int ik = ij + 1; ik < numfac; ik++) {
+                            int index = inter_offset + inter_idx;
+                            tmphess[ij*npar + index] += -fac[ik];  // d(theta_j)/d(lambda_inter_jk)
+                            tmphess[ik*npar + index] += -fac[ij];  // d(theta_k)/d(lambda_inter_jk)
+                            inter_idx++;
+                        }
                     }
                 }
 

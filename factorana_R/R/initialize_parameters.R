@@ -151,8 +151,11 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         message(msg)
       }
 
-      # For multinomial logit with factors, we need parameters per choice
-      comp_params <- c(coefs, rep(0.5, n_free_loadings), sigma)
+      # Build parameter vector: coefs, linear loadings, [second-order loadings], sigma
+      # Get second-order loading initializations
+      second_order <- get_second_order_loading_init(comp)
+
+      comp_params <- c(coefs, rep(0.5, n_free_loadings), second_order$values, sigma)
 
       # Build parameter names
       coef_names <- paste0(comp$name, "_", comp$covariates)
@@ -161,7 +164,7 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         free_factor_idx <- which(is.na(comp$loading_normalization))
         loading_names <- paste0(comp$name, "_loading_", free_factor_idx)
       }
-      comp_param_names <- c(coef_names, loading_names, paste0(comp$name, "_sigma"))
+      comp_param_names <- c(coef_names, loading_names, second_order$names, paste0(comp$name, "_sigma"))
 
       # Add type-specific intercepts if n_types > 1
       # Initialize to small non-zero values to make types distinguishable
@@ -188,7 +191,10 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         message(msg)
       }
 
-      comp_params <- c(coefs, rep(0.5, n_free_loadings))
+      # Get second-order loading initializations
+      second_order <- get_second_order_loading_init(comp)
+
+      comp_params <- c(coefs, rep(0.5, n_free_loadings), second_order$values)
 
       # Build parameter names
       coef_names <- paste0(comp$name, "_", comp$covariates)
@@ -197,7 +203,7 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         free_factor_idx <- which(is.na(comp$loading_normalization))
         loading_names <- paste0(comp$name, "_loading_", free_factor_idx)
       }
-      comp_param_names <- c(coef_names, loading_names)
+      comp_param_names <- c(coef_names, loading_names, second_order$names)
 
       # Add type-specific intercepts if n_types > 1
       # Initialize to small non-zero values to make types distinguishable
@@ -224,7 +230,10 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
           message(msg)
         }
 
-        comp_params <- c(coefs, rep(0.5, n_free_loadings))
+        # Get second-order loading initializations
+        second_order <- get_second_order_loading_init(comp)
+
+        comp_params <- c(coefs, rep(0.5, n_free_loadings), second_order$values)
 
         # Build parameter names
         coef_names <- paste0(comp$name, "_", comp$covariates)
@@ -233,7 +242,7 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
           free_factor_idx <- which(is.na(comp$loading_normalization))
           loading_names <- paste0(comp$name, "_loading_", free_factor_idx)
         }
-        comp_param_names <- c(coef_names, loading_names)
+        comp_param_names <- c(coef_names, loading_names, second_order$names)
 
         # Add type-specific intercepts if n_types > 1
         # Initialize to small non-zero values to make types distinguishable
@@ -274,8 +283,11 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
           # Apply any fixed coefficient values for this choice
           choice_coefs <- apply_fixed_coefficients(choice_coefs, comp$covariates, fixed_coefs, choice = choice)
 
-          # Add covariates and loadings
-          comp_params <- c(comp_params, choice_coefs, rep(0.5, n_free_loadings))
+          # Get second-order loading initializations for this choice
+          second_order <- get_second_order_loading_init(comp, choice = choice)
+
+          # Add covariates, linear loadings, and second-order loadings
+          comp_params <- c(comp_params, choice_coefs, rep(0.5, n_free_loadings), second_order$values)
 
           # Build parameter names for this choice
           coef_names <- paste0(comp$name, "_c", choice, "_", comp$covariates)
@@ -284,7 +296,7 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
             free_factor_idx <- which(is.na(comp$loading_normalization))
             loading_names <- paste0(comp$name, "_c", choice, "_loading_", free_factor_idx)
           }
-          comp_param_names <- c(comp_param_names, coef_names, loading_names)
+          comp_param_names <- c(comp_param_names, coef_names, loading_names, second_order$names)
         }
 
         # Add type-specific intercepts if n_types > 1
@@ -397,7 +409,10 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         message(msg)
       }
 
-      comp_params <- c(coefs, rep(0.5, n_free_loadings), thresholds)
+      # Get second-order loading initializations
+      second_order <- get_second_order_loading_init(comp)
+
+      comp_params <- c(coefs, rep(0.5, n_free_loadings), second_order$values, thresholds)
 
       # Build parameter names
       coef_names <- character(0)
@@ -411,7 +426,7 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       }
       n_thresholds <- length(thresholds)
       threshold_names <- paste0(comp$name, "_thresh_", seq_len(n_thresholds))
-      comp_param_names <- c(coef_names, loading_names, threshold_names)
+      comp_param_names <- c(coef_names, loading_names, second_order$names, threshold_names)
 
       # Add type-specific intercepts if n_types > 1
       # For oprobit, type-specific intercepts shift all thresholds by a constant
@@ -450,6 +465,46 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
     param_names = param_names,
     factor_variance_fixed = factor_variance_fixed_status
   )
+}
+
+
+#' Get second-order loading initialization values and names
+#'
+#' Helper function to generate initial values and parameter names for
+#' quadratic and interaction factor loadings.
+#'
+#' @param comp Model component object
+#' @param choice Integer or NULL. For multinomial logit, which choice.
+#' @return List with values and names for second-order loadings
+#' @keywords internal
+get_second_order_loading_init <- function(comp, choice = NULL) {
+  values <- numeric(0)
+  names_vec <- character(0)
+
+  k <- comp$k
+  comp_name <- comp$name
+  choice_suffix <- if (!is.null(choice)) paste0("_c", choice) else ""
+
+  # Quadratic loadings: one per factor
+  if (!is.null(comp$n_quadratic_loadings) && comp$n_quadratic_loadings > 0) {
+    values <- c(values, rep(0.1, comp$n_quadratic_loadings))
+    quad_names <- paste0(comp_name, choice_suffix, "_loading_quad_", seq_len(k))
+    names_vec <- c(names_vec, quad_names)
+  }
+
+  # Interaction loadings: one per unique pair j < k
+  if (!is.null(comp$n_interaction_loadings) && comp$n_interaction_loadings > 0) {
+    values <- c(values, rep(0.1, comp$n_interaction_loadings))
+    inter_names <- character(0)
+    for (j in seq_len(k - 1)) {
+      for (kk in (j + 1):k) {
+        inter_names <- c(inter_names, paste0(comp_name, choice_suffix, "_loading_inter_", j, "_", kk))
+      }
+    }
+    names_vec <- c(names_vec, inter_names)
+  }
+
+  list(values = values, names = names_vec)
 }
 
 

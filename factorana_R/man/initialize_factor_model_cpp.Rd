@@ -4,7 +4,12 @@
 \alias{initialize_factor_model_cpp}
 \title{Initialize a FactorModel C++ object from R model system}
 \usage{
-initialize_factor_model_cpp(model_system, data, n_quad = 8L)
+initialize_factor_model_cpp(
+  model_system,
+  data,
+  n_quad = 8L,
+  init_params = NULL
+)
 }
 \arguments{
 \item{model_system}{R model_system object}
@@ -12,6 +17,8 @@ initialize_factor_model_cpp(model_system, data, n_quad = 8L)
 \item{data}{Data frame or matrix with all variables}
 
 \item{n_quad}{Number of quadrature points}
+
+\item{init_params}{Optional initial parameter vector (used to set fixed parameter values)}
 }
 \value{
 External pointer to FactorModel object

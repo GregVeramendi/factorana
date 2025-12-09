@@ -13,6 +13,14 @@ enum class ModelType {
     OPROBIT = 4
 };
 
+// Factor specification types
+enum class FactorSpec {
+    LINEAR = 0,       // Only linear factor terms (lambda * f)
+    QUADRATIC = 1,    // Linear + quadratic terms (lambda * f + lambda_quad * f^2)
+    INTERACTIONS = 2, // Linear + interaction terms (lambda * f + lambda_inter * f_j * f_k)
+    FULL = 3          // Linear + quadratic + interaction terms
+};
+
 class Model {
 private:
     ModelType modtype;        // Model type: 1=linear, 2=probit, 3=logit, 4=ordered probit
@@ -27,13 +35,17 @@ private:
     int numrank;              // Number of rankings (for ranked choice models)
     bool ignore;              // If true, skip this model in likelihood
     bool all_params_fixed;    // If true, skip gradient/Hessian computation (use flag=1)
+    FactorSpec factor_spec;   // Factor specification (linear, quadratic, interactions, full)
+    int n_quadratic_loadings; // Number of quadratic loading parameters
+    int n_interaction_loadings; // Number of interaction loading parameters
 
 public:
     // Constructor
     Model(ModelType type, int outcome, int missing,
           const std::vector<int>& regs, int nfac, int ntyp = 0,
           const std::vector<double>& fnorm = std::vector<double>(),
-          int nchoice = 2, int nrank = 1, bool params_fixed = false);
+          int nchoice = 2, int nrank = 1, bool params_fixed = false,
+          FactorSpec fspec = FactorSpec::LINEAR);
 
     // Main evaluation function
     // Computes likelihood, gradient, and Hessian for a single observation
@@ -67,6 +79,9 @@ public:
     void SetIgnore(bool ig) { ignore = ig; }
     bool GetAllParamsFixed() const { return all_params_fixed; }
     void SetAllParamsFixed(bool fixed) { all_params_fixed = fixed; }
+    FactorSpec GetFactorSpec() const { return factor_spec; }
+    int GetNumQuadraticLoadings() const { return n_quadratic_loadings; }
+    int GetNumInteractionLoadings() const { return n_interaction_loadings; }
 
 private:
     // Helper functions for each model type

@@ -15,7 +15,8 @@ define_model_component(
   intercept = TRUE,
   num_choices = 2,
   nrank = NULL,
-  loading_normalization = NULL
+  loading_normalization = NULL,
+  factor_spec = c("linear", "quadratic", "interactions", "full")
 )
 }
 \arguments{
@@ -45,6 +46,15 @@ Component-specific loading constraints. Overrides factor model normalization.
 \item \code{NA} → loading is free (estimated).
 \item numeric value → loading is fixed at that value (e.g. \code{1} for identification).
 If NULL, uses the factor model's default normalization.
+}}
+
+\item{factor_spec}{Character. Specification for factor terms in linear predictor.
+\itemize{
+\item \code{"linear"} (default): Only linear factor terms (lambda * f)
+\item \code{"quadratic"}: Linear + quadratic terms (lambda * f + lambda_quad * f^2)
+\item \code{"interactions"}: Linear + interaction terms (lambda * f + lambda_inter * f_j * f_k)
+\item \code{"full"}: Linear + quadratic + interaction terms
+Note: Interaction terms require n_factors >= 2.
 }}
 }
 \value{

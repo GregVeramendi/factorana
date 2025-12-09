@@ -11,7 +11,8 @@ estimate_model_rcpp(
   control = NULL,
   optimizer = "nlminb",
   parallel = TRUE,
-  verbose = TRUE
+  verbose = TRUE,
+  max_restarts = 5
 )
 }
 \arguments{
@@ -34,6 +35,9 @@ estimate_model_rcpp(
 \item{parallel}{Whether to use parallel computation (default TRUE)}
 
 \item{verbose}{Whether to print progress (default TRUE)}
+
+\item{max_restarts}{Maximum number of eigenvector-based restarts for escaping
+saddle points (default 5). Set to 0 to disable.}
 }
 \value{
 List with parameter estimates, standard errors, log-likelihood, etc.
@@ -46,4 +50,8 @@ C++ for fast evaluation and R for optimization and parallelization.
 For maximum efficiency, use \code{optimizer = "nlminb"} or \code{optimizer = "trust"}
 which exploit the analytical Hessian computed in C++. The default L-BFGS methods
 only use the gradient and approximate the Hessian from gradient history.
+
+When optimization fails to converge (possibly at a saddle point), the function
+will attempt to escape by moving in the direction of negative Hessian eigenvalues.
+This is controlled by the \code{max_restarts} parameter.
 }

@@ -58,6 +58,7 @@ devtools::install_github("GregVeramendi/factorana",
 ## Features
 - Define any number of latent factors with flexible loading normalization
 - Specify model components independently (linear, logit, probit, oprobit)
+- **Quadratic factor terms**: Model nonlinear factor effects via `factor_spec = "quadratic"`
 - Fix regression coefficients to specific values via `fix_coefficient()`
 - Multi-stage/sequential estimation with fixed early-stage parameters
 - Automatically initialize parameters using component-by-component estimation
@@ -443,10 +444,15 @@ More detailed explanations within functions.
 - Returns an object of class `"factor_model"`
 - **Note**: Loading normalization is specified at the component level via `define_model_component()`. Quadrature points are specified in `define_estimation_control()`.
 
-### `define_model_component(name, data, outcome, factor, evaluation_indicator = NULL, covariates, model_type, loading_normalization = NA_real_, intercept = TRUE, num_choices = 2, nrank = NULL)`
+### `define_model_component(name, data, outcome, factor, evaluation_indicator = NULL, covariates, model_type, loading_normalization = NA_real_, factor_spec = "linear", intercept = TRUE, num_choices = 2, nrank = NULL)`
 - Validates data (no missing in eval subset), coerces outcome for `oprobit` to ordered factors if needed.
 - `model_type`: `"linear"`, `"probit"`, `"logit"`, `"oprobit"`.
 - `loading_normalization`: Normalization for factor loadings (NA or NA_real_ = free, numeric = fixed)
+- `factor_spec`: Factor specification for nonlinear effects (default: `"linear"`)
+  - `"linear"`: Standard linear factor terms only (λ × f)
+  - `"quadratic"`: Include quadratic terms (λ × f + λ_quad × f²)
+  - `"interactions"`: Include interaction terms (λ × f + λ_inter × f_j × f_k) [future]
+  - `"full"`: Include both quadratic and interaction terms [future]
 - Returns a `"model_component"` with pointers to `factor`.
 
 ### `fix_coefficient(component, covariate, value, choice = NULL)`
@@ -856,6 +862,74 @@ result <- estimate_model_rcpp(ms, dat, init_params = NULL, control = ctrl, verbo
 
 print(result$estimates)
 ```
+
+### Quadratic Factor Effects
+
+When factor effects are nonlinear, use `factor_spec = "quadratic"` to include f² terms:
+
+```r
+set.seed(109)
+n <- 500
+f <- rnorm(n)  # Latent ability
+x1 <- rnorm(n)
+
+# Three test scores (standard measurement system)
+T1 <- 2.0 + 1.0*f + rnorm(n, 0, 0.5)
+T2 <- 1.5 + 1.2*f + rnorm(n, 0, 0.6)
+T3 <- 1.0 + 0.8*f + rnorm(n, 0, 0.4)
+
+# Outcome with quadratic factor effect
+# Y = intercept + beta*x1 + lambda*f + lambda_quad*f^2 + error
+Y <- 3.0 + 0.5*x1 + 0.8*f + 0.3*f^2 + rnorm(n, 0, 0.5)
+
+dat <- data.frame(intercept = 1, x1 = x1, T1 = T1, T2 = T2, T3 = T3, Y = Y, eval = 1)
+
+# Define factor model and estimation control
+fm <- define_factor_model(n_factors = 1, n_types = 1)
+ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+
+# Standard measurement equations (linear factor terms)
+mc_T1 <- define_model_component(
+  name = "T1", data = dat, outcome = "T1", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1.0, evaluation_indicator = "eval"
+)
+
+mc_T2 <- define_model_component(
+  name = "T2", data = dat, outcome = "T2", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_, evaluation_indicator = "eval"
+)
+
+mc_T3 <- define_model_component(
+  name = "T3", data = dat, outcome = "T3", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_, evaluation_indicator = "eval"
+)
+
+# Outcome with QUADRATIC factor effect
+mc_Y <- define_model_component(
+  name = "Y", data = dat, outcome = "Y", factor = fm,
+  covariates = c("intercept", "x1"), model_type = "linear",
+  loading_normalization = NA_real_,
+  factor_spec = "quadratic",  # Enable f^2 term
+  evaluation_indicator = "eval"
+)
+
+# Estimate
+ms <- define_model_system(components = list(mc_T1, mc_T2, mc_T3, mc_Y), factor = fm)
+result <- estimate_model_rcpp(ms, dat, init_params = NULL, control = ctrl, verbose = TRUE)
+
+# View results - includes Y_loading_quad_1 parameter
+print(result$estimates)
+```
+
+**Key points:**
+- `factor_spec = "quadratic"` adds quadratic loading parameters (λ_quad)
+- Linear predictor becomes: xβ + λf + λ_quad f²
+- Works with all model types: linear, probit, logit, oprobit
+- Quadratic loadings are always free (estimated), never fixed
+- Parameter naming: `{component}_loading_quad_{factor_index}`
 
 ---
 

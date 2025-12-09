@@ -211,10 +211,19 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             all_params_fixed = as<bool>(comp["all_params_fixed"]);
         }
 
+        // Extract factor_spec (linear, quadratic, interactions, full)
+        FactorSpec fspec = FactorSpec::LINEAR;
+        if (comp.containsElementNamed("factor_spec")) {
+            std::string fs = as<std::string>(comp["factor_spec"]);
+            if (fs == "quadratic") fspec = FactorSpec::QUADRATIC;
+            else if (fs == "interactions") fspec = FactorSpec::INTERACTIONS;
+            else if (fs == "full") fspec = FactorSpec::FULL;
+        }
+
         // Create Model object
         std::shared_ptr<Model> model = std::make_shared<Model>(
             mtype, outcome_idx, missing_idx, regressor_idx,
-            n_fac, n_types, facnorm, n_choice, 1, all_params_fixed
+            n_fac, n_types, facnorm, n_choice, 1, all_params_fixed, fspec
         );
 
         // Calculate number of parameters for this model
@@ -224,24 +233,28 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         }
         if (facnorm.empty()) n_free_loadings = n_fac;
 
+        // Calculate second-order loading counts from model (computed in constructor)
+        int n_quad = model->GetNumQuadraticLoadings();
+        int n_inter = model->GetNumInteractionLoadings();
+
         int n_params;
         if (mtype == ModelType::LOGIT && n_choice > 2) {
             // Multinomial logit: each non-reference choice has its own parameters
-            n_params = (n_choice - 1) * (regressor_idx.size() + n_free_loadings);
+            n_params = (n_choice - 1) * (regressor_idx.size() + n_free_loadings + n_quad + n_inter);
             // For multinomial logit with types, each choice gets (n_types - 1) type-specific intercepts
             if (n_types > 1) {
                 n_params += (n_choice - 1) * (n_types - 1);
             }
         } else if (mtype == ModelType::OPROBIT) {
             // Ordered probit: shared coefficients + thresholds
-            n_params = regressor_idx.size() + n_free_loadings + (n_choice - 1);
+            n_params = regressor_idx.size() + n_free_loadings + n_quad + n_inter + (n_choice - 1);
             // Add type-specific intercepts for n_types > 1
             if (n_types > 1) {
                 n_params += (n_types - 1);
             }
         } else {
             // Binary models (linear, probit, binary logit)
-            n_params = regressor_idx.size() + n_free_loadings;
+            n_params = regressor_idx.size() + n_free_loadings + n_quad + n_inter;
             if (mtype == ModelType::LINEAR) n_params += 1;  // sigma
             // Add type-specific intercepts for n_types > 1
             if (n_types > 1) {

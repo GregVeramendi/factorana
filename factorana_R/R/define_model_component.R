@@ -15,6 +15,12 @@
 #'   - `NA` → loading is free (estimated).
 #'   - numeric value → loading is fixed at that value (e.g. `1` for identification).
 #'   If NULL, uses the factor model's default normalization.
+#' @param factor_spec Character. Specification for factor terms in linear predictor.
+#'   - `"linear"` (default): Only linear factor terms (lambda * f)
+#'   - `"quadratic"`: Linear + quadratic terms (lambda * f + lambda_quad * f^2)
+#'   - `"interactions"`: Linear + interaction terms (lambda * f + lambda_inter * f_j * f_k)
+#'   - `"full"`: Linear + quadratic + interaction terms
+#'   Note: Interaction terms require n_factors >= 2.
 #'
 #' @return An object of class "model_component". A list representing the model component
 #' @export
@@ -29,7 +35,8 @@ define_model_component <- function(name,
                                    intercept = TRUE,
                                    num_choices = 2,
                                    nrank = NULL,
-                                   loading_normalization = NULL) {
+                                   loading_normalization = NULL,
+                                   factor_spec = c("linear", "quadratic", "interactions", "full")) {
   # ---- 1. Basic argument checks ----
   # Confirm data types and presence of required columns/objects
 
@@ -99,8 +106,16 @@ define_model_component <- function(name,
   }
 
   # ---- 5. Validate model configuration arguments ----
-  # model_type, intercept, num_choices, nrank
+  # model_type, intercept, num_choices, nrank, factor_spec
   model_type <- match.arg(model_type)
+  factor_spec <- match.arg(factor_spec)
+
+  # Validate factor_spec for interactions (requires k >= 2)
+  if (factor_spec %in% c("interactions", "full") && k < 2) {
+    warning("factor_spec='", factor_spec, "' requires n_factors >= 2. ",
+            "Downgrading to '", if (factor_spec == "full") "quadratic" else "linear", "'.")
+    factor_spec <- if (factor_spec == "full") "quadratic" else "linear"
+  }
 
   # intercept: is it a boolean?
   if (!is.logical(intercept) || length(intercept) != 1L) {
@@ -304,17 +319,31 @@ define_model_component <- function(name,
   # Calculate number of FREE factor loadings (not fixed)
   n_free_loadings <- sum(is.na(loading_normalization))
 
+  # Calculate number of second-order factor loadings
+  # Quadratic loadings: one per factor (always free)
+  n_quadratic_loadings <- if (factor_spec %in% c("quadratic", "full")) k else 0L
+
+  # Interaction loadings: one per unique pair j < k (always free)
+  n_interaction_loadings <- if (factor_spec %in% c("interactions", "full") && k >= 2) {
+    as.integer(k * (k - 1) / 2)
+  } else {
+    0L
+  }
+
+  # Total second-order loadings
+  n_second_order_loadings <- n_quadratic_loadings + n_interaction_loadings
+
   # Calculate number of model parameters based on model type
   if (model_type == "logit" && num_choices > 2) {
     # Multinomial logit: each non-reference choice has its own parameters
-    nparamchoice <- length(covariates) + n_free_loadings
+    nparamchoice <- length(covariates) + n_free_loadings + n_second_order_loadings
     nparam_model <- (num_choices - 1) * nparamchoice
   } else if (model_type == "oprobit") {
     # Ordered probit: shared coefficients + (num_choices - 1) thresholds
-    nparam_model <- length(covariates) + n_free_loadings + (num_choices - 1)
+    nparam_model <- length(covariates) + n_free_loadings + n_second_order_loadings + (num_choices - 1)
   } else {
     # Binary models (linear, probit, binary logit)
-    nparam_model <- length(covariates) + n_free_loadings
+    nparam_model <- length(covariates) + n_free_loadings + n_second_order_loadings
     if (model_type == "linear") nparam_model <- nparam_model + 1  # Add sigma
   }
 
@@ -337,6 +366,9 @@ define_model_component <- function(name,
     k = k,
     loading = rep(NA_real_, k),
     loading_normalization = loading_normalization,
+    factor_spec = factor_spec,
+    n_quadratic_loadings = n_quadratic_loadings,
+    n_interaction_loadings = n_interaction_loadings,
     fixed_coefficients = list()  # List of fixed coefficient constraints
   )
 
@@ -380,6 +412,13 @@ print.model_component <- function(x, ...) {
   cat("Intercept:               ", ifelse(x$intercept, "Yes", "No"), "\n")
   cat("Loading normalization:   ",
       paste0(x$loading_normalization, collapse = ", "), "\n")
+  cat("Factor specification:    ", x$factor_spec, "\n")
+  if (x$n_quadratic_loadings > 0) {
+    cat("Quadratic loadings:      ", x$n_quadratic_loadings, "\n")
+  }
+  if (x$n_interaction_loadings > 0) {
+    cat("Interaction loadings:    ", x$n_interaction_loadings, "\n")
+  }
   cat("Number of choices:       ", x$num_choices, "\n")
   if (!is.null(x$nrank)) {
     cat("Rank (nrank):            ", x$nrank, "\n")

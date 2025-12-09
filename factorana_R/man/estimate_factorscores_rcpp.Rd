@@ -17,9 +17,10 @@ estimate_factorscores_rcpp(
 
 \item{data}{Data frame containing all variables (same as used in estimation)}
 
-\item{control}{Optional estimation control object. If NULL, uses control from result.}
+\item{control}{Optional estimation control object. If NULL, uses default.}
 
-\item{parallel}{Whether to use parallel computation (default FALSE for now)}
+\item{parallel}{Whether to use parallel computation (default FALSE).
+When TRUE, uses the num_cores setting from control.}
 
 \item{verbose}{Whether to print progress (default TRUE)}
 }
@@ -52,14 +53,22 @@ where:
 
 Standard errors are computed from the diagonal of the inverse Hessian
 of the log-posterior at the mode.
+
+When parallel=TRUE, observations are distributed across cores using
+doParallel/foreach, with each worker processing a subset of observations.
 }
 \examples{
 \dontrun{
 # First estimate the model
 result <- estimate_model_rcpp(model_system, data, control)
 
-# Then estimate factor scores
+# Then estimate factor scores (serial)
 factor_scores <- estimate_factorscores_rcpp(result, data)
+
+# Or in parallel with 4 cores
+ctrl <- define_estimation_control(num_cores = 4)
+factor_scores <- estimate_factorscores_rcpp(result, data, control = ctrl,
+                                             parallel = TRUE)
 
 # View results
 head(factor_scores)

@@ -83,6 +83,26 @@ build_parameter_metadata <- function(model_system) {
             }
           }
         }
+
+        # Quadratic factor loadings for this alternative (if factor_spec includes quadratic)
+        if (!is.null(comp$factor_spec) && comp$factor_spec %in% c("quadratic", "full")) {
+          for (k in seq_len(n_factors)) {
+            param_names <- c(param_names, sprintf("%s_loading_quad_%d_alt%d", comp_name, k, alt))
+            param_types <- c(param_types, "loading_quad")
+            component_id <- c(component_id, i)
+          }
+        }
+
+        # Interaction factor loadings for this alternative (if factor_spec includes interactions)
+        if (!is.null(comp$factor_spec) && comp$factor_spec %in% c("interactions", "full") && n_factors >= 2) {
+          for (j in seq_len(n_factors - 1)) {
+            for (kk in (j + 1):n_factors) {
+              param_names <- c(param_names, sprintf("%s_loading_inter_%d_%d_alt%d", comp_name, j, kk, alt))
+              param_types <- c(param_types, "loading_inter")
+              component_id <- c(component_id, i)
+            }
+          }
+        }
       }
     } else {
       # Standard handling for all other model types
@@ -118,6 +138,26 @@ build_parameter_metadata <- function(model_system) {
           if (is.na(comp$loading_normalization[k])) {
             param_names <- c(param_names, sprintf("%s_loading_%d", comp_name, k))
             param_types <- c(param_types, "loading")
+            component_id <- c(component_id, i)
+          }
+        }
+      }
+
+      # Quadratic factor loadings (if factor_spec includes quadratic)
+      if (!is.null(comp$factor_spec) && comp$factor_spec %in% c("quadratic", "full")) {
+        for (k in seq_len(n_factors)) {
+          param_names <- c(param_names, sprintf("%s_loading_quad_%d", comp_name, k))
+          param_types <- c(param_types, "loading_quad")
+          component_id <- c(component_id, i)
+        }
+      }
+
+      # Interaction factor loadings (if factor_spec includes interactions)
+      if (!is.null(comp$factor_spec) && comp$factor_spec %in% c("interactions", "full") && n_factors >= 2) {
+        for (j in seq_len(n_factors - 1)) {
+          for (kk in (j + 1):n_factors) {
+            param_names <- c(param_names, sprintf("%s_loading_inter_%d_%d", comp_name, j, kk))
+            param_types <- c(param_types, "loading_inter")
             component_id <- c(component_id, i)
           }
         }
