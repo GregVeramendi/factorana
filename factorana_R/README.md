@@ -110,7 +110,7 @@ dat <- data.frame(
 )
 
 # Define factor model (1 latent ability factor)
-fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 16)
+fm <- define_factor_model(n_factors = 1, n_types = 1)
 
 # Define model components
 # Test 1: Normalize loading to 1.0 for identification
@@ -167,7 +167,7 @@ ms <- define_model_system(
 
 # Single-core estimation
 # Note: init_params = NULL triggers automatic initialization
-ctrl_single <- define_estimation_control(num_cores = 1)
+ctrl_single <- define_estimation_control(n_quad_points = 16, num_cores = 1)
 time_start_single <- Sys.time()
 result_single <- estimate_model_rcpp(
   model_system = ms,
@@ -182,7 +182,7 @@ time_end_single <- Sys.time()
 time_single <- as.numeric(difftime(time_end_single, time_start_single, units = "secs"))
 
 # Parallel estimation with 4 cores (3x speedup on large datasets)
-ctrl_parallel <- define_estimation_control(num_cores = 4)
+ctrl_parallel <- define_estimation_control(n_quad_points = 16, num_cores = 4)
 time_start_parallel <- Sys.time()
 result_parallel <- estimate_model_rcpp(
   model_system = ms,
@@ -286,7 +286,8 @@ For complex models, you can estimate in multiple stages to improve convergence a
 # STAGE 1: Estimate measurement system (test scores only)
 # ======================================================================
 
-fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 16)
+fm <- define_factor_model(n_factors = 1, n_types = 1)
+ctrl <- define_estimation_control(n_quad_points = 16, num_cores = 1)
 
 # Define three test score components
 mc_T1 <- define_model_component(
@@ -321,6 +322,7 @@ result_stage1 <- estimate_model_rcpp(
   model_system = ms_stage1,
   data = dat,
   init_params = NULL,
+  control = ctrl,
   optimizer = "nlminb",
   verbose = TRUE
 )
@@ -363,6 +365,7 @@ result_stage2 <- estimate_model_rcpp(
   model_system = ms_stage2,
   data = dat,
   init_params = NULL,
+  control = ctrl,
   optimizer = "nlminb",
   verbose = TRUE
 )
@@ -401,7 +404,8 @@ print(result_stage2$std_errors)   # Standard errors preserved from stage 1
 Examples:
 ```r
 # Single factor model
-fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 16)
+fm <- define_factor_model(n_factors = 1, n_types = 1)
+ctrl <- define_estimation_control(n_quad_points = 16, num_cores = 1)
 
 # First component: fix loading to 1.0 for identification
 mc1 <- define_model_component(
@@ -431,14 +435,13 @@ mc2 <- define_model_component(
 ## API (R)
 More detailed explanations within functions.
 
-### `define_factor_model(n_factors, n_types, n_quad_points, correlation = FALSE, n_mixtures = 1)`
+### `define_factor_model(n_factors, n_types, correlation = FALSE, n_mixtures = 1)`
 - `n_factors` (int ≥0): number of latent factors (use 0 for models without factors)
 - `n_types` (int ≥1): number of types
-- `n_quad_points` (int ≥1): number of quadrature points used in integration
 - `correlation` (logical): whether factors are correlated (default: FALSE)
 - `n_mixtures` (int 1-3): number of discrete mixtures (default: 1)
 - Returns an object of class `"factor_model"`
-- **Note**: Loading normalization is now specified at the component level via `define_model_component()`
+- **Note**: Loading normalization is specified at the component level via `define_model_component()`. Quadrature points are specified in `define_estimation_control()`.
 
 ### `define_model_component(name, data, outcome, factor, evaluation_indicator = NULL, covariates, model_type, loading_normalization = NA_real_, intercept = TRUE, num_choices = 2, nrank = NULL)`
 - Validates data (no missing in eval subset), coerces outcome for `oprobit` to ordered factors if needed.
@@ -479,8 +482,9 @@ More detailed explanations within functions.
   - Standard errors are preserved from previous stage
   - See "Two-Stage Estimation" section for usage example
 
-### `define_estimation_control(num_cores = 1)`
-- Simple container for runtime controls such as the number of parallel cores.
+### `define_estimation_control(n_quad_points = 16, num_cores = 1)`
+- Container for estimation settings including numerical integration and parallelization.
+- `n_quad_points` (int ≥1): Number of Gauss-Hermite quadrature points for numerical integration (default: 16)
 - `num_cores`: Number of CPU cores to use for parallel estimation (default: 1)
 
 ### `estimate_model_rcpp(model_system, data, init_params = NULL, control = NULL, optimizer = "nlminb", parallel = TRUE, verbose = TRUE)`
@@ -682,8 +686,9 @@ T3 <- 1.0 + 0.8*f + rnorm(n, 0, 0.4)
 
 dat <- data.frame(intercept = 1, T1 = T1, T2 = T2, T3 = T3, eval = 1)
 
-# Define factor model
-fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 8)
+# Define factor model and estimation control
+fm <- define_factor_model(n_factors = 1, n_types = 1)
+ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
 
 # Define three test components
 mc_T1 <- define_model_component(
@@ -709,7 +714,7 @@ mc_T3 <- define_model_component(
 
 # Estimate
 ms <- define_model_system(components = list(mc_T1, mc_T2, mc_T3), factor = fm)
-result <- estimate_model_rcpp(ms, dat, init_params = NULL, verbose = TRUE)
+result <- estimate_model_rcpp(ms, dat, init_params = NULL, control = ctrl, verbose = TRUE)
 
 print(result$estimates)
 print(result$std_errors)
@@ -738,8 +743,9 @@ y <- cut(z, breaks = c(-Inf, -0.5, 0.5, Inf), labels = FALSE)
 
 dat <- data.frame(intercept = 1, x1 = x1, T1 = T1, T2 = T2, T3 = T3, y = y, eval = 1)
 
-# Define factor and measurement components (same as above)
-fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 8)
+# Define factor model and estimation control
+fm <- define_factor_model(n_factors = 1, n_types = 1)
+ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
 
 mc_T1 <- define_model_component(
   name = "T1", data = dat, outcome = "T1", factor = fm,
@@ -771,7 +777,7 @@ mc_y <- define_model_component(
 
 # Estimate
 ms <- define_model_system(components = list(mc_T1, mc_T2, mc_T3, mc_y), factor = fm)
-result <- estimate_model_rcpp(ms, dat, init_params = NULL, verbose = TRUE)
+result <- estimate_model_rcpp(ms, dat, init_params = NULL, control = ctrl, verbose = TRUE)
 
 print(result$estimates)
 ```
@@ -812,8 +818,9 @@ for (i in seq_len(n)) {
 
 dat <- data.frame(intercept = 1, x1 = x1, T1 = T1, T2 = T2, T3 = T3, y = y, eval = 1)
 
-# Define factor and measurement components (same as above)
-fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad_points = 8)
+# Define factor model and estimation control
+fm <- define_factor_model(n_factors = 1, n_types = 1)
+ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
 
 mc_T1 <- define_model_component(
   name = "T1", data = dat, outcome = "T1", factor = fm,
@@ -845,7 +852,7 @@ mc_y <- define_model_component(
 
 # Estimate
 ms <- define_model_system(components = list(mc_T1, mc_T2, mc_T3, mc_y), factor = fm)
-result <- estimate_model_rcpp(ms, dat, init_params = NULL, verbose = TRUE)
+result <- estimate_model_rcpp(ms, dat, init_params = NULL, control = ctrl, verbose = TRUE)
 
 print(result$estimates)
 ```

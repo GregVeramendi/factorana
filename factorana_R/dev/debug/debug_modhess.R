@@ -12,7 +12,8 @@ T1 <- 1.0 + 1.0 * f + rnorm(n, 0, 0.5)  # intercept=1, lambda=1 (fixed), sigma=0
 
 dat <- data.frame(intercept = 1, T1 = T1, eval = 1)
 
-fm <- define_factor_model(n_factors = 1, n_types = 1, n_quad = 1)  # nquad=1 to simplify
+fm <- define_factor_model(n_factors = 1, n_types = 1)
+ctrl <- define_estimation_control(n_quad_points = 1)  # nquad=1 to simplify
 
 mc_T1 <- define_model_component(
   name = "T1", data = dat, outcome = "T1", factor = fm,
@@ -21,7 +22,7 @@ mc_T1 <- define_model_component(
 )
 
 ms <- define_model_system(components = list(mc_T1), factor = fm)
-fm_cpp <- initialize_factor_model_cpp(ms, as.matrix(dat), n_quad = 1)
+fm_cpp <- initialize_factor_model_cpp(ms, as.matrix(dat), ctrl$n_quad_points)
 
 # Parameters: factor_var, intercept, sigma (lambda is fixed)
 params <- c(1.0, 1.0, 0.5)
