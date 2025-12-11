@@ -397,7 +397,13 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
 //' @param params Vector of parameters
 //' @param compute_gradient Whether to compute gradient (default FALSE)
 //' @param compute_hessian Whether to compute Hessian (default FALSE)
-//' @return List with log-likelihood, gradient (if requested), and Hessian (if requested)
+//' @return List with:
+//'   - logLikelihood: scalar log-likelihood value
+//'   - gradient: vector of length n_param_free (if requested)
+//'   - hessian: vector of length n_param_free*(n_param_free+1)/2 stored as
+//'              upper-triangular in row-major order (if requested).
+//'              To expand to full symmetric matrix in R:
+//'              \code{idx <- 1; for(i in 1:n) for(j in i:n) { H[i,j] <- H[j,i] <- hess[idx]; idx <- idx + 1 }}
 //' @export
 // [[Rcpp::export]]
 List evaluate_likelihood_cpp(SEXP fm_ptr, NumericVector params,

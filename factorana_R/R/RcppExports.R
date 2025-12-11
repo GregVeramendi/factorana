@@ -28,7 +28,13 @@ initialize_factor_model_cpp <- function(model_system, data, n_quad = 8L, init_pa
 #' @param params Vector of parameters
 #' @param compute_gradient Whether to compute gradient (default FALSE)
 #' @param compute_hessian Whether to compute Hessian (default FALSE)
-#' @return List with log-likelihood, gradient (if requested), and Hessian (if requested)
+#' @return List with:
+#'   - logLikelihood: scalar log-likelihood value
+#'   - gradient: vector of length n_param_free (if requested)
+#'   - hessian: vector of length n_param_free*(n_param_free+1)/2 stored as
+#'              upper-triangular in row-major order (if requested).
+#'              To expand to full symmetric matrix in R:
+#'              \code{idx <- 1; for(i in 1:n) for(j in i:n) { H[i,j] <- H[j,i] <- hess[idx]; idx <- idx + 1 }}
 #' @export
 evaluate_likelihood_cpp <- function(fm_ptr, params, compute_gradient = FALSE, compute_hessian = FALSE) {
     .Call(`_factorana_evaluate_likelihood_cpp`, fm_ptr, params, compute_gradient, compute_hessian)

@@ -291,6 +291,11 @@ void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
             double fk_sq = fac[k] * fac[k];
             modEval[quad_grad_start + k] = Z * fk_sq / sigma2;
 
+            // Add quadratic contribution to factor variance gradient
+            // d(xb)/d(f_k) includes 2*lambda_quad_k*f_k term
+            double lambda_quad_k = param[firstpar + nregressors + ifreefac + k];
+            modEval[k+1] += Z * 2.0 * lambda_quad_k * fac[k] / sigma2;
+
             if (flag == 3) {
                 int index = numfac + nregressors + ifreefac + k;
                 for (int j = index; j < npar; j++)
@@ -298,11 +303,12 @@ void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
                 for (int j = 0; j <= index; j++)
                     hess[j*npar + index] *= fk_sq;
 
-                // Cross-derivative d^2(logL)/(d(theta_k) d(lambda_quad_k)) = 2 * f_k * lambda_quad_k / sigma^2
-                // The factor variance gradient uses chain rule with lambda_quad * 2 * f
-                // Adding to existing Hessian structure (d(theta_k)/d(lambda_quad_k) cross term)
-                double lambda_quad_k = param[firstpar + nregressors + ifreefac + k];
+                // Cross-derivative d^2(logL)/(d(theta_k) d(lambda_quad_k)) = 2 * f_k / sigma^2
                 hess[k*npar + index] += 2.0 * fac[k] * Z / sigma2;
+
+                // Second derivative of xb w.r.t. f_k: d^2(xb)/d(f_k)^2 = 2*lambda_quad_k
+                // This contributes Z * 2*lambda_quad_k / sigma^2 to the factor-factor Hessian diagonal
+                hess[k*npar + k] += 2.0 * lambda_quad_k * Z / sigma2;
             }
         }
     }
@@ -317,6 +323,12 @@ void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
                 double fj_fk = fac[j] * fac[k];
                 modEval[inter_grad_start + inter_idx] = Z * fj_fk / sigma2;
 
+                // Add interaction contribution to factor variance gradients
+                // d(xb)/d(f_j) includes lambda_inter * f_k, d(xb)/d(f_k) includes lambda_inter * f_j
+                double lambda_inter = param[firstpar + nregressors + ifreefac + n_quadratic_loadings + inter_idx];
+                modEval[j+1] += Z * lambda_inter * fac[k] / sigma2;
+                modEval[k+1] += Z * lambda_inter * fac[j] / sigma2;
+
                 if (flag == 3) {
                     int index = numfac + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
                     for (int jj = index; jj < npar; jj++)
@@ -325,12 +337,119 @@ void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
                         hess[jj*npar + index] *= fj_fk;
 
                     // Cross-derivatives d^2(logL)/(d(theta) d(lambda_inter))
-                    double lambda_inter = param[firstpar + nregressors + ifreefac + n_quadratic_loadings + inter_idx];
                     hess[j*npar + index] += fac[k] * Z / sigma2;  // d(theta_j)/d(lambda_inter_jk)
                     hess[k*npar + index] += fac[j] * Z / sigma2;  // d(theta_k)/d(lambda_inter_jk)
                 }
                 inter_idx++;
             }
+        }
+    }
+
+    // ===== HESSIAN CORRECTION FOR FACTOR VARIANCE BLOCK =====
+    // The factor variance Hessian needs full derivative d(xb)/d(f_k), not just λ_k.
+    // d(xb)/d(f_k) = λ_k + 2*λ_quad_k*f_k + Σ λ_inter_jk*f_j
+    // The multiplicative structure above only used λ_k, so we add corrections.
+    if (flag == 3 && (n_quadratic_loadings > 0 || n_interaction_loadings > 0)) {
+        // Compute additional derivative terms for each factor
+        std::vector<double> additional(numfac, 0.0);
+        std::vector<double> linear_loading(numfac, 0.0);
+
+        // Get linear loading values
+        int ifree = 0;
+        for (int k = 0; k < numfac; k++) {
+            if (facnorm.size() == 0 || facnorm[k] <= -9998) {
+                linear_loading[k] = param[firstpar + nregressors + ifree];
+                ifree++;
+            } else {
+                linear_loading[k] = facnorm[k];
+            }
+        }
+
+        // Add quadratic contributions to additional
+        if (n_quadratic_loadings > 0) {
+            for (int k = 0; k < numfac; k++) {
+                double lambda_quad_k = param[firstpar + nregressors + ifreefac + k];
+                additional[k] += 2.0 * lambda_quad_k * fac[k];
+            }
+        }
+
+        // Add interaction contributions to additional
+        if (n_interaction_loadings > 0) {
+            int inter_idx = 0;
+            for (int j = 0; j < numfac - 1; j++) {
+                for (int k = j + 1; k < numfac; k++) {
+                    double lambda_inter = param[firstpar + nregressors + ifreefac + n_quadratic_loadings + inter_idx];
+                    additional[j] += lambda_inter * fac[k];
+                    additional[k] += lambda_inter * fac[j];
+                    inter_idx++;
+                }
+            }
+        }
+
+        // Correction for factor variance block: d²(logL)/(dθ_j)(dθ_k)
+        // Current: -1/σ² * λ_j * λ_k
+        // Should be: -1/σ² * (λ_j + add_j) * (λ_k + add_k)
+        // Correction: -1/σ² * (λ_j*add_k + λ_k*add_j + add_j*add_k)
+        for (int j = 0; j < numfac; j++) {
+            for (int k = j; k < numfac; k++) {
+                double correction = linear_loading[j] * additional[k] +
+                                   linear_loading[k] * additional[j] +
+                                   additional[j] * additional[k];
+                if (j == k) {
+                    // Diagonal: only add once (not double counted)
+                    correction = 2.0 * linear_loading[j] * additional[j] + additional[j] * additional[j];
+                }
+                hess[j * npar + k] += -correction / sigma2;
+            }
+        }
+
+        // Correction for cross-derivatives: d²(logL)/(dθ_k)(d other_param)
+        // Current: -1/σ² * λ_k * d(xb)/d(other_param)
+        // Should be: -1/σ² * (λ_k + add_k) * d(xb)/d(other_param)
+        // Correction: -1/σ² * add_k * d(xb)/d(other_param)
+        for (int k = 0; k < numfac; k++) {
+            if (std::abs(additional[k]) < 1e-15) continue;
+
+            // Cross with regression coefficients
+            for (int ireg = 0; ireg < nregressors; ireg++) {
+                double dxb_dreg = data[iobs_offset + regressors[ireg]];
+                int reg_idx = numfac + ireg;
+                hess[k * npar + reg_idx] += -additional[k] * dxb_dreg / sigma2;
+            }
+
+            // Cross with free linear loadings
+            int ifree2 = 0;
+            for (int m = 0; m < numfac; m++) {
+                if (facnorm.size() == 0 || facnorm[m] <= -9998) {
+                    int load_idx = numfac + nregressors + ifree2;
+                    hess[k * npar + load_idx] += -additional[k] * fac[m] / sigma2;
+                    ifree2++;
+                }
+            }
+
+            // Cross with quadratic loadings
+            if (n_quadratic_loadings > 0) {
+                for (int m = 0; m < numfac; m++) {
+                    int quad_idx = numfac + nregressors + ifreefac + m;
+                    hess[k * npar + quad_idx] += -additional[k] * fac[m] * fac[m] / sigma2;
+                }
+            }
+
+            // Cross with interaction loadings
+            if (n_interaction_loadings > 0) {
+                int inter_idx = 0;
+                for (int j2 = 0; j2 < numfac - 1; j2++) {
+                    for (int k2 = j2 + 1; k2 < numfac; k2++) {
+                        int idx = numfac + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                        hess[k * npar + idx] += -additional[k] * fac[j2] * fac[k2] / sigma2;
+                        inter_idx++;
+                    }
+                }
+            }
+
+            // Cross with sigma (will be multiplied by 2*Z/sigma later)
+            int sigma_idx = numfac + nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings;
+            hess[k * npar + sigma_idx] += -additional[k] / sigma2;
         }
     }
 
@@ -487,6 +606,10 @@ void Model::EvalProbit(double expres, double obsSign, const std::vector<double>&
             double fk_sq = fac[k] * fac[k];
             modEval[quad_grad_start + k] = dlogL_dxb * fk_sq;
 
+            // Add quadratic contribution to factor variance gradient
+            double lambda_quad_k = param[firstpar + nregressors + ifreefac + k];
+            modEval[k+1] += dlogL_dxb * 2.0 * lambda_quad_k * fac[k];
+
             if (flag == 3) {
                 double lambda_val = pdf / cdf;
                 int index = numfac + nregressors + ifreefac + k;
@@ -497,7 +620,7 @@ void Model::EvalProbit(double expres, double obsSign, const std::vector<double>&
                 for (int j = 0; j <= index; j++)
                     hess[j*npar + index] *= dZ_dtheta;
 
-                // Cross-derivative d(theta_k)/d(lambda_quad_k) = 2 * f_k * lambda_quad_k
+                // Cross-derivative d(theta_k)/d(lambda_quad_k) = 2 * f_k
                 hess[k*npar + index] += 2.0 * fac[k] * lambda_val * obsSign;
             }
         }
@@ -512,6 +635,11 @@ void Model::EvalProbit(double expres, double obsSign, const std::vector<double>&
             for (int k = j + 1; k < numfac; k++) {
                 double fj_fk = fac[j] * fac[k];
                 modEval[inter_grad_start + inter_idx] = dlogL_dxb * fj_fk;
+
+                // Add interaction contribution to factor variance gradients
+                double lambda_inter = param[firstpar + nregressors + ifreefac + n_quadratic_loadings + inter_idx];
+                modEval[j+1] += dlogL_dxb * lambda_inter * fac[k];
+                modEval[k+1] += dlogL_dxb * lambda_inter * fac[j];
 
                 if (flag == 3) {
                     double lambda_val = pdf / cdf;
@@ -528,6 +656,109 @@ void Model::EvalProbit(double expres, double obsSign, const std::vector<double>&
                     hess[k*npar + index] += fac[j] * lambda_val * obsSign;
                 }
                 inter_idx++;
+            }
+        }
+    }
+
+    // ===== HESSIAN CORRECTION FOR FACTOR VARIANCE BLOCK (PROBIT) =====
+    // The factor variance Hessian needs full derivative d(xb)/d(f_k), not just λ_k.
+    // d(xb)/d(f_k) = λ_k + 2*λ_quad_k*f_k + Σ λ_inter_jk*f_j
+    // For probit: d²(logL)/(dθ_j)(dθ_k) = (-Z*mills - mills²) * d(xb)/d(f_j) * d(xb)/d(f_k)
+    if (flag == 3 && (n_quadratic_loadings > 0 || n_interaction_loadings > 0)) {
+        double lambda_val = pdf / cdf;  // Mills ratio
+        double hess_factor = -Z * lambda_val - lambda_val * lambda_val;
+
+        // Compute additional derivative terms for each factor
+        std::vector<double> additional(numfac, 0.0);
+        std::vector<double> linear_loading(numfac, 0.0);
+
+        // Get linear loading values
+        int ifree = 0;
+        for (int k = 0; k < numfac; k++) {
+            if (facnorm.size() == 0 || facnorm[k] <= -9998) {
+                linear_loading[k] = param[firstpar + nregressors + ifree];
+                ifree++;
+            } else {
+                linear_loading[k] = facnorm[k];
+            }
+        }
+
+        // Add quadratic contributions to additional
+        if (n_quadratic_loadings > 0) {
+            for (int k = 0; k < numfac; k++) {
+                double lambda_quad_k = param[firstpar + nregressors + ifreefac + k];
+                additional[k] += 2.0 * lambda_quad_k * fac[k];
+            }
+        }
+
+        // Add interaction contributions to additional
+        if (n_interaction_loadings > 0) {
+            int inter_idx = 0;
+            for (int j = 0; j < numfac - 1; j++) {
+                for (int k = j + 1; k < numfac; k++) {
+                    double lambda_inter = param[firstpar + nregressors + ifreefac + n_quadratic_loadings + inter_idx];
+                    additional[j] += lambda_inter * fac[k];
+                    additional[k] += lambda_inter * fac[j];
+                    inter_idx++;
+                }
+            }
+        }
+
+        // Correction for factor variance block: d²(logL)/(dθ_j)(dθ_k)
+        for (int j = 0; j < numfac; j++) {
+            for (int k = j; k < numfac; k++) {
+                double correction = linear_loading[j] * additional[k] +
+                                   linear_loading[k] * additional[j] +
+                                   additional[j] * additional[k];
+                if (j == k) {
+                    correction = 2.0 * linear_loading[j] * additional[j] + additional[j] * additional[j];
+                }
+                hess[j * npar + k] += hess_factor * correction;
+            }
+        }
+
+        // Correction for cross-derivatives: d²(logL)/(dθ_k)(d other_param)
+        // Current: hess[k,j] = hess_factor * λ_k * d(xb)/d(j)  (after obsSign² = 1 cancellation)
+        // Target:  hess[k,j] = hess_factor * (λ_k + add_k) * d(xb)/d(j)
+        // Correction: hess_factor * add_k * d(xb)/d(j)
+        for (int k = 0; k < numfac; k++) {
+            if (std::abs(additional[k]) < 1e-15) continue;
+
+            // Cross with regression coefficients
+            for (int ireg = 0; ireg < nregressors; ireg++) {
+                double dxb_dreg = data[iobs_offset + regressors[ireg]];
+                int reg_idx = numfac + ireg;
+                hess[k * npar + reg_idx] += hess_factor * additional[k] * dxb_dreg;
+            }
+
+            // Cross with free linear loadings
+            int ifree2 = 0;
+            for (int m = 0; m < numfac; m++) {
+                if (facnorm.size() == 0 || facnorm[m] <= -9998) {
+                    int load_idx = numfac + nregressors + ifree2;
+                    hess[k * npar + load_idx] += hess_factor * additional[k] * fac[m];
+                    ifree2++;
+                }
+            }
+
+            // Cross with quadratic loadings
+            if (n_quadratic_loadings > 0) {
+                for (int m = 0; m < numfac; m++) {
+                    int quad_idx = numfac + nregressors + ifreefac + m;
+                    hess[k * npar + quad_idx] += hess_factor * additional[k] * fac[m] * fac[m];
+                }
+            }
+
+            // Cross with interaction loadings
+            if (n_interaction_loadings > 0) {
+                int inter_idx = 0;
+                for (int j2 = 0; j2 < numfac - 1; j2++) {
+                    for (int k2 = j2 + 1; k2 < numfac; k2++) {
+                        int idx = numfac + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                        hess[k * npar + idx] += hess_factor * additional[k] * fac[j2] * fac[k2];
+                        inter_idx++;
+                    }
+                }
             }
         }
     }
@@ -618,31 +849,54 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
 
     // Gradient for factor variance parameters (theta)
     for (int ifac = 0; ifac < numfac; ifac++) {
-        // Term from observed choice
+        // Get loading value for this factor (either free from param or fixed from facnorm)
+        double loading_for_grad;
+        bool is_free_loading = (facnorm.size() == 0 || facnorm[ifac] <= -9998);
+
+        if (is_free_loading) {
+            // Free loading - will get from parameter vector per choice
+        } else {
+            // Fixed loading - use the fixed value
+            loading_for_grad = facnorm[ifac];
+        }
+
+        // Term from observed choice (gradient only - depends on observed category)
         if (obsCat > 0) {
-            int param_idx = firstpar + (obsCat - 1) * nparamchoice + nregressors;
-            if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
+            if (is_free_loading) {
+                int param_idx = firstpar + (obsCat - 1) * nparamchoice + nregressors;
                 int loading_idx = param_idx + (facnorm.size() > 0 ?
                     std::count_if(facnorm.begin(), facnorm.begin() + ifac,
                                   [](double x) { return x <= -9998; }) : ifac);
                 modEval[1 + ifac] += param[loading_idx];
+            } else {
+                // Fixed loading - use fixed value for gradient
+                modEval[1 + ifac] += loading_for_grad;
+            }
+        }
 
-                if (flag == 3) {
-                    for (int jcat = 1; jcat < numchoice; jcat++) {
-                        int jparam_idx = firstpar + (jcat - 1) * nparamchoice + nregressors;
-                        int jloading_idx = jparam_idx + (facnorm.size() > 0 ?
-                            std::count_if(facnorm.begin(), facnorm.begin() + ifac,
-                                          [](double x) { return x <= -9998; }) : ifac);
-                        logitgrad[jcat * npar + ifac] += param[jloading_idx];
-                    }
+        // logitgrad stores dZ_jcat/df_ifac - E[dZ/df_ifac] for Hessian computation
+        // The dZ_jcat/df_ifac = lambda_jcat,ifac term is INDEPENDENT of observed category
+        // so it must be computed outside the obsCat check
+        if (flag == 3) {
+            if (is_free_loading) {
+                for (int jcat = 1; jcat < numchoice; jcat++) {
+                    int jparam_idx = firstpar + (jcat - 1) * nparamchoice + nregressors;
+                    int jloading_idx = jparam_idx + (facnorm.size() > 0 ?
+                        std::count_if(facnorm.begin(), facnorm.begin() + ifac,
+                                      [](double x) { return x <= -9998; }) : ifac);
+                    logitgrad[jcat * npar + ifac] += param[jloading_idx];
+                }
+            } else {
+                for (int jcat = 1; jcat < numchoice; jcat++) {
+                    logitgrad[jcat * npar + ifac] += loading_for_grad;
                 }
             }
         }
 
         // Sum over all non-reference choices
         for (int icat = 1; icat < numchoice; icat++) {
-            int param_idx = firstpar + (icat - 1) * nparamchoice + nregressors;
-            if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
+            if (is_free_loading) {
+                int param_idx = firstpar + (icat - 1) * nparamchoice + nregressors;
                 int loading_idx = param_idx + (facnorm.size() > 0 ?
                     std::count_if(facnorm.begin(), facnorm.begin() + ifac,
                                   [](double x) { return x <= -9998; }) : ifac);
@@ -651,6 +905,15 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                 if (flag == 3) {
                     for (int jcat = 0; jcat < numchoice; jcat++) {
                         logitgrad[jcat * npar + ifac] += -pdf[icat] * param[loading_idx];
+                    }
+                }
+            } else {
+                // Fixed loading - use fixed value for gradient
+                modEval[1 + ifac] += -pdf[icat] * loading_for_grad;
+
+                if (flag == 3) {
+                    for (int jcat = 0; jcat < numchoice; jcat++) {
+                        logitgrad[jcat * npar + ifac] += -pdf[icat] * loading_for_grad;
                     }
                 }
             }
@@ -739,6 +1002,10 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
             if (obsCat > 0) {
                 int base_idx = numfac + (obsCat - 1) * nparamchoice;
                 modEval[1 + base_idx + quad_offset] += fk_sq;
+
+                // Add quadratic contribution to factor variance gradient
+                double lambda_quad_k = param[firstpar + (obsCat - 1) * nparamchoice + quad_offset];
+                modEval[1 + k] += 2.0 * lambda_quad_k * fac[k];
             }
 
             // logitgrad update
@@ -746,6 +1013,10 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                 for (int jcat = 1; jcat < numchoice; jcat++) {
                     int jbase_idx = numfac + (jcat - 1) * nparamchoice;
                     logitgrad[jcat * npar + jbase_idx + quad_offset] += fk_sq;
+
+                    // Add quadratic contribution to factor logitgrad (dZ_jcat/df_k includes 2*lambda_quad_k*f_k)
+                    double lambda_quad_jcat = param[firstpar + (jcat - 1) * nparamchoice + quad_offset];
+                    logitgrad[jcat * npar + k] += 2.0 * lambda_quad_jcat * fac[k];
                 }
             }
 
@@ -754,9 +1025,15 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                 int base_idx = numfac + (icat - 1) * nparamchoice;
                 modEval[1 + base_idx + quad_offset] += -pdf[icat] * fk_sq;
 
+                // Add quadratic contribution to factor variance gradient (all categories)
+                double lambda_quad_k = param[firstpar + (icat - 1) * nparamchoice + quad_offset];
+                modEval[1 + k] += -pdf[icat] * 2.0 * lambda_quad_k * fac[k];
+
                 if (flag == 3) {
                     for (int jcat = 0; jcat < numchoice; jcat++) {
                         logitgrad[jcat * npar + base_idx + quad_offset] += -pdf[icat] * fk_sq;
+                        // Update factor logitgrad with quadratic contribution (was missing!)
+                        logitgrad[jcat * npar + k] += -pdf[icat] * 2.0 * lambda_quad_k * fac[k];
                     }
                 }
             }
@@ -775,6 +1052,11 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                 if (obsCat > 0) {
                     int base_idx = numfac + (obsCat - 1) * nparamchoice;
                     modEval[1 + base_idx + inter_offset] += fj_fk;
+
+                    // Add interaction contribution to factor variance gradients
+                    double lambda_inter = param[firstpar + (obsCat - 1) * nparamchoice + inter_offset];
+                    modEval[1 + j] += lambda_inter * fac[k];
+                    modEval[1 + k] += lambda_inter * fac[j];
                 }
 
                 // logitgrad update
@@ -782,6 +1064,11 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                     for (int jcat = 1; jcat < numchoice; jcat++) {
                         int jbase_idx = numfac + (jcat - 1) * nparamchoice;
                         logitgrad[jcat * npar + jbase_idx + inter_offset] += fj_fk;
+
+                        // Add interaction contribution to factor logitgrad (dZ_jcat/df_j includes lambda_inter*f_k, etc.)
+                        double lambda_inter_jcat = param[firstpar + (jcat - 1) * nparamchoice + inter_offset];
+                        logitgrad[jcat * npar + j] += lambda_inter_jcat * fac[k];
+                        logitgrad[jcat * npar + k] += lambda_inter_jcat * fac[j];
                     }
                 }
 
@@ -790,9 +1077,17 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                     int base_idx = numfac + (icat - 1) * nparamchoice;
                     modEval[1 + base_idx + inter_offset] += -pdf[icat] * fj_fk;
 
+                    // Add interaction contribution to factor variance gradients (all categories)
+                    double lambda_inter = param[firstpar + (icat - 1) * nparamchoice + inter_offset];
+                    modEval[1 + j] += -pdf[icat] * lambda_inter * fac[k];
+                    modEval[1 + k] += -pdf[icat] * lambda_inter * fac[j];
+
                     if (flag == 3) {
                         for (int jcat_inner = 0; jcat_inner < numchoice; jcat_inner++) {
                             logitgrad[jcat_inner * npar + base_idx + inter_offset] += -pdf[icat] * fj_fk;
+                            // Update factor logitgrad with interaction contribution (was missing!)
+                            logitgrad[jcat_inner * npar + j] += -pdf[icat] * lambda_inter * fac[k];
+                            logitgrad[jcat_inner * npar + k] += -pdf[icat] * lambda_inter * fac[j];
                         }
                     }
                 }
@@ -843,6 +1138,21 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                     hess[k * npar + index] += -pdf[icat] * 2.0 * fac[k];
                 }
             }
+
+            // Second derivative of linear predictor w.r.t. factor: d^2Z/dtheta_k^2 = 2*lambda_quad_k
+            // This contributes to the factor-factor diagonal Hessian
+            if (obsCat > 0) {
+                for (int k = 0; k < numfac; k++) {
+                    double lambda_quad_k = param[firstpar + (obsCat - 1) * nparamchoice + nregressors + ifreefac + k];
+                    hess[k * npar + k] += 2.0 * lambda_quad_k;
+                }
+            }
+            for (int icat = 1; icat < numchoice; icat++) {
+                for (int k = 0; k < numfac; k++) {
+                    double lambda_quad_k = param[firstpar + (icat - 1) * nparamchoice + nregressors + ifreefac + k];
+                    hess[k * npar + k] += -pdf[icat] * 2.0 * lambda_quad_k;
+                }
+            }
         }
 
         // Second-order derivative terms for d(theta)/d(lambda_inter): d^2Z/dtheta_j dlambda_inter_jk = f_k (and similar for k)
@@ -869,6 +1179,31 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                     }
                 }
             }
+
+            // Second derivative of linear predictor w.r.t. factors: d^2Z/df_j df_k = lambda_inter
+            // This contributes to the factor-factor cross Hessian (was missing!)
+            if (obsCat > 0) {
+                int inter_idx = 0;
+                for (int jj = 0; jj < numfac - 1; jj++) {
+                    for (int kk = jj + 1; kk < numfac; kk++) {
+                        int inter_offset = nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                        double lambda_inter = param[firstpar + (obsCat - 1) * nparamchoice + inter_offset];
+                        hess[jj * npar + kk] += lambda_inter;
+                        inter_idx++;
+                    }
+                }
+            }
+            for (int icat = 1; icat < numchoice; icat++) {
+                int inter_idx = 0;
+                for (int jj = 0; jj < numfac - 1; jj++) {
+                    for (int kk = jj + 1; kk < numfac; kk++) {
+                        int inter_offset = nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                        double lambda_inter = param[firstpar + (icat - 1) * nparamchoice + inter_offset];
+                        hess[jj * npar + kk] += -pdf[icat] * lambda_inter;
+                        inter_idx++;
+                    }
+                }
+            }
         }
 
         // First-order derivative Hessian terms
@@ -876,19 +1211,46 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         for (int ifac = 0; ifac < numfac; ifac++) {
             for (int icat = 1; icat < numchoice; icat++) {
                 int param_idx = firstpar + (icat - 1) * nparamchoice + nregressors;
+                // Compute FULL derivative dZ_icat/df_ifac (not just linear loading)
                 double loading_val = 0.0;
 
                 if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
+                    // Free loading - get from parameter vector
                     int loading_idx = param_idx + (facnorm.size() > 0 ?
                         std::count_if(facnorm.begin(), facnorm.begin() + ifac,
                                       [](double x) { return x <= -9998; }) : ifac);
                     loading_val = param[loading_idx];
+                } else {
+                    // Fixed loading - use the fixed value from facnorm
+                    loading_val = facnorm[ifac];
                 }
 
-                // dtheta dtheta
-                for (int jfac = ifac; jfac < numfac; jfac++) {
-                    hess[ifac * npar + jfac] += -pdf[icat] * logitgrad[icat * npar + jfac] * loading_val;
+                // Add quadratic contribution: dZ/df_ifac includes 2*lambda_quad_ifac*f_ifac
+                if (n_quadratic_loadings > 0) {
+                    int quad_offset = nregressors + ifreefac + ifac;
+                    double lambda_quad_ifac = param[firstpar + (icat - 1) * nparamchoice + quad_offset];
+                    loading_val += 2.0 * lambda_quad_ifac * fac[ifac];
                 }
+
+                // Add interaction contribution: dZ/df_ifac includes lambda_inter*f_other
+                if (n_interaction_loadings > 0) {
+                    int inter_idx = 0;
+                    for (int jj = 0; jj < numfac - 1; jj++) {
+                        for (int kk = jj + 1; kk < numfac; kk++) {
+                            int inter_offset = nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                            double lambda_inter = param[firstpar + (icat - 1) * nparamchoice + inter_offset];
+                            if (ifac == jj) {
+                                loading_val += lambda_inter * fac[kk];
+                            } else if (ifac == kk) {
+                                loading_val += lambda_inter * fac[jj];
+                            }
+                            inter_idx++;
+                        }
+                    }
+                }
+
+                // NOTE: dtheta dtheta is computed separately below (outside icat loop)
+                // to sum over ALL categories including reference
 
                 // dtheta dalpha, dtheta dbeta, dtheta dquad, dtheta dinter for each category
                 for (int jcat = 1; jcat < numchoice; jcat++) {
@@ -925,6 +1287,18 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                             hess[ifac * npar + index] += -pdf[icat] * logitgrad[icat * npar + index] * loading_val;
                         }
                     }
+                }
+            }
+        }
+
+        // dtheta dtheta: Factor variance Hessian
+        // H_ij = -sum_k P_k * (dZ_k/df_i - μ_i) * (dZ_k/df_j - μ_j)
+        // Uses logitgrad which stores the demeaned derivatives
+        // MUST sum over ALL categories including reference (k=0)
+        for (int ifac = 0; ifac < numfac; ifac++) {
+            for (int jfac = ifac; jfac < numfac; jfac++) {
+                for (int kcat = 0; kcat < numchoice; kcat++) {
+                    hess[ifac * npar + jfac] += -pdf[kcat] * logitgrad[kcat * npar + ifac] * logitgrad[kcat * npar + jfac];
                 }
             }
         }
@@ -1147,7 +1521,13 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                 }
             }
         }
+
+        // NOTE: The "HESSIAN CORRECTION FOR FACTOR VARIANCE BLOCK" that was here has been removed.
+        // The correction was adding spurious terms because loading_val (computed at lines 1213-1250)
+        // already includes the full derivative (linear + quadratic + interaction contributions).
+        // The "correction" was double-counting these terms, causing the Hessian to be ~5x too large.
     }
+
 }
 
 void Model::EvalOprobit(double expres, int outcome_value,
@@ -1290,6 +1670,10 @@ void Model::EvalOprobit(double expres, int outcome_value,
                 for (int k = 0; k < numfac; k++) {
                     double fk_sq = fac[k] * fac[k];
                     tmpgrad[quad_grad_start + k] = (-1.0 * fk_sq) * PDF[iterm] / diffCDF;
+
+                    // Add quadratic contribution to factor variance gradient
+                    double lambda_quad_k = param[firstpar + nregressors + ifreefac + k];
+                    tmpgrad[k] += (-1.0 * 2.0 * lambda_quad_k * fac[k]) * PDF[iterm] / diffCDF;
                 }
             }
 
@@ -1301,6 +1685,12 @@ void Model::EvalOprobit(double expres, int outcome_value,
                     for (int k = j + 1; k < numfac; k++) {
                         double fj_fk = fac[j] * fac[k];
                         tmpgrad[inter_grad_start + inter_idx] = (-1.0 * fj_fk) * PDF[iterm] / diffCDF;
+
+                        // Add interaction contribution to factor variance gradients
+                        double lambda_inter = param[firstpar + nregressors + ifreefac + n_quadratic_loadings + inter_idx];
+                        tmpgrad[j] += (-1.0 * lambda_inter * fac[k]) * PDF[iterm] / diffCDF;
+                        tmpgrad[k] += (-1.0 * lambda_inter * fac[j]) * PDF[iterm] / diffCDF;
+
                         inter_idx++;
                     }
                 }
@@ -1481,6 +1871,131 @@ void Model::EvalOprobit(double expres, int outcome_value,
                             tmphess[ij*npar + index] += -fac[ik];  // d(theta_j)/d(lambda_inter_jk)
                             tmphess[ik*npar + index] += -fac[ij];  // d(theta_k)/d(lambda_inter_jk)
                             inter_idx++;
+                        }
+                    }
+                }
+
+                // ===== HESSIAN CORRECTION FOR FACTOR VARIANCE BLOCK (OPROBIT) =====
+                // The factor variance row/column multiplications use λ_k, but should use (λ_k + add_k)
+                // Row factor: Z * λ_k - grad_k  ->  Z * (λ_k + add_k) - grad_k
+                // Col factor: -λ_k  ->  -(λ_k + add_k)
+                // This adds the missing cross-product terms involving additional derivative contributions
+                if (n_quadratic_loadings > 0 || n_interaction_loadings > 0) {
+                    // Compute additional derivative terms for each factor
+                    std::vector<double> additional(numfac, 0.0);
+                    std::vector<double> linear_loading(numfac, 0.0);
+
+                    // Get linear loading values
+                    int ifree_tmp = 0;
+                    for (int k = 0; k < numfac; k++) {
+                        if (facnorm.size() == 0 || facnorm[k] <= -9998) {
+                            linear_loading[k] = param[firstpar + nregressors + ifree_tmp];
+                            ifree_tmp++;
+                        } else {
+                            linear_loading[k] = facnorm[k];
+                        }
+                    }
+
+                    // Add quadratic contributions to additional
+                    if (n_quadratic_loadings > 0) {
+                        for (int k = 0; k < numfac; k++) {
+                            double lambda_quad_k = param[firstpar + nregressors + ifreefac + k];
+                            additional[k] += 2.0 * lambda_quad_k * fac[k];
+                        }
+                    }
+
+                    // Add interaction contributions to additional
+                    if (n_interaction_loadings > 0) {
+                        int inter_idx2 = 0;
+                        for (int j = 0; j < numfac - 1; j++) {
+                            for (int k = j + 1; k < numfac; k++) {
+                                double lambda_inter = param[firstpar + nregressors + ifreefac + n_quadratic_loadings + inter_idx2];
+                                additional[j] += lambda_inter * fac[k];
+                                additional[k] += lambda_inter * fac[j];
+                                inter_idx2++;
+                            }
+                        }
+                    }
+
+                    // Correction for factor variance block
+                    // Current: (Z*λ_j - grad_j) * (-λ_k)
+                    // Target: (Z*(λ_j+add_j) - grad_j) * (-(λ_k+add_k))
+                    // Note: grad already includes add contributions, so row factor error is Z*add_j
+                    // Correction: Z*add_j*(-λ_k) + (Z*λ_j - grad_j)*(-add_k) + Z*add_j*(-add_k)
+                    //           = -Z*add_j*λ_k - (Z*λ_j - grad_j)*add_k - Z*add_j*add_k
+                    for (int j = 0; j < numfac; j++) {
+                        for (int k = j; k < numfac; k++) {
+                            double row_j = -Z[iterm] * (-linear_loading[j]) - modEval[1 + j];
+                            double correction;
+                            if (j == k) {
+                                // Diagonal: row and col are same factor
+                                correction = -Z[iterm] * additional[k] * linear_loading[k]
+                                           - row_j * additional[k]
+                                           - Z[iterm] * additional[k] * additional[k];
+                            } else {
+                                correction = -Z[iterm] * additional[j] * linear_loading[k]
+                                           - row_j * additional[k]
+                                           - Z[iterm] * additional[j] * additional[k];
+                            }
+                            tmphess[j * npar + k] += correction;
+                        }
+                    }
+
+                    // Correction for cross-derivatives: θ_k with other parameters
+                    // Row k should have factor: Z*λ_k - grad_k -> Z*(λ_k + add_k) - grad_k
+                    // So we need to add: Z * add_k * col_j for each param j
+                    for (int k = 0; k < numfac; k++) {
+                        if (std::abs(additional[k]) < 1e-15) continue;
+
+                        // Cross with regression coefficients
+                        for (int ireg = 0; ireg < nregressors; ireg++) {
+                            double col_reg = -data[iobs_offset + regressors[ireg]];
+                            int reg_idx = numfac + ireg;
+                            // Row correction: Z*add_k * col_reg (col_reg already has -1 factor)
+                            tmphess[k * npar + reg_idx] += Z[iterm] * additional[k] * col_reg;
+                        }
+
+                        // Cross with free linear loadings
+                        int ifree3 = 0;
+                        for (int m = 0; m < numfac; m++) {
+                            if (facnorm.size() == 0 || facnorm[m] <= -9998) {
+                                int load_idx = numfac + nregressors + ifree3;
+                                double col_load = -fac[m];
+                                tmphess[k * npar + load_idx] += Z[iterm] * additional[k] * col_load;
+                                ifree3++;
+                            }
+                        }
+
+                        // Cross with quadratic loadings
+                        if (n_quadratic_loadings > 0) {
+                            for (int m = 0; m < numfac; m++) {
+                                int quad_idx = numfac + nregressors + ifreefac + m;
+                                double col_quad = -fac[m] * fac[m];
+                                tmphess[k * npar + quad_idx] += Z[iterm] * additional[k] * col_quad;
+                            }
+                        }
+
+                        // Cross with interaction loadings
+                        if (n_interaction_loadings > 0) {
+                            int inter_idx3 = 0;
+                            for (int j2 = 0; j2 < numfac - 1; j2++) {
+                                for (int k2 = j2 + 1; k2 < numfac; k2++) {
+                                    int idx = numfac + nregressors + ifreefac + n_quadratic_loadings + inter_idx3;
+                                    double col_inter = -fac[j2] * fac[k2];
+                                    tmphess[k * npar + idx] += Z[iterm] * additional[k] * col_inter;
+                                    inter_idx3++;
+                                }
+                            }
+                        }
+
+                        // Cross with thresholds (col factor is 1 for active thresholds)
+                        int thres_start = npar - (numchoice - 1);
+                        int maxthres = obsCat;
+                        if (iterm == 0) maxthres--;
+                        for (int ithres = 0; ithres < maxthres; ithres++) {
+                            int idx = thres_start + ithres;
+                            // Threshold has col factor of 1 (not -1)
+                            tmphess[k * npar + idx] += Z[iterm] * additional[k] * 1.0;
                         }
                     }
                 }

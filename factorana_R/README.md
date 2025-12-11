@@ -58,7 +58,7 @@ devtools::install_github("GregVeramendi/factorana",
 ## Features
 - Define any number of latent factors with flexible loading normalization
 - Specify model components independently (linear, logit, probit, oprobit)
-- **Quadratic factor terms**: Model nonlinear factor effects via `factor_spec = "quadratic"`
+- **Nonlinear factor effects**: Model quadratic (`f²`) and interaction (`f_j × f_k`) factor terms via `factor_spec`
 - Fix regression coefficients to specific values via `fix_coefficient()`
 - Multi-stage/sequential estimation with fixed early-stage parameters
 - Automatically initialize parameters using component-by-component estimation
@@ -451,8 +451,8 @@ More detailed explanations within functions.
 - `factor_spec`: Factor specification for nonlinear effects (default: `"linear"`)
   - `"linear"`: Standard linear factor terms only (λ × f)
   - `"quadratic"`: Include quadratic terms (λ × f + λ_quad × f²)
-  - `"interactions"`: Include interaction terms (λ × f + λ_inter × f_j × f_k) [future]
-  - `"full"`: Include both quadratic and interaction terms [future]
+  - `"interactions"`: Include interaction terms (λ × f + λ_inter × f_j × f_k) for multi-factor models
+  - `"full"`: Include both quadratic and interaction terms
 - Returns a `"model_component"` with pointers to `factor`.
 
 ### `fix_coefficient(component, covariate, value, choice = NULL)`
@@ -931,6 +931,88 @@ print(result$estimates)
 - Quadratic loadings are always free (estimated), never fixed
 - Parameter naming: `{component}_loading_quad_{factor_index}`
 
+### Factor Interaction Terms (Multi-Factor)
+
+For multi-factor models, use `factor_spec = "interactions"` to include cross-product terms (f_j × f_k):
+
+```r
+set.seed(110)
+n <- 500
+f1 <- rnorm(n)  # Latent factor 1
+f2 <- rnorm(n)  # Latent factor 2
+x1 <- rnorm(n)
+
+# Measurement system for 2-factor model (4 test scores, 2 per factor)
+T1 <- 2.0 + 1.0*f1 + rnorm(n, 0, 0.5)  # Factor 1 indicator (loading fixed to 1)
+T2 <- 1.5 + 1.2*f1 + rnorm(n, 0, 0.6)  # Factor 1 indicator
+T3 <- 1.0 + 1.0*f2 + rnorm(n, 0, 0.4)  # Factor 2 indicator (loading fixed to 1)
+T4 <- 0.8 + 0.9*f2 + rnorm(n, 0, 0.5)  # Factor 2 indicator
+
+# Outcome with factor interaction effect
+# Y = intercept + beta*x1 + lambda1*f1 + lambda2*f2 + lambda_inter*f1*f2 + error
+Y <- 3.0 + 0.5*x1 + 0.8*f1 + 0.6*f2 + 0.4*f1*f2 + rnorm(n, 0, 0.5)
+
+dat <- data.frame(intercept = 1, x1 = x1, T1 = T1, T2 = T2, T3 = T3, T4 = T4, Y = Y, eval = 1)
+
+# Define 2-factor model
+fm <- define_factor_model(n_factors = 2, n_types = 1)
+ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+
+# Measurement equations for factor identification
+mc_T1 <- define_model_component(
+  name = "T1", data = dat, outcome = "T1", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(1.0, 0),  # Factor 1 loading=1, Factor 2 loading=0
+  evaluation_indicator = "eval"
+)
+
+mc_T2 <- define_model_component(
+  name = "T2", data = dat, outcome = "T2", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(NA_real_, 0),  # Factor 1 free, Factor 2 = 0
+  evaluation_indicator = "eval"
+)
+
+mc_T3 <- define_model_component(
+  name = "T3", data = dat, outcome = "T3", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(0, 1.0),  # Factor 1 = 0, Factor 2 loading=1
+  evaluation_indicator = "eval"
+)
+
+mc_T4 <- define_model_component(
+  name = "T4", data = dat, outcome = "T4", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(0, NA_real_),  # Factor 1 = 0, Factor 2 free
+  evaluation_indicator = "eval"
+)
+
+# Outcome with INTERACTION factor effect
+mc_Y <- define_model_component(
+  name = "Y", data = dat, outcome = "Y", factor = fm,
+  covariates = c("intercept", "x1"), model_type = "linear",
+  loading_normalization = c(NA_real_, NA_real_),  # Both linear loadings free
+  factor_spec = "interactions",  # Enable f1*f2 interaction term
+  evaluation_indicator = "eval"
+)
+
+# Estimate
+ms <- define_model_system(components = list(mc_T1, mc_T2, mc_T3, mc_T4, mc_Y), factor = fm)
+result <- estimate_model_rcpp(ms, dat, init_params = NULL, control = ctrl, verbose = TRUE)
+
+# View results - includes Y_loading_inter_1_2 parameter
+print(result$estimates)
+```
+
+**Key points:**
+- `factor_spec = "interactions"` adds interaction loading parameters for all factor pairs (f_j × f_k, j < k)
+- For k factors, adds k(k-1)/2 interaction terms (e.g., 2 factors → 1 interaction term)
+- Linear predictor becomes: xβ + Σ λ_j f_j + Σ_{j<k} λ_inter_{jk} f_j f_k
+- Works with all model types: linear, probit, logit, oprobit
+- Requires k ≥ 2 factors (silently ignored for single-factor models)
+- Parameter naming: `{component}_loading_inter_{j}_{k}` (e.g., `Y_loading_inter_1_2`)
+- Use `factor_spec = "full"` to include both quadratic and interaction terms
+
 ---
 
 ## Performance and optimization
@@ -1047,5 +1129,6 @@ Logs are saved to `tests/testthat/test_logs/` with detailed diagnostics.
 - Quadrature accuracy with properly identified three-measurement system
 - Parameter recovery from simulated data
 - Gradient and Hessian accuracy checks
+- Factor interaction terms (quadratic and cross-product effects for all model types)
 
 ---
