@@ -170,8 +170,14 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       # Initialize to small non-zero values to make types distinguishable
       # (avoids degenerate Hessian at initialization)
       if (n_types > 1L) {
-        type_intercepts <- 0.1 * (seq_len(n_types - 1L))  # 0.1, 0.2, 0.3, ...
-        type_intercept_names <- paste0(comp$name, "_type_", 2:n_types, "_intercept")
+        type_intercepts <- numeric(0)
+        type_intercept_names <- character(0)
+        for (t in 2:n_types) {
+          if (!is_type_intercept_fixed(comp, t, choice = NULL)) {
+            type_intercepts <- c(type_intercepts, 0.1 * (t - 1L))  # 0.1, 0.2, 0.3, ...
+            type_intercept_names <- c(type_intercept_names, paste0(comp$name, "_type_", t, "_intercept"))
+          }
+        }
         comp_params <- c(comp_params, type_intercepts)
         comp_param_names <- c(comp_param_names, type_intercept_names)
       }
@@ -208,8 +214,14 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       # Add type-specific intercepts if n_types > 1
       # Initialize to small non-zero values to make types distinguishable
       if (n_types > 1L) {
-        type_intercepts <- 0.1 * (seq_len(n_types - 1L))  # 0.1, 0.2, 0.3, ...
-        type_intercept_names <- paste0(comp$name, "_type_", 2:n_types, "_intercept")
+        type_intercepts <- numeric(0)
+        type_intercept_names <- character(0)
+        for (t in 2:n_types) {
+          if (!is_type_intercept_fixed(comp, t, choice = NULL)) {
+            type_intercepts <- c(type_intercepts, 0.1 * (t - 1L))  # 0.1, 0.2, 0.3, ...
+            type_intercept_names <- c(type_intercept_names, paste0(comp$name, "_type_", t, "_intercept"))
+          }
+        }
         comp_params <- c(comp_params, type_intercepts)
         comp_param_names <- c(comp_param_names, type_intercept_names)
       }
@@ -247,8 +259,14 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         # Add type-specific intercepts if n_types > 1
         # Initialize to small non-zero values to make types distinguishable
         if (n_types > 1L) {
-          type_intercepts <- 0.1 * (seq_len(n_types - 1L))  # 0.1, 0.2, 0.3, ...
-          type_intercept_names <- paste0(comp$name, "_type_", 2:n_types, "_intercept")
+          type_intercepts <- numeric(0)
+          type_intercept_names <- character(0)
+          for (t in 2:n_types) {
+            if (!is_type_intercept_fixed(comp, t, choice = NULL)) {
+              type_intercepts <- c(type_intercepts, 0.1 * (t - 1L))  # 0.1, 0.2, 0.3, ...
+              type_intercept_names <- c(type_intercept_names, paste0(comp$name, "_type_", t, "_intercept"))
+            }
+          }
           comp_params <- c(comp_params, type_intercepts)
           comp_param_names <- c(comp_param_names, type_intercept_names)
         }
@@ -304,8 +322,14 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         # Initialize to small non-zero values to make types distinguishable
         if (n_types > 1L) {
           for (choice in seq_len(comp$num_choices - 1)) {
-            type_intercepts <- 0.1 * (seq_len(n_types - 1L))  # 0.1, 0.2, 0.3, ...
-            type_intercept_names <- paste0(comp$name, "_c", choice, "_type_", 2:n_types, "_intercept")
+            type_intercepts <- numeric(0)
+            type_intercept_names <- character(0)
+            for (t in 2:n_types) {
+              if (!is_type_intercept_fixed(comp, t, choice = choice)) {
+                type_intercepts <- c(type_intercepts, 0.1 * (t - 1L))  # 0.1, 0.2, 0.3, ...
+                type_intercept_names <- c(type_intercept_names, paste0(comp$name, "_c", choice, "_type_", t, "_intercept"))
+              }
+            }
             comp_params <- c(comp_params, type_intercepts)
             comp_param_names <- c(comp_param_names, type_intercept_names)
           }
@@ -432,8 +456,14 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       # For oprobit, type-specific intercepts shift all thresholds by a constant
       # Initialize to small non-zero values to make types distinguishable
       if (n_types > 1L) {
-        type_intercepts <- 0.1 * (seq_len(n_types - 1L))  # 0.1, 0.2, 0.3, ...
-        type_intercept_names <- paste0(comp$name, "_type_", 2:n_types, "_intercept")
+        type_intercepts <- numeric(0)
+        type_intercept_names <- character(0)
+        for (t in 2:n_types) {
+          if (!is_type_intercept_fixed(comp, t, choice = NULL)) {
+            type_intercepts <- c(type_intercepts, 0.1 * (t - 1L))  # 0.1, 0.2, 0.3, ...
+            type_intercept_names <- c(type_intercept_names, paste0(comp$name, "_type_", t, "_intercept"))
+          }
+        }
         comp_params <- c(comp_params, type_intercepts)
         comp_param_names <- c(comp_param_names, type_intercept_names)
       }

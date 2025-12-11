@@ -60,6 +60,7 @@ devtools::install_github("GregVeramendi/factorana",
 - Specify model components independently (linear, logit, probit, oprobit)
 - **Nonlinear factor effects**: Model quadratic (`f²`) and interaction (`f_j × f_k`) factor terms via `factor_spec`
 - Fix regression coefficients to specific values via `fix_coefficient()`
+- Fix type-specific intercepts to zero via `fix_type_intercepts()` (for multi-type models)
 - Multi-stage/sequential estimation with fixed early-stage parameters
 - Automatically initialize parameters using component-by-component estimation
 - Fast C++ backend with R-level parallelization for large datasets
@@ -478,6 +479,33 @@ More detailed explanations within functions.
   - Multiple coefficients can be fixed by chaining calls
   - Only regression coefficients (betas) can be fixed, not sigma, thresholds, or loadings
   - Fixed coefficients are held constant during optimization
+
+### `fix_type_intercepts(component, types = NULL, choice = NULL)`
+- Fixes type-specific intercepts to zero for models with `n_types > 1`.
+- **Parameters**:
+  - `component`: Model component from `define_model_component()`
+  - `types`: Integer vector of which types to fix (default: all non-reference types, i.e., types 2 through n_types)
+  - `choice`: For multinomial logit only - which choice's type intercepts to fix (default: all choices)
+- **Returns**: Modified model component with the constraints added
+- **Example**:
+  ```r
+  # Create 2-type factor model
+  fm <- define_factor_model(n_factors = 1, n_types = 2)
+  mc <- define_model_component(name = "Y", data = dat, ...)
+
+  # Fix all type intercepts to 0
+  mc <- fix_type_intercepts(mc)
+
+  # Or fix specific type(s) in a 3-type model
+  mc <- fix_type_intercepts(mc, types = 2)  # Only fix type 2
+
+  # For multinomial logit: fix type intercepts for specific choice
+  mc <- fix_type_intercepts(mc, choice = 1)
+  ```
+- **Notes**:
+  - Type 1 is the reference type (no intercept parameter)
+  - Fixed type intercepts are excluded from the parameter vector entirely
+  - Useful when type effects should operate only through factor loadings, not direct intercept shifts
 
 ### `define_model_system(components, factor, previous_stage = NULL)`
 - Bundles components and the shared factor model into a `"model_system"`.

@@ -21,7 +21,15 @@ evaluate_likelihood_cpp(
 \item{compute_hessian}{Whether to compute Hessian (default FALSE)}
 }
 \value{
-List with log-likelihood, gradient (if requested), and Hessian (if requested)
+List with:
+\itemize{
+\item logLikelihood: scalar log-likelihood value
+\item gradient: vector of length n_param_free (if requested)
+\item hessian: vector of length n_param_free*(n_param_free+1)/2 stored as
+upper-triangular in row-major order (if requested).
+To expand to full symmetric matrix in R:
+\code{idx <- 1; for(i in 1:n) for(j in i:n) { H[i,j] <- H[j,i] <- hess[idx]; idx <- idx + 1 }}
+}
 }
 \description{
 Evaluate log-likelihood for given parameters
