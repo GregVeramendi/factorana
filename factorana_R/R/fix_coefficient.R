@@ -304,8 +304,11 @@ fix_type_intercepts <- function(component, types = NULL, choice = NULL) {
     }
   }
 
-  # ---- 7. Update parameter count ----
-  component$nparam_model <- component$nparam_model - n_new_constraints
+  # Note: We do NOT reduce nparam_model here because the C++ layer
+
+  # always expects type intercept parameters in the vector when n_types > 1.
+  # The fixed type intercepts will be handled via parameter constraints in
+  # optimize_model.R's setup_parameter_constraints() function.
 
   return(component)
 }

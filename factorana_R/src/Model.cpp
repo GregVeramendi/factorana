@@ -339,6 +339,11 @@ void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
                     // Cross-derivatives d^2(logL)/(d(theta) d(lambda_inter))
                     hess[j*npar + index] += fac[k] * Z / sigma2;  // d(theta_j)/d(lambda_inter_jk)
                     hess[k*npar + index] += fac[j] * Z / sigma2;  // d(theta_k)/d(lambda_inter_jk)
+
+                    // Cross-derivative d^2(logL)/(d(f_j) d(f_k)) from second derivative of xb
+                    // d²(xb)/d(f_j)d(f_k) = lambda_inter_jk (non-zero for interaction terms)
+                    // Contributes: dL/d(xb) * lambda_inter = Z/sigma^2 * lambda_inter
+                    hess[j*npar + k] += lambda_inter * Z / sigma2;
                 }
                 inter_idx++;
             }

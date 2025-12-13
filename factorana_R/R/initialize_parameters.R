@@ -167,15 +167,18 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       comp_param_names <- c(coef_names, loading_names, second_order$names, paste0(comp$name, "_sigma"))
 
       # Add type-specific intercepts if n_types > 1
-      # Initialize to small non-zero values to make types distinguishable
-      # (avoids degenerate Hessian at initialization)
+      # Always include ALL type intercepts in the parameter vector (C++ expects them)
+      # Fixed intercepts are initialized to 0.0; free ones to small non-zero values
       if (n_types > 1L) {
-        type_intercepts <- numeric(0)
-        type_intercept_names <- character(0)
+        type_intercepts <- numeric(n_types - 1L)
+        type_intercept_names <- character(n_types - 1L)
         for (t in 2:n_types) {
-          if (!is_type_intercept_fixed(comp, t, choice = NULL)) {
-            type_intercepts <- c(type_intercepts, 0.1 * (t - 1L))  # 0.1, 0.2, 0.3, ...
-            type_intercept_names <- c(type_intercept_names, paste0(comp$name, "_type_", t, "_intercept"))
+          idx <- t - 1L
+          type_intercept_names[idx] <- paste0(comp$name, "_type_", t, "_intercept")
+          if (is_type_intercept_fixed(comp, t, choice = NULL)) {
+            type_intercepts[idx] <- 0.0  # Fixed value
+          } else {
+            type_intercepts[idx] <- 0.1 * (t - 1L)  # 0.1, 0.2, 0.3, ...
           }
         }
         comp_params <- c(comp_params, type_intercepts)
@@ -212,14 +215,17 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       comp_param_names <- c(coef_names, loading_names, second_order$names)
 
       # Add type-specific intercepts if n_types > 1
-      # Initialize to small non-zero values to make types distinguishable
+      # Always include ALL type intercepts in the parameter vector (C++ expects them)
       if (n_types > 1L) {
-        type_intercepts <- numeric(0)
-        type_intercept_names <- character(0)
+        type_intercepts <- numeric(n_types - 1L)
+        type_intercept_names <- character(n_types - 1L)
         for (t in 2:n_types) {
-          if (!is_type_intercept_fixed(comp, t, choice = NULL)) {
-            type_intercepts <- c(type_intercepts, 0.1 * (t - 1L))  # 0.1, 0.2, 0.3, ...
-            type_intercept_names <- c(type_intercept_names, paste0(comp$name, "_type_", t, "_intercept"))
+          idx <- t - 1L
+          type_intercept_names[idx] <- paste0(comp$name, "_type_", t, "_intercept")
+          if (is_type_intercept_fixed(comp, t, choice = NULL)) {
+            type_intercepts[idx] <- 0.0  # Fixed value
+          } else {
+            type_intercepts[idx] <- 0.1 * (t - 1L)  # 0.1, 0.2, 0.3, ...
           }
         }
         comp_params <- c(comp_params, type_intercepts)
@@ -257,14 +263,17 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         comp_param_names <- c(coef_names, loading_names, second_order$names)
 
         # Add type-specific intercepts if n_types > 1
-        # Initialize to small non-zero values to make types distinguishable
+        # Always include ALL type intercepts in the parameter vector (C++ expects them)
         if (n_types > 1L) {
-          type_intercepts <- numeric(0)
-          type_intercept_names <- character(0)
+          type_intercepts <- numeric(n_types - 1L)
+          type_intercept_names <- character(n_types - 1L)
           for (t in 2:n_types) {
-            if (!is_type_intercept_fixed(comp, t, choice = NULL)) {
-              type_intercepts <- c(type_intercepts, 0.1 * (t - 1L))  # 0.1, 0.2, 0.3, ...
-              type_intercept_names <- c(type_intercept_names, paste0(comp$name, "_type_", t, "_intercept"))
+            idx <- t - 1L
+            type_intercept_names[idx] <- paste0(comp$name, "_type_", t, "_intercept")
+            if (is_type_intercept_fixed(comp, t, choice = NULL)) {
+              type_intercepts[idx] <- 0.0  # Fixed value
+            } else {
+              type_intercepts[idx] <- 0.1 * (t - 1L)  # 0.1, 0.2, 0.3, ...
             }
           }
           comp_params <- c(comp_params, type_intercepts)
@@ -454,14 +463,17 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
 
       # Add type-specific intercepts if n_types > 1
       # For oprobit, type-specific intercepts shift all thresholds by a constant
-      # Initialize to small non-zero values to make types distinguishable
+      # Always include ALL type intercepts in the parameter vector (C++ expects them)
       if (n_types > 1L) {
-        type_intercepts <- numeric(0)
-        type_intercept_names <- character(0)
+        type_intercepts <- numeric(n_types - 1L)
+        type_intercept_names <- character(n_types - 1L)
         for (t in 2:n_types) {
-          if (!is_type_intercept_fixed(comp, t, choice = NULL)) {
-            type_intercepts <- c(type_intercepts, 0.1 * (t - 1L))  # 0.1, 0.2, 0.3, ...
-            type_intercept_names <- c(type_intercept_names, paste0(comp$name, "_type_", t, "_intercept"))
+          idx <- t - 1L
+          type_intercept_names[idx] <- paste0(comp$name, "_type_", t, "_intercept")
+          if (is_type_intercept_fixed(comp, t, choice = NULL)) {
+            type_intercepts[idx] <- 0.0  # Fixed value
+          } else {
+            type_intercepts[idx] <- 0.1 * (t - 1L)  # 0.1, 0.2, 0.3, ...
           }
         }
         comp_params <- c(comp_params, type_intercepts)

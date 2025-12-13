@@ -329,6 +329,28 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
         }
       }
     }
+
+    # Fix type intercepts that were marked as fixed via fix_type_intercepts()
+    if (param_type == "type_intercept") {
+      comp <- model_system$components[[comp_id]]
+      if (!is.null(comp) && !is.null(comp$fixed_type_intercepts) && length(comp$fixed_type_intercepts) > 0) {
+        # Extract type number from parameter name (e.g., "Y_type_2_intercept" -> 2)
+        param_name <- param_metadata$names[i]
+        type_match <- regmatches(param_name, regexec("_type_([0-9]+)_intercept$", param_name))[[1]]
+        if (length(type_match) >= 2) {
+          type_num <- as.integer(type_match[2])
+          if (is_type_intercept_fixed(comp, type_num, choice = NULL)) {
+            param_fixed[i] <- TRUE
+            lower_bounds[i] <- 0.0
+            upper_bounds[i] <- 0.0
+            if (verbose) {
+              message(sprintf("  Fixed type intercept: param %d (%s) at 0",
+                              i, param_name))
+            }
+          }
+        }
+      }
+    }
   }
 
   free_idx <- which(!param_fixed)
@@ -1102,6 +1124,7 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   result <- list(
     estimates = estimates,
     std_errors = std_errors,
+    param_names = param_metadata$names,
     loglik = loglik,
     convergence = convergence,
     n_restarts = n_restarts_used,
