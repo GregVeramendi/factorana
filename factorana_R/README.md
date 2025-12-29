@@ -756,9 +756,14 @@ Model structural relationships between latent factors, e.g., `f1 = β₀ + λ₂
 set.seed(111)
 n <- 500
 
-# Two latent factors with correlation
-f1 <- rnorm(n)
+# True parameters for structural equation: f1 = intercept + lambda*f2 + epsilon
+true_intercept <- 0.5
+true_lambda <- 0.8
+true_sigma_struct <- 0.3
+
+# Generate factors according to structural model
 f2 <- rnorm(n)
+f1 <- true_intercept + true_lambda * f2 + rnorm(n, 0, true_sigma_struct)
 
 # Measurement system (test scores to identify factors)
 # Factor 1 indicators
@@ -820,10 +825,10 @@ dyn <- define_dyn_model_component(
 ms <- define_model_system(components = list(mc_T1, mc_T2, mc_T3, mc_T4, dyn), factor = fm)
 result <- estimate_model_rcpp(ms, dat, init_params = NULL, control = ctrl, verbose = TRUE)
 
-# View results
-# structural_loading_2: effect of f2 on f1
-# structural_intercept: intercept in structural equation
-# structural_sigma: error variance in structural equation
+# View results - should recover true values:
+# structural_beta_intercept ≈ 0.5 (true_intercept)
+# structural_loading_2 ≈ 0.8 (true_lambda)
+# structural_sigma ≈ 0.3 (true_sigma_struct)
 print(result$estimates)
 print(result$std_errors)
 ```
