@@ -448,7 +448,7 @@ mc2 <- define_model_component(
 ## API (R)
 More detailed explanations within functions.
 
-### `define_factor_model(n_factors, n_types, correlation = FALSE, n_mixtures = 1)`
+### define_factor_model(n_factors, n_types, correlation = FALSE, n_mixtures = 1)
 - `n_factors` (int ≥0): number of latent factors (use 0 for models without factors)
 - `n_types` (int ≥1): number of types
 - `correlation` (logical): whether factors are correlated (default: FALSE)
@@ -456,7 +456,7 @@ More detailed explanations within functions.
 - Returns an object of class `"factor_model"`
 - **Note**: Loading normalization is specified at the component level via `define_model_component()`. Quadrature points are specified in `define_estimation_control()`.
 
-### `define_model_component(name, data, outcome, factor, evaluation_indicator = NULL, covariates, model_type, loading_normalization = NA_real_, factor_spec = "linear", intercept = TRUE, num_choices = 2, nrank = NULL)`
+### define_model_component(name, data, outcome, factor, evaluation_indicator = NULL, covariates, model_type, loading_normalization = NA_real_, factor_spec = "linear", intercept = TRUE, num_choices = 2, nrank = NULL)
 - Validates data (no missing in eval subset), coerces outcome for `oprobit` to ordered factors if needed.
 - `model_type`: `"linear"`, `"probit"`, `"logit"`, `"oprobit"`.
 - `loading_normalization`: Normalization for factor loadings (NA or NA_real_ = free, numeric = fixed)
@@ -467,7 +467,7 @@ More detailed explanations within functions.
   - `"full"`: Include both quadratic and interaction terms
 - Returns a `"model_component"` with pointers to `factor`.
 
-### `define_dyn_model_component(name, data, outcome_factor, factor, covariates = NULL, dyn_type = "linear", factor_spec = "linear", intercept = TRUE, evaluation_indicator = NULL)`
+### define_dyn_model_component(name, data, outcome_factor, factor, covariates = NULL, dyn_type = "linear", factor_spec = "linear", intercept = TRUE, evaluation_indicator = NULL)
 - Creates a **dynamic factor model component** representing a structural equation between latent factors.
 - The model estimates: `f_outcome = X'β + Σ_{k≠outcome} λ_k × f_k + [higher-order terms] + ε`
 - **Parameters**:
@@ -486,9 +486,6 @@ More detailed explanations within functions.
   - `evaluation_indicator`: Optional indicator variable for which observations to include
 - **Returns**: Object of class `c("dyn_model_component", "model_component")`
 - **Key differences from `define_model_component()`**:
-  - No `outcome` variable needed (outcome is implicitly zero)
-  - Loading on outcome factor is fixed to -1 (not estimated)
-  - Factor normalization is automatic: `-1` for outcome factor, `NA` (free) for others
   - Quadratic/interaction terms only apply to non-outcome factors
 - **Example**:
   ```r
@@ -500,7 +497,7 @@ More detailed explanations within functions.
   )
   ```
 
-### `fix_coefficient(component, covariate, value, choice = NULL)`
+### fix_coefficient(component, covariate, value, choice = NULL)
 - Fixes a regression coefficient to a specified value during estimation.
 - **Parameters**:
   - `component`: Model component from `define_model_component()`
@@ -524,7 +521,7 @@ More detailed explanations within functions.
   - Only regression coefficients (betas) can be fixed, not sigma, thresholds, or loadings
   - Fixed coefficients are held constant during optimization
 
-### `fix_type_intercepts(component, types = NULL, choice = NULL)`
+### fix_type_intercepts(component, types = NULL, choice = NULL)
 - Fixes type-specific intercepts to zero for models with `n_types > 1`.
 - **Parameters**:
   - `component`: Model component from `define_model_component()`
@@ -551,7 +548,7 @@ More detailed explanations within functions.
   - Fixed type intercepts are excluded from the parameter vector entirely
   - Useful when type effects should operate only through factor loadings, not direct intercept shifts
 
-### `define_model_system(components, factor, previous_stage = NULL)`
+### define_model_system(components, factor, previous_stage = NULL)
 - Bundles components and the shared factor model into a `"model_system"`.
 - `previous_stage` (optional): Result object from a previous `estimate_model_rcpp()` call
   - Enables multi-stage/sequential estimation
@@ -560,12 +557,12 @@ More detailed explanations within functions.
   - Standard errors are preserved from previous stage
   - See "Two-Stage Estimation" section for usage example
 
-### `define_estimation_control(n_quad_points = 16, num_cores = 1)`
+### define_estimation_control(n_quad_points = 16, num_cores = 1)
 - Container for estimation settings including numerical integration and parallelization.
 - `n_quad_points` (int ≥1): Number of Gauss-Hermite quadrature points for numerical integration (default: 16)
 - `num_cores`: Number of CPU cores to use for parallel estimation (default: 1)
 
-### `estimate_model_rcpp(model_system, data, init_params = NULL, control = NULL, optimizer = "nlminb", parallel = TRUE, verbose = TRUE)`
+### estimate_model_rcpp(model_system, data, init_params = NULL, control = NULL, optimizer = "nlminb", parallel = TRUE, verbose = TRUE)
 - Main estimation function using C++ backend with R-level parallelization
 - **Parameters**:
   - `model_system`: Output from `define_model_system()`
@@ -595,7 +592,7 @@ More detailed explanations within functions.
 - Uses `doParallel` for Windows compatibility
 - Single evaluation indicator per observation (one worker evaluates it)
 
-### `initialize_parameters(model_system, data, verbose = TRUE)`
+### initialize_parameters(model_system, data, verbose = TRUE)
 - Produces initial values for all parameters in the model system
 - Estimates each component separately (ignoring factors) to get starting values
 - **Returns**: List with
@@ -608,14 +605,14 @@ More detailed explanations within functions.
 
 The package provides functions to display estimation results in formatted tables, either to the screen or as LaTeX output.
 
-### `components_table(result, components = NULL)`
+### components_table(result, components = NULL)
 - Creates a table with model components as columns and parameter types as rows
 - Similar to SEM/CFA output format for easy comparison across components
 - `result`: Output from `estimate_model_rcpp()`
 - `components`: Optional character vector of component names to include (default: all)
 - **Returns**: Object of class `"components_table"` that prints nicely
 
-### `components_to_latex(result, components = NULL, caption = NULL, label = NULL, digits = 3)`
+### components_to_latex(result, components = NULL, caption = NULL, label = NULL, digits = 3)
 - Exports the component table to LaTeX format (booktabs style)
 - Same parameters as `components_table()`, plus:
   - `caption`: Optional table caption
