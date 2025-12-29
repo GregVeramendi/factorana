@@ -35,6 +35,18 @@ define_model_system <- function(components, factor, previous_stage = NULL) {
    stop("All model_components must have Factor as the factor_model")
  }
 
+  # Validate dynamic components
+  for (comp in components) {
+    if (isTRUE(comp$is_dynamic)) {
+      if (is.null(comp$outcome_factor) ||
+          comp$outcome_factor < 1L ||
+          comp$outcome_factor > factor$n_factors) {
+        stop(sprintf("Dynamic component '%s' has invalid outcome_factor (%s). Must be between 1 and %d.",
+                     comp$name, comp$outcome_factor, factor$n_factors))
+      }
+    }
+  }
+
   # Handle previous_stage if provided
   previous_stage_info <- NULL
   if (!is.null(previous_stage)) {

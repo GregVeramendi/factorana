@@ -58,6 +58,7 @@ devtools::install_github("GregVeramendi/factorana",
 ## Features
 - Define any number of latent factors with flexible loading normalization
 - Specify model components independently (linear, logit, probit, oprobit)
+- **Dynamic factor models**: Structural equations between latent factors via `define_dyn_model_component()`
 - **Nonlinear factor effects**: Model quadratic (`f²`) and interaction (`f_j × f_k`) factor terms via `factor_spec`
 - Fix regression coefficients to specific values via `fix_coefficient()`
 - Fix type-specific intercepts to zero via `fix_type_intercepts()` (for multi-type models)
@@ -69,6 +70,9 @@ devtools::install_github("GregVeramendi/factorana",
 ## Quick start: Roy model example
 
 This example demonstrates a Roy selection model with unobserved ability (latent factor), sector choice, test scores, and wages.
+
+<details>
+<summary>Click to expand full example code</summary>
 
 ```r
 library(factorana)
@@ -262,6 +266,8 @@ cat("\n=== Estimation Diagnostics ===\n")
 print(diagnostics, row.names = FALSE, right = FALSE)
 ```
 
+</details>
+
 **Key features demonstrated:**
 
 - **Latent factor**: Unobserved ability (`f`) affects test scores, wages, and sector choice
@@ -278,6 +284,9 @@ print(diagnostics, row.names = FALSE, right = FALSE)
 ## Two-Stage (Sequential) Estimation
 
 For complex models, you can estimate in multiple stages to improve convergence and interpretability. In the first stage, estimate a subset of components (e.g., measurement system). In subsequent stages, fix those components and add new ones.
+
+<details>
+<summary>Click to expand two-stage estimation example</summary>
 
 **Example**: Estimate test scores first, then add wage and sector equations:
 
@@ -377,6 +386,8 @@ print(result_stage2$estimates)    # Includes both stage 1 and stage 2 parameters
 print(result_stage2$std_errors)   # Standard errors preserved from stage 1
 ```
 
+</details>
+
 **How it works:**
 - Stage 1 estimates only the measurement system (9 parameters)
 - Stage 2 fixes those 9 parameters and estimates wage/sector parameters (12 new parameters)
@@ -455,6 +466,39 @@ More detailed explanations within functions.
   - `"interactions"`: Include interaction terms (λ × f + λ_inter × f_j × f_k) for multi-factor models
   - `"full"`: Include both quadratic and interaction terms
 - Returns a `"model_component"` with pointers to `factor`.
+
+### `define_dyn_model_component(name, data, outcome_factor, factor, covariates = NULL, dyn_type = "linear", factor_spec = "linear", intercept = TRUE, evaluation_indicator = NULL)`
+- Creates a **dynamic factor model component** representing a structural equation between latent factors.
+- The model estimates: `f_outcome = X'β + Σ_{k≠outcome} λ_k × f_k + [higher-order terms] + ε`
+- **Parameters**:
+  - `name`: Name for the component
+  - `data`: Data frame (only used for covariates and evaluation_indicator)
+  - `outcome_factor`: Integer index (1-based) of the outcome factor
+  - `factor`: Factor model from `define_factor_model()`
+  - `covariates`: Optional character vector of covariate names
+  - `dyn_type`: Currently only `"linear"` supported (future: `"cobb_douglas"`, `"ces"`)
+  - `factor_spec`: Factor specification for non-outcome factors
+    - `"linear"`: Linear factor terms only
+    - `"quadratic"`: Include f² terms for non-outcome factors
+    - `"interactions"`: Include f_j × f_k terms (excluding outcome factor)
+    - `"full"`: Both quadratic and interaction terms
+  - `intercept`: Whether to include an intercept (default: TRUE)
+  - `evaluation_indicator`: Optional indicator variable for which observations to include
+- **Returns**: Object of class `c("dyn_model_component", "model_component")`
+- **Key differences from `define_model_component()`**:
+  - No `outcome` variable needed (outcome is implicitly zero)
+  - Loading on outcome factor is fixed to -1 (not estimated)
+  - Factor normalization is automatic: `-1` for outcome factor, `NA` (free) for others
+  - Quadratic/interaction terms only apply to non-outcome factors
+- **Example**:
+  ```r
+  # 2-factor model: f1 = intercept + lambda*f2 + epsilon
+  fm <- define_factor_model(n_factors = 2)
+  dyn <- define_dyn_model_component(
+    name = "structural", data = dat, outcome_factor = 1, factor = fm,
+    intercept = TRUE
+  )
+  ```
 
 ### `fix_coefficient(component, covariate, value, choice = NULL)`
 - Fixes a regression coefficient to a specified value during estimation.
@@ -704,7 +748,105 @@ writeLines(latex_code2, "structural_table.tex")
 
 ## Examples
 
+### Dynamic Factor Model (Structural Equation between Factors)
+
+Model structural relationships between latent factors, e.g., `f1 = β₀ + λ₂×f2 + ε`:
+
+<details>
+<summary>Click to expand dynamic factor model example</summary>
+
+```r
+set.seed(111)
+n <- 500
+
+# Two latent factors with correlation
+f1 <- rnorm(n)
+f2 <- rnorm(n)
+
+# Measurement system (test scores to identify factors)
+# Factor 1 indicators
+T1 <- 2.0 + 1.0*f1 + rnorm(n, 0, 0.5)  # Loading fixed to 1
+T2 <- 1.5 + 1.2*f1 + rnorm(n, 0, 0.6)
+
+# Factor 2 indicators
+T3 <- 1.0 + 1.0*f2 + rnorm(n, 0, 0.4)  # Loading fixed to 1
+T4 <- 0.8 + 0.9*f2 + rnorm(n, 0, 0.5)
+
+dat <- data.frame(intercept = 1, T1 = T1, T2 = T2, T3 = T3, T4 = T4, eval = 1)
+
+# Define 2-factor model
+fm <- define_factor_model(n_factors = 2, n_types = 1)
+ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+
+# Factor 1 measurement equations (identify factor 1)
+mc_T1 <- define_model_component(
+  name = "T1", data = dat, outcome = "T1", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(1.0, 0),  # f1 loading=1, f2 loading=0
+  evaluation_indicator = "eval"
+)
+
+mc_T2 <- define_model_component(
+  name = "T2", data = dat, outcome = "T2", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(NA_real_, 0),  # f1 free, f2=0
+  evaluation_indicator = "eval"
+)
+
+# Factor 2 measurement equations (identify factor 2)
+mc_T3 <- define_model_component(
+  name = "T3", data = dat, outcome = "T3", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(0, 1.0),  # f1=0, f2 loading=1
+  evaluation_indicator = "eval"
+)
+
+mc_T4 <- define_model_component(
+  name = "T4", data = dat, outcome = "T4", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(0, NA_real_),  # f1=0, f2 free
+  evaluation_indicator = "eval"
+)
+
+# Dynamic structural equation: f1 = intercept + lambda*f2 + epsilon
+# This models how factor 1 depends on factor 2
+dyn <- define_dyn_model_component(
+  name = "structural",
+  data = dat,
+  outcome_factor = 1,     # f1 is the "outcome" factor
+  factor = fm,
+  intercept = TRUE,       # Include intercept
+  evaluation_indicator = "eval"
+)
+
+# Estimate
+ms <- define_model_system(components = list(mc_T1, mc_T2, mc_T3, mc_T4, dyn), factor = fm)
+result <- estimate_model_rcpp(ms, dat, init_params = NULL, control = ctrl, verbose = TRUE)
+
+# View results
+# structural_loading_2: effect of f2 on f1
+# structural_intercept: intercept in structural equation
+# structural_sigma: error variance in structural equation
+print(result$estimates)
+print(result$std_errors)
+```
+
+</details>
+
+**Key points:**
+- `define_dyn_model_component()` creates structural equations between factors
+- `outcome_factor = 1` means f1 is the dependent variable
+- Loading on f1 is automatically fixed to -1 (identity for outcome)
+- Loading on f2 (λ₂) is estimated as `structural_loading_2`
+- Works with `factor_spec = "quadratic"` or `"interactions"` for nonlinear effects between factors
+- Measurement equations are needed to identify the factors
+
+---
+
 ### Measurement System with Three Tests
+
+<details>
+<summary>Click to expand example</summary>
 
 A standard factor analysis setup with three test scores measuring a latent ability factor:
 
@@ -754,7 +896,12 @@ print(result$estimates)
 print(result$std_errors)
 ```
 
+</details>
+
 ### Ordered Probit with Measurement System
+
+<details>
+<summary>Click to expand example</summary>
 
 Combining test scores with an ordered outcome (e.g., educational attainment):
 
@@ -816,7 +963,12 @@ result <- estimate_model_rcpp(ms, dat, init_params = NULL, control = ctrl, verbo
 print(result$estimates)
 ```
 
+</details>
+
 ### Multinomial Logit with Measurement System
+
+<details>
+<summary>Click to expand example</summary>
 
 Combining test scores with a discrete choice outcome (3 alternatives):
 
@@ -891,7 +1043,12 @@ result <- estimate_model_rcpp(ms, dat, init_params = NULL, control = ctrl, verbo
 print(result$estimates)
 ```
 
+</details>
+
 ### Quadratic Factor Effects
+
+<details>
+<summary>Click to expand example</summary>
 
 When factor effects are nonlinear, use `factor_spec = "quadratic"` to include f² terms:
 
@@ -952,6 +1109,8 @@ result <- estimate_model_rcpp(ms, dat, init_params = NULL, control = ctrl, verbo
 print(result$estimates)
 ```
 
+</details>
+
 **Key points:**
 - `factor_spec = "quadratic"` adds quadratic loading parameters (λ_quad)
 - Linear predictor becomes: xβ + λf + λ_quad f²
@@ -960,6 +1119,9 @@ print(result$estimates)
 - Parameter naming: `{component}_loading_quad_{factor_index}`
 
 ### Factor Interaction Terms (Multi-Factor)
+
+<details>
+<summary>Click to expand example</summary>
 
 For multi-factor models, use `factor_spec = "interactions"` to include cross-product terms (f_j × f_k):
 
@@ -1031,6 +1193,8 @@ result <- estimate_model_rcpp(ms, dat, init_params = NULL, control = ctrl, verbo
 # View results - includes Y_loading_inter_1_2 parameter
 print(result$estimates)
 ```
+
+</details>
 
 **Key points:**
 - `factor_spec = "interactions"` adds interaction loading parameters for all factor pairs (f_j × f_k, j < k)

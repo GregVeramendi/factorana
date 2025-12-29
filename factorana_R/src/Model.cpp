@@ -8,24 +8,29 @@ Model::Model(ModelType type, int outcome, int missing,
              const std::vector<int>& regs, int nfac, int ntyp,
              const std::vector<double>& fnorm,
              int nchoice, int nrank, bool params_fixed,
-             FactorSpec fspec)
+             FactorSpec fspec,
+             bool dynamic, int outcome_fac_idx)
     : modtype(type), outcome_idx(outcome), missing_idx(missing),
       regressors(regs), numfac(nfac), numtyp(ntyp),
       facnorm(fnorm), numchoice(nchoice), numrank(nrank),
       ignore(false), all_params_fixed(params_fixed),
-      factor_spec(fspec)
+      factor_spec(fspec),
+      is_dynamic(dynamic), outcome_factor_idx(outcome_fac_idx)
 {
     nregressors = regressors.size();
 
     // Compute number of quadratic and interaction loadings based on factor_spec
+    // For dynamic models, exclude the outcome factor from quadratic/interaction terms
+    int effective_fac = is_dynamic ? (numfac - 1) : numfac;
+
     if (factor_spec == FactorSpec::QUADRATIC || factor_spec == FactorSpec::FULL) {
-        n_quadratic_loadings = numfac;
+        n_quadratic_loadings = effective_fac;
     } else {
         n_quadratic_loadings = 0;
     }
 
-    if ((factor_spec == FactorSpec::INTERACTIONS || factor_spec == FactorSpec::FULL) && numfac >= 2) {
-        n_interaction_loadings = numfac * (numfac - 1) / 2;
+    if ((factor_spec == FactorSpec::INTERACTIONS || factor_spec == FactorSpec::FULL) && effective_fac >= 2) {
+        n_interaction_loadings = effective_fac * (effective_fac - 1) / 2;
     } else {
         n_interaction_loadings = 0;
     }
@@ -94,8 +99,7 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
 
         // Add regressor terms
         for (int i = 0; i < nregressors; i++) {
-            expres[ichoice] += param[i + firstpar + ichoice*nparamchoice] *
-                              data[iobs_offset + regressors[i]];
+            expres[ichoice] += param[i + firstpar + ichoice*nparamchoice] * getRegValue(i, data, iobs_offset);
         }
 
         // Add factor and type loadings
@@ -122,20 +126,27 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
         }
 
         // Add quadratic factor terms: sum(lambda_quad_k * f_k^2)
+        // For dynamic models, skip the outcome factor
         if (n_quadratic_loadings > 0) {
             int quad_start = nregressors + ifreefac;
+            int quad_idx = 0;
             for (int k = 0; k < numfac; k++) {
+                if (is_dynamic && k == outcome_factor_idx) continue;  // Skip outcome factor
                 double fk_sq = fac[k] * fac[k];
-                expres[ichoice] += param[firstpar + ichoice*nparamchoice + quad_start + k] * fk_sq;
+                expres[ichoice] += param[firstpar + ichoice*nparamchoice + quad_start + quad_idx] * fk_sq;
+                quad_idx++;
             }
         }
 
         // Add interaction factor terms: sum(lambda_inter_jk * f_j * f_k) for j < k
+        // For dynamic models, skip pairs involving the outcome factor
         if (n_interaction_loadings > 0) {
             int inter_start = nregressors + ifreefac + n_quadratic_loadings;
             int inter_idx = 0;
             for (int j = 0; j < numfac - 1; j++) {
+                if (is_dynamic && j == outcome_factor_idx) continue;  // Skip outcome factor
                 for (int k = j + 1; k < numfac; k++) {
+                    if (is_dynamic && k == outcome_factor_idx) continue;  // Skip outcome factor
                     double fj_fk = fac[j] * fac[k];
                     expres[ichoice] += param[firstpar + ichoice*nparamchoice + inter_start + inter_idx] * fj_fk;
                     inter_idx++;
@@ -152,7 +163,9 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
 
     // Dispatch to model-specific evaluation
     if (modtype == ModelType::LINEAR) {
-        double Z = 0.0;
+        // Z is residual: outcome - predicted value
+        // For dynamic models (outcome_idx == -2), outcome is 0
+        double Z = -expres[0];  // Initialize assuming outcome = 0
         if (outcome_idx > -1) Z = data[iobs_offset + outcome_idx] - expres[0];
         double sigma = std::fabs(param[firstpar + nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings]);
         EvalLinear(Z, sigma, fac, param, firstpar, modEval, hess, flag, data, iobs_offset);
@@ -273,31 +286,35 @@ void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
 
     // Gradients w.r.t. regression coefficients
     for (int ireg = 0; ireg < nregressors; ireg++) {
-        modEval[ireg + numfac + 1] = Z * data[iobs_offset + regressors[ireg]] / sigma2;
+        modEval[ireg + numfac + 1] = Z * getRegValue(ireg, data, iobs_offset) / sigma2;
         if (flag == 3) {
             int index = numfac + ireg;
             for (int j = index; j < npar; j++)
-                hess[index*npar + j] *= data[iobs_offset + regressors[ireg]];
+                hess[index*npar + j] *= getRegValue(ireg, data, iobs_offset);
             for (int j = 0; j <= index; j++)
-                hess[j*npar + index] *= data[iobs_offset + regressors[ireg]];
+                hess[j*npar + index] *= getRegValue(ireg, data, iobs_offset);
         }
     }
 
     // Gradients w.r.t. quadratic factor loadings (lambda_quad_k)
     // d(logL)/d(lambda_quad_k) = Z * f_k^2 / sigma^2
+    // For dynamic models, skip the outcome factor
     if (n_quadratic_loadings > 0) {
         int quad_grad_start = 1 + numfac + nregressors + ifreefac;
+        int quad_idx = 0;
         for (int k = 0; k < numfac; k++) {
+            if (is_dynamic && k == outcome_factor_idx) continue;  // Skip outcome factor
+
             double fk_sq = fac[k] * fac[k];
-            modEval[quad_grad_start + k] = Z * fk_sq / sigma2;
+            modEval[quad_grad_start + quad_idx] = Z * fk_sq / sigma2;
 
             // Add quadratic contribution to factor variance gradient
             // d(xb)/d(f_k) includes 2*lambda_quad_k*f_k term
-            double lambda_quad_k = param[firstpar + nregressors + ifreefac + k];
+            double lambda_quad_k = param[firstpar + nregressors + ifreefac + quad_idx];
             modEval[k+1] += Z * 2.0 * lambda_quad_k * fac[k] / sigma2;
 
             if (flag == 3) {
-                int index = numfac + nregressors + ifreefac + k;
+                int index = numfac + nregressors + ifreefac + quad_idx;
                 for (int j = index; j < npar; j++)
                     hess[index*npar + j] *= fk_sq;
                 for (int j = 0; j <= index; j++)
@@ -310,16 +327,21 @@ void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
                 // This contributes Z * 2*lambda_quad_k / sigma^2 to the factor-factor Hessian diagonal
                 hess[k*npar + k] += 2.0 * lambda_quad_k * Z / sigma2;
             }
+            quad_idx++;
         }
     }
 
     // Gradients w.r.t. interaction factor loadings (lambda_inter_jk) for j < k
     // d(logL)/d(lambda_inter_jk) = Z * f_j * f_k / sigma^2
+    // For dynamic models, skip pairs involving the outcome factor
     if (n_interaction_loadings > 0) {
         int inter_grad_start = 1 + numfac + nregressors + ifreefac + n_quadratic_loadings;
         int inter_idx = 0;
         for (int j = 0; j < numfac - 1; j++) {
+            if (is_dynamic && j == outcome_factor_idx) continue;  // Skip outcome factor
             for (int k = j + 1; k < numfac; k++) {
+                if (is_dynamic && k == outcome_factor_idx) continue;  // Skip outcome factor
+
                 double fj_fk = fac[j] * fac[k];
                 modEval[inter_grad_start + inter_idx] = Z * fj_fk / sigma2;
 
@@ -371,18 +393,25 @@ void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
         }
 
         // Add quadratic contributions to additional
+        // For dynamic models, skip the outcome factor
         if (n_quadratic_loadings > 0) {
+            int quad_idx = 0;
             for (int k = 0; k < numfac; k++) {
-                double lambda_quad_k = param[firstpar + nregressors + ifreefac + k];
+                if (is_dynamic && k == outcome_factor_idx) continue;  // Skip outcome factor
+                double lambda_quad_k = param[firstpar + nregressors + ifreefac + quad_idx];
                 additional[k] += 2.0 * lambda_quad_k * fac[k];
+                quad_idx++;
             }
         }
 
         // Add interaction contributions to additional
+        // For dynamic models, skip pairs involving the outcome factor
         if (n_interaction_loadings > 0) {
             int inter_idx = 0;
             for (int j = 0; j < numfac - 1; j++) {
+                if (is_dynamic && j == outcome_factor_idx) continue;  // Skip outcome factor
                 for (int k = j + 1; k < numfac; k++) {
+                    if (is_dynamic && k == outcome_factor_idx) continue;  // Skip outcome factor
                     double lambda_inter = param[firstpar + nregressors + ifreefac + n_quadratic_loadings + inter_idx];
                     additional[j] += lambda_inter * fac[k];
                     additional[k] += lambda_inter * fac[j];
@@ -417,7 +446,7 @@ void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
 
             // Cross with regression coefficients
             for (int ireg = 0; ireg < nregressors; ireg++) {
-                double dxb_dreg = data[iobs_offset + regressors[ireg]];
+                double dxb_dreg = getRegValue(ireg, data, iobs_offset);
                 int reg_idx = numfac + ireg;
                 hess[k * npar + reg_idx] += -additional[k] * dxb_dreg / sigma2;
             }
@@ -433,18 +462,25 @@ void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
             }
 
             // Cross with quadratic loadings
+            // For dynamic models, skip the outcome factor
             if (n_quadratic_loadings > 0) {
+                int quad_idx = 0;
                 for (int m = 0; m < numfac; m++) {
-                    int quad_idx = numfac + nregressors + ifreefac + m;
-                    hess[k * npar + quad_idx] += -additional[k] * fac[m] * fac[m] / sigma2;
+                    if (is_dynamic && m == outcome_factor_idx) continue;  // Skip outcome factor
+                    int q_idx = numfac + nregressors + ifreefac + quad_idx;
+                    hess[k * npar + q_idx] += -additional[k] * fac[m] * fac[m] / sigma2;
+                    quad_idx++;
                 }
             }
 
             // Cross with interaction loadings
+            // For dynamic models, skip pairs involving the outcome factor
             if (n_interaction_loadings > 0) {
                 int inter_idx = 0;
                 for (int j2 = 0; j2 < numfac - 1; j2++) {
+                    if (is_dynamic && j2 == outcome_factor_idx) continue;  // Skip outcome factor
                     for (int k2 = j2 + 1; k2 < numfac; k2++) {
+                        if (is_dynamic && k2 == outcome_factor_idx) continue;  // Skip outcome factor
                         int idx = numfac + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
                         hess[k * npar + idx] += -additional[k] * fac[j2] * fac[k2] / sigma2;
                         inter_idx++;
@@ -590,11 +626,11 @@ void Model::EvalProbit(double expres, double obsSign, const std::vector<double>&
 
     // Gradients w.r.t. regression coefficients
     for (int ireg = 0; ireg < nregressors; ireg++) {
-        modEval[ireg + numfac + 1] = pdf * (obsSign * data[iobs_offset + regressors[ireg]]) / cdf;
+        modEval[ireg + numfac + 1] = pdf * (obsSign * getRegValue(ireg, data, iobs_offset)) / cdf;
         if (flag == 3) {
             double lambda_val = pdf / cdf;  // λ = φ/Φ
             int index = numfac + ireg;
-            double dZ_dtheta = obsSign * data[iobs_offset + regressors[ireg]];
+            double dZ_dtheta = obsSign * getRegValue(ireg, data, iobs_offset);
             double row_mult = (-Z * lambda_val - lambda_val * lambda_val) * dZ_dtheta;
             for (int j = index; j < npar; j++)
                 hess[index*npar + j] *= row_mult;
@@ -731,7 +767,7 @@ void Model::EvalProbit(double expres, double obsSign, const std::vector<double>&
 
             // Cross with regression coefficients
             for (int ireg = 0; ireg < nregressors; ireg++) {
-                double dxb_dreg = data[iobs_offset + regressors[ireg]];
+                double dxb_dreg = getRegValue(ireg, data, iobs_offset);
                 int reg_idx = numfac + ireg;
                 hess[k * npar + reg_idx] += hess_factor * additional[k] * dxb_dreg;
             }
@@ -968,7 +1004,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
 
     // Regression coefficients - obsCat term and logitgrad
     for (int ireg = 0; ireg < nregressors; ireg++) {
-        double xval = data[iobs_offset + regressors[ireg]];
+        double xval = getRegValue(ireg, data, iobs_offset);
 
         // obsCat term for gradient
         if (obsCat > 0) {
@@ -1317,7 +1353,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
 
                 // dbeta dbeta
                 for (int ireg = 0; ireg < nregressors; ireg++) {
-                    double xval_i = data[iobs_offset + regressors[ireg]];
+                    double xval_i = getRegValue(ireg, data, iobs_offset);
                     for (int jreg = 0; jreg < nregressors; jreg++) {
                         if ((jcat > icat) || (jreg >= ireg)) {
                             int index1 = ibase_idx + ireg;
@@ -1329,7 +1365,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
 
                 // dbeta dalpha
                 for (int ireg = 0; ireg < nregressors; ireg++) {
-                    double xval_i = data[iobs_offset + regressors[ireg]];
+                    double xval_i = getRegValue(ireg, data, iobs_offset);
                     int jfree = 0;
                     for (int jfac = 0; jfac < fac_loop_bound; jfac++) {
                         if (facnorm.size() == 0 || facnorm[jfac] <= -9998) {
@@ -1378,7 +1414,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                 // dbeta dquad
                 if (n_quadratic_loadings > 0) {
                     for (int ireg = 0; ireg < nregressors; ireg++) {
-                        double xval_i = data[iobs_offset + regressors[ireg]];
+                        double xval_i = getRegValue(ireg, data, iobs_offset);
                         for (int k = 0; k < numfac; k++) {
                             int index1 = ibase_idx + ireg;
                             int index2 = jbase_idx + nregressors + ifreefac + k;
@@ -1390,7 +1426,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                 // dbeta dinter
                 if (n_interaction_loadings > 0) {
                     for (int ireg = 0; ireg < nregressors; ireg++) {
-                        double xval_i = data[iobs_offset + regressors[ireg]];
+                        double xval_i = getRegValue(ireg, data, iobs_offset);
                         for (int inter_idx = 0; inter_idx < n_interaction_loadings; inter_idx++) {
                             int index1 = ibase_idx + ireg;
                             int index2 = jbase_idx + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
@@ -1666,7 +1702,7 @@ void Model::EvalOprobit(double expres, int outcome_value,
 
             // Gradients w.r.t. regression coefficients
             for (int ireg = 0; ireg < nregressors; ireg++) {
-                tmpgrad[ireg + numfac] = (-1.0 * data[iobs_offset + regressors[ireg]]) * PDF[iterm] / diffCDF;
+                tmpgrad[ireg + numfac] = (-1.0 * getRegValue(ireg, data, iobs_offset)) * PDF[iterm] / diffCDF;
             }
 
             // Gradients w.r.t. quadratic factor loadings
@@ -1777,11 +1813,11 @@ void Model::EvalOprobit(double expres, int outcome_value,
                     int index = numfac + ireg;
                     // lambda^L(X) - lambda^Prob(X) (row)
                     for (int j = index; j < npar; j++) {
-                        tmphess[index*npar + j] *= -Z[iterm] * (-1.0 * data[iobs_offset + regressors[ireg]]) - modEval[1 + ireg + numfac];
+                        tmphess[index*npar + j] *= -Z[iterm] * (-1.0 * getRegValue(ireg, data, iobs_offset)) - modEval[1 + ireg + numfac];
                     }
                     // dZ/dX_i (col)
                     for (int j = 0; j <= index; j++) {
-                        tmphess[j*npar + index] *= -1.0 * data[iobs_offset + regressors[ireg]];
+                        tmphess[j*npar + index] *= -1.0 * getRegValue(ireg, data, iobs_offset);
                     }
                 }
 
@@ -1954,7 +1990,7 @@ void Model::EvalOprobit(double expres, int outcome_value,
 
                         // Cross with regression coefficients
                         for (int ireg = 0; ireg < nregressors; ireg++) {
-                            double col_reg = -data[iobs_offset + regressors[ireg]];
+                            double col_reg = -getRegValue(ireg, data, iobs_offset);
                             int reg_idx = numfac + ireg;
                             // Row correction: Z*add_k * col_reg (col_reg already has -1 factor)
                             tmphess[k * npar + reg_idx] += Z[iterm] * additional[k] * col_reg;

@@ -134,6 +134,10 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             covariate_names = as<std::vector<std::string>>(comp["covariates"]);
         }
 
+        // Check if this is a dynamic model first
+        bool is_dynamic = comp.containsElementNamed("is_dynamic") &&
+                         as<bool>(comp["is_dynamic"]);
+
         // Find variable indices in data
         int outcome_idx = -1;
         for (int j = 0; j < col_names.size(); j++) {
@@ -142,8 +146,14 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
                 break;
             }
         }
+        // For dynamic models, outcome is always zero, so use special marker -2
+        // (distinct from -1 which means "missing indicator not present")
         if (outcome_idx == -1) {
-            Rcpp::stop("Outcome variable '" + outcome_name + "' not found in data");
+            if (is_dynamic) {
+                outcome_idx = -2;  // Special marker: outcome is always zero
+            } else {
+                Rcpp::stop("Outcome variable '" + outcome_name + "' not found in data");
+            }
         }
 
         // Find covariate indices
@@ -156,8 +166,14 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
                     break;
                 }
             }
+            // For dynamic models, 'intercept' covariate is always 1
+            // Use special marker -3 if not found in data
             if (idx == -1) {
-                Rcpp::stop("Covariate '" + cov_name + "' not found in data");
+                if (is_dynamic && cov_name == "intercept") {
+                    idx = -3;  // Special marker: intercept is always 1
+                } else {
+                    Rcpp::stop("Covariate '" + cov_name + "' not found in data");
+                }
             }
             regressor_idx.push_back(idx);
         }
@@ -220,10 +236,18 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             else if (fs == "full") fspec = FactorSpec::FULL;
         }
 
+        // Extract dynamic model outcome_factor index (is_dynamic already set above)
+        int outcome_factor_idx = -1;
+        if (is_dynamic) {
+            // outcome_factor is 1-based in R, convert to 0-based for C++
+            outcome_factor_idx = as<int>(comp["outcome_factor"]) - 1;
+        }
+
         // Create Model object
         std::shared_ptr<Model> model = std::make_shared<Model>(
             mtype, outcome_idx, missing_idx, regressor_idx,
-            n_fac, n_types, facnorm, n_choice, 1, all_params_fixed, fspec
+            n_fac, n_types, facnorm, n_choice, 1, all_params_fixed, fspec,
+            is_dynamic, outcome_factor_idx
         );
 
         // Calculate number of parameters for this model

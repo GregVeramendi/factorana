@@ -38,6 +38,8 @@ private:
     FactorSpec factor_spec;   // Factor specification (linear, quadratic, interactions, full)
     int n_quadratic_loadings; // Number of quadratic loading parameters
     int n_interaction_loadings; // Number of interaction loading parameters
+    bool is_dynamic;          // True for dynamic factor model (outcome is a factor)
+    int outcome_factor_idx;   // 0-based index of outcome factor (-1 if not dynamic)
 
 public:
     // Constructor
@@ -45,7 +47,8 @@ public:
           const std::vector<int>& regs, int nfac, int ntyp = 0,
           const std::vector<double>& fnorm = std::vector<double>(),
           int nchoice = 2, int nrank = 1, bool params_fixed = false,
-          FactorSpec fspec = FactorSpec::LINEAR);
+          FactorSpec fspec = FactorSpec::LINEAR,
+          bool dynamic = false, int outcome_fac_idx = -1);
 
     // Main evaluation function
     // Computes likelihood, gradient, and Hessian for a single observation
@@ -82,8 +85,15 @@ public:
     FactorSpec GetFactorSpec() const { return factor_spec; }
     int GetNumQuadraticLoadings() const { return n_quadratic_loadings; }
     int GetNumInteractionLoadings() const { return n_interaction_loadings; }
+    bool GetIsDynamic() const { return is_dynamic; }
+    int GetOutcomeFactorIdx() const { return outcome_factor_idx; }
 
 private:
+    // Helper to get regressor value (handles special marker -3 for intercept)
+    inline double getRegValue(int ireg, const std::vector<double>& data, int iobs_offset) const {
+        return (regressors[ireg] == -3) ? 1.0 : data[iobs_offset + regressors[ireg]];
+    }
+
     // Helper functions for each model type
     void EvalLinear(double Z, double sigma, const std::vector<double>& fac,
                     const std::vector<double>& param, int firstpar,

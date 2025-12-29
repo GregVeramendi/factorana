@@ -122,8 +122,42 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       comp_data <- data
     }
 
-    outcome <- comp_data[[comp$outcome]]
-    X <- as.matrix(comp_data[, comp$covariates, drop = FALSE])
+    # For dynamic models, the outcome column is a dummy column in comp$data
+    # Get outcome from component's internal data if it's not in comp_data
+    if (comp$outcome %in% names(comp_data)) {
+      outcome <- comp_data[[comp$outcome]]
+    } else if (isTRUE(comp$is_dynamic)) {
+      # For dynamic models, create zero outcome
+      outcome <- rep(0, nrow(comp_data))
+    } else {
+      outcome <- comp$data[[comp$outcome]]
+    }
+
+    # Get covariates - handle case where intercept may be in comp$data but not in external data
+    if (length(comp$covariates) > 0 && all(comp$covariates %in% names(comp_data))) {
+      X <- as.matrix(comp_data[, comp$covariates, drop = FALSE])
+    } else if (length(comp$covariates) > 0) {
+      # Use component's internal data for missing columns
+      X <- matrix(NA_real_, nrow = nrow(comp_data), ncol = length(comp$covariates))
+      colnames(X) <- comp$covariates
+      for (cov in comp$covariates) {
+        if (cov %in% names(comp_data)) {
+          X[, cov] <- comp_data[[cov]]
+        } else if (cov == "intercept") {
+          X[, cov] <- 1
+        } else if (cov %in% names(comp$data)) {
+          # Match rows if evaluation indicator was applied
+          if (!is.null(comp$evaluation_indicator)) {
+            idx <- data[[comp$evaluation_indicator]] == 1 & !is.na(data[[comp$evaluation_indicator]])
+            X[, cov] <- comp$data[[cov]][idx]
+          } else {
+            X[, cov] <- comp$data[[cov]]
+          }
+        }
+      }
+    } else {
+      X <- matrix(nrow = nrow(comp_data), ncol = 0)
+    }
 
     # Count free factor loadings for this component
     n_free_loadings <- sum(is.na(comp$loading_normalization))
@@ -140,6 +174,14 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       fit <- lm(outcome ~ X - 1)  # -1 because intercept is already in covariates
       coefs <- coef(fit)
       sigma <- summary(fit)$sigma
+
+      # For dynamic models (outcome = 0), sigma would be 0 or very small
+      # Initialize to 1.0 for a reasonable starting point
+      if (isTRUE(comp$is_dynamic)) {
+        sigma <- 1.0
+        # Also reset coefficients to small values for dynamic models
+        coefs <- rep(0.1, length(coefs))
+      }
 
       # Apply any fixed coefficient values
       coefs <- apply_fixed_coefficients(coefs, comp$covariates, fixed_coefs)
@@ -527,19 +569,29 @@ get_second_order_loading_init <- function(comp, choice = NULL) {
   comp_name <- comp$name
   choice_suffix <- if (!is.null(choice)) paste0("_c", choice) else ""
 
-  # Quadratic loadings: one per factor
+  # For dynamic models, skip the outcome factor
+  is_dynamic <- isTRUE(comp$is_dynamic)
+  outcome_factor <- if (is_dynamic) comp$outcome_factor else -1L
+
+  # Quadratic loadings: one per factor (skip outcome factor for dynamic models)
   if (!is.null(comp$n_quadratic_loadings) && comp$n_quadratic_loadings > 0) {
     values <- c(values, rep(0.1, comp$n_quadratic_loadings))
-    quad_names <- paste0(comp_name, choice_suffix, "_loading_quad_", seq_len(k))
+    quad_names <- character(0)
+    for (fac_idx in seq_len(k)) {
+      if (is_dynamic && fac_idx == outcome_factor) next
+      quad_names <- c(quad_names, paste0(comp_name, choice_suffix, "_loading_quad_", fac_idx))
+    }
     names_vec <- c(names_vec, quad_names)
   }
 
-  # Interaction loadings: one per unique pair j < k
+  # Interaction loadings: one per unique pair j < k (skip pairs involving outcome factor for dynamic models)
   if (!is.null(comp$n_interaction_loadings) && comp$n_interaction_loadings > 0) {
     values <- c(values, rep(0.1, comp$n_interaction_loadings))
     inter_names <- character(0)
     for (j in seq_len(k - 1)) {
+      if (is_dynamic && j == outcome_factor) next
       for (kk in (j + 1):k) {
+        if (is_dynamic && kk == outcome_factor) next
         inter_names <- c(inter_names, paste0(comp_name, choice_suffix, "_loading_inter_", j, "_", kk))
       }
     }
