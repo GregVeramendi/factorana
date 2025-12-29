@@ -72,7 +72,7 @@ devtools::install_github("GregVeramendi/factorana",
 This example demonstrates a Roy selection model with unobserved ability (latent factor), sector choice, test scores, and wages.
 
 <details>
-<summary><b>▶ Click to expand full example code</b></summary>
+<summary><b>Click to expand full example code</b></summary>
 
 ```r
 library(factorana)
@@ -286,7 +286,7 @@ print(diagnostics, row.names = FALSE, right = FALSE)
 For complex models, you can estimate in multiple stages to improve convergence and interpretability. In the first stage, estimate a subset of components (e.g., measurement system). In subsequent stages, fix those components and add new ones.
 
 <details>
-<summary><b>▶ Click to expand two-stage estimation example</b></summary>
+<summary><b>Click to expand two-stage estimation example</b></summary>
 
 **Example**: Estimate test scores first, then add wage and sector equations:
 
@@ -753,7 +753,7 @@ writeLines(latex_code2, "structural_table.tex")
 Model structural relationships between latent factors, e.g., `f1 = β₀ + λ₂×f2 + ε`:
 
 <details>
-<summary><b>▶ Click to expand dynamic factor model example</b></summary>
+<summary><b>Click to expand dynamic factor model example</b></summary>
 
 ```r
 set.seed(111)
@@ -846,7 +846,7 @@ print(result$std_errors)
 ### Measurement System with Three Tests
 
 <details>
-<summary><b>▶ Click to expand example</b></summary>
+<summary><b>Click to expand example</b></summary>
 
 A standard factor analysis setup with three test scores measuring a latent ability factor:
 
@@ -901,7 +901,7 @@ print(result$std_errors)
 ### Ordered Probit with Measurement System
 
 <details>
-<summary><b>▶ Click to expand example</b></summary>
+<summary><b>Click to expand example</b></summary>
 
 Combining test scores with an ordered outcome (e.g., educational attainment):
 
@@ -968,7 +968,7 @@ print(result$estimates)
 ### Multinomial Logit with Measurement System
 
 <details>
-<summary><b>▶ Click to expand example</b></summary>
+<summary><b>Click to expand example</b></summary>
 
 Combining test scores with a discrete choice outcome (3 alternatives):
 
@@ -1048,7 +1048,7 @@ print(result$estimates)
 ### Quadratic Factor Effects
 
 <details>
-<summary><b>▶ Click to expand example</b></summary>
+<summary><b>Click to expand example</b></summary>
 
 When factor effects are nonlinear, use `factor_spec = "quadratic"` to include f² terms:
 
@@ -1121,7 +1121,7 @@ print(result$estimates)
 ### Factor Interaction Terms (Multi-Factor)
 
 <details>
-<summary><b>▶ Click to expand example</b></summary>
+<summary><b>Click to expand example</b></summary>
 
 For multi-factor models, use `factor_spec = "interactions"` to include cross-product terms (f_j × f_k):
 
