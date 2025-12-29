@@ -618,10 +618,10 @@ test_that("3-type 2-factor model parameter recovery with full 2nd order outcomes
   expect_equal(get_est("Y2_loading_1"), true_outcome$Y2$loading1, tolerance = tol)
   expect_equal(get_est("Y2_loading_2"), true_outcome$Y2$loading2, tolerance = tol)
 
-  # Check outcome beta coefficients
-  expect_equal(get_est("Y1_beta_x1"), true_outcome$Y1$beta_x1, tolerance = tol)
-  expect_equal(get_est("Y2_beta_x1"), true_outcome$Y2$beta_x1, tolerance = tol)
-  expect_equal(get_est("Y3_beta_x1"), true_outcome$Y3$beta_x1, tolerance = tol)
+  # Check outcome beta coefficients (naming: {component}_{covariate})
+  expect_equal(get_est("Y1_x1"), true_outcome$Y1$beta_x1, tolerance = tol)
+  expect_equal(get_est("Y2_x1"), true_outcome$Y2$beta_x1, tolerance = tol)
+  expect_equal(get_est("Y3_x1"), true_outcome$Y3$beta_x1, tolerance = tol)
 
   # Check quadratic loadings (may have larger tolerance due to identification)
   expect_equal(get_est("Y1_loading_quad_1"), true_outcome$Y1$quad1, tolerance = 0.2)

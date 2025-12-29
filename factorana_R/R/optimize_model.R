@@ -106,23 +106,17 @@ build_parameter_metadata <- function(model_system) {
       }
     } else {
       # Standard handling for all other model types
-      # Intercept (NOT for oprobit - intercepts are absorbed into thresholds)
-      if (comp$intercept && comp$model_type != "oprobit") {
-        param_names <- c(param_names, sprintf("%s_intercept", comp_name))
-        param_types <- c(param_types, "intercept")
-        component_id <- c(component_id, i)
-      }
-
-      # Covariate coefficients
+      # Covariate coefficients - naming must match initialize_parameters.R: comp_name_covariate
       if (!is.null(comp$covariates) && length(comp$covariates) > 0) {
         for (cov in comp$covariates) {
-          # For oprobit, include intercept as a beta (fixed at 0 during optimization)
-          # because C++ expects all covariates including intercept
-          if (cov != "intercept" || comp$model_type == "oprobit") {
-            param_names <- c(param_names, sprintf("%s_beta_%s", comp_name, cov))
+          param_names <- c(param_names, sprintf("%s_%s", comp_name, cov))
+          # Mark intercept type separately for constraint handling
+          if (cov == "intercept") {
+            param_types <- c(param_types, "intercept")
+          } else {
             param_types <- c(param_types, "beta")
-            component_id <- c(component_id, i)
           }
+          component_id <- c(component_id, i)
         }
       }
 
@@ -317,7 +311,7 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
     }
 
     # Fix oprobit intercepts at 0 (absorbed into thresholds)
-    if (param_type == "beta" && grepl("_beta_intercept$", param_metadata$names[i])) {
+    if (param_type == "intercept") {
       comp <- model_system$components[[comp_id]]
       if (!is.null(comp) && comp$model_type == "oprobit") {
         param_fixed[i] <- TRUE

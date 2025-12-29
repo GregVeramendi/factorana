@@ -747,101 +747,153 @@ writeLines(latex_code2, "structural_table.tex")
 
 ### Dynamic Factor Model (Structural Equation between Factors)
 
-Model structural relationships between latent factors, e.g., `f1 = β₀ + λ₂×f2 + ε`:
+Model structural relationships between latent factors using two-stage estimation:
+- **Stage 1**: Estimate measurement model with correlated factors
+- **Stage 2**: Fix measurement parameters, estimate structural equation `f1 = λ×f2 + ε`
 
 <details>
 <summary><b>Click to expand dynamic factor model example</b></summary>
 
 ```r
 set.seed(111)
-n <- 500
+n <- 5000
 
-# True parameters for structural equation: f1 = intercept + lambda*f2 + epsilon
-true_intercept <- 0.5
-true_lambda <- 0.8
-true_sigma_struct <- 0.3
+# True parameters for structural equation: f1 = lambda*f2 + epsilon
+# Chosen to give Corr(f1,f2) ≈ 0.8
+true_lambda <- 0.6
+true_sigma <- 0.45
 
 # Generate factors according to structural model
 f2 <- rnorm(n)
-f1 <- true_intercept + true_lambda * f2 + rnorm(n, 0, true_sigma_struct)
+f1 <- true_lambda * f2 + rnorm(n, 0, true_sigma)
 
-# Measurement system (test scores to identify factors)
-# Factor 1 indicators
-T1 <- 2.0 + 1.0*f1 + rnorm(n, 0, 0.5)  # Loading fixed to 1
+# Measurement system (3 indicators per factor for reliable variance estimation)
+T1 <- 2.0 + 1.0*f1 + rnorm(n, 0, 0.5)  # f1 loading fixed to 1
 T2 <- 1.5 + 1.2*f1 + rnorm(n, 0, 0.6)
+T3 <- 1.8 + 0.9*f1 + rnorm(n, 0, 0.4)
+T4 <- 1.0 + 1.0*f2 + rnorm(n, 0, 0.4)  # f2 loading fixed to 1
+T5 <- 0.8 + 0.9*f2 + rnorm(n, 0, 0.5)
+T6 <- 1.2 + 1.1*f2 + rnorm(n, 0, 0.45)
 
-# Factor 2 indicators
-T3 <- 1.0 + 1.0*f2 + rnorm(n, 0, 0.4)  # Loading fixed to 1
-T4 <- 0.8 + 0.9*f2 + rnorm(n, 0, 0.5)
+dat <- data.frame(intercept = 1, T1 = T1, T2 = T2, T3 = T3,
+                  T4 = T4, T5 = T5, T6 = T6, eval = 1)
 
-dat <- data.frame(intercept = 1, T1 = T1, T2 = T2, T3 = T3, T4 = T4, eval = 1)
+# ============================================================
+# STAGE 1: Measurement model with factor correlation
+# ============================================================
 
-# Define 2-factor model
-fm <- define_factor_model(n_factors = 2, n_types = 1)
-ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+# correlation = TRUE because f1 and f2 are correlated in the data
+fm <- define_factor_model(n_factors = 2, n_types = 1, correlation = TRUE)
+ctrl <- define_estimation_control(n_quad_points = 16, num_cores = 1)
 
-# Factor 1 measurement equations (identify factor 1)
+# Factor 1 measurement equations
 mc_T1 <- define_model_component(
   name = "T1", data = dat, outcome = "T1", factor = fm,
   covariates = "intercept", model_type = "linear",
-  loading_normalization = c(1.0, 0),  # f1 loading=1, f2 loading=0
-  evaluation_indicator = "eval"
+  loading_normalization = c(1.0, 0), evaluation_indicator = "eval"
 )
-
 mc_T2 <- define_model_component(
   name = "T2", data = dat, outcome = "T2", factor = fm,
   covariates = "intercept", model_type = "linear",
-  loading_normalization = c(NA_real_, 0),  # f1 free, f2=0
-  evaluation_indicator = "eval"
+  loading_normalization = c(NA_real_, 0), evaluation_indicator = "eval"
 )
-
-# Factor 2 measurement equations (identify factor 2)
 mc_T3 <- define_model_component(
   name = "T3", data = dat, outcome = "T3", factor = fm,
   covariates = "intercept", model_type = "linear",
-  loading_normalization = c(0, 1.0),  # f1=0, f2 loading=1
-  evaluation_indicator = "eval"
+  loading_normalization = c(NA_real_, 0), evaluation_indicator = "eval"
 )
 
+# Factor 2 measurement equations
 mc_T4 <- define_model_component(
   name = "T4", data = dat, outcome = "T4", factor = fm,
   covariates = "intercept", model_type = "linear",
-  loading_normalization = c(0, NA_real_),  # f1=0, f2 free
-  evaluation_indicator = "eval"
+  loading_normalization = c(0, 1.0), evaluation_indicator = "eval"
+)
+mc_T5 <- define_model_component(
+  name = "T5", data = dat, outcome = "T5", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(0, NA_real_), evaluation_indicator = "eval"
+)
+mc_T6 <- define_model_component(
+  name = "T6", data = dat, outcome = "T6", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(0, NA_real_), evaluation_indicator = "eval"
 )
 
-# Dynamic structural equation: f1 = intercept + lambda*f2 + epsilon
-# This models how factor 1 depends on factor 2
+# Estimate measurement model
+ms_stage1 <- define_model_system(
+  components = list(mc_T1, mc_T2, mc_T3, mc_T4, mc_T5, mc_T6),
+  factor = fm
+)
+result_stage1 <- estimate_model_rcpp(ms_stage1, dat, control = ctrl, verbose = FALSE)
+
+cat("Stage 1: Var(f1)=", result_stage1$estimates["factor_var_1"],
+    ", Var(f2)=", result_stage1$estimates["factor_var_2"],
+    ", Corr=", result_stage1$estimates["factor_corr_1_2"], "\n")
+
+# ============================================================
+# STAGE 2: Structural equation with measurement fixed
+# ============================================================
+
+# Create structural equation component
 dyn <- define_dyn_model_component(
   name = "structural",
   data = dat,
-  outcome_factor = 1,     # f1 is the "outcome" factor
+  outcome_factor = 1,       # f1 is the "outcome" factor
   factor = fm,
-  intercept = TRUE,       # Include intercept
+  intercept = FALSE,        # No intercept (avoids identification issues)
   evaluation_indicator = "eval"
 )
 
-# Estimate
-ms <- define_model_system(components = list(mc_T1, mc_T2, mc_T3, mc_T4, dyn), factor = fm)
-result <- estimate_model_rcpp(ms, dat, init_params = NULL, control = ctrl, verbose = TRUE)
+# Use previous_stage to FIX all Stage 1 parameters
+ms_stage2 <- define_model_system(
+  components = list(dyn),
+  factor = fm,
+  previous_stage = result_stage1
+)
 
-# View results - should recover true values:
-# structural_beta_intercept ≈ 0.5 (true_intercept)
-# structural_loading_2 ≈ 0.8 (true_lambda)
-# structural_sigma ≈ 0.3 (true_sigma_struct)
-print(result$estimates)
-print(result$std_errors)
+result_stage2 <- estimate_model_rcpp(ms_stage2, dat, control = ctrl, verbose = FALSE)
+
+# ============================================================
+# Results comparison
+# ============================================================
+
+est_lambda <- result_stage2$estimates["structural_loading_2"]
+est_sigma <- result_stage2$estimates["structural_sigma"]
+est_var1 <- result_stage2$estimates["factor_var_1"]
+est_var2 <- result_stage2$estimates["factor_var_2"]
+est_corr <- result_stage2$estimates["factor_corr_1_2"]
+
+cat("\nStructural equation estimates:\n")
+cat("  lambda: ", round(est_lambda, 3), " (true = ", true_lambda, ")\n", sep = "")
+cat("  sigma:  ", round(est_sigma, 3), " (true = ", true_sigma, ")\n", sep = "")
+
+# Check implied moments from structural parameters
+implied_var1 <- est_lambda^2 * est_var2 + est_sigma^2
+implied_corr <- est_lambda * sqrt(est_var2) / sqrt(implied_var1)
+
+cat("\nVariance check:\n")
+cat("  Var(f1) from measurement: ", round(est_var1, 4), "\n", sep = "")
+cat("  lambda^2*Var(f2)+sigma^2: ", round(implied_var1, 4), "\n", sep = "")
+
+cat("\nCorrelation check:\n")
+cat("  Corr(f1,f2) from measurement: ", round(est_corr, 4), "\n", sep = "")
+cat("  Implied from structural:      ", round(implied_corr, 4), "\n", sep = "")
+
+# View full results
+components_table(result_stage2)
 ```
 
 </details>
 
 **Key points:**
+- **Two-stage estimation**: Stage 1 estimates measurement model with `correlation = TRUE`, Stage 2 fixes those and estimates structural equation
 - `define_dyn_model_component()` creates structural equations between factors
 - `outcome_factor = 1` means f1 is the dependent variable
-- Loading on f1 is automatically fixed to -1 (identity for outcome)
-- Loading on f2 (λ₂) is estimated as `structural_loading_2`
-- Works with `factor_spec = "quadratic"` or `"interactions"` for nonlinear effects between factors
-- Measurement equations are needed to identify the factors
+- Loading on f2 (λ) is estimated as `structural_loading_2`
+- Use `intercept = FALSE` to avoid identification issues with measurement intercepts
+- The variance/correlation checks show consistency between measurement model moments and structural equation parameters
+- Works with `factor_spec = "quadratic"` or `"interactions"` for nonlinear effects
 
 ---
 

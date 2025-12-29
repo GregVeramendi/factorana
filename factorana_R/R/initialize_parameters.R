@@ -171,16 +171,24 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
 
     if (comp$model_type == "linear") {
       # Linear regression
-      fit <- lm(outcome ~ X - 1)  # -1 because intercept is already in covariates
-      coefs <- coef(fit)
-      sigma <- summary(fit)$sigma
+      if (ncol(X) > 0) {
+        fit <- lm(outcome ~ X - 1)  # -1 because intercept is already in covariates
+        coefs <- coef(fit)
+        sigma <- summary(fit)$sigma
+      } else {
+        # No covariates - just compute residual variance
+        coefs <- numeric(0)
+        sigma <- sd(outcome)
+      }
 
       # For dynamic models (outcome = 0), sigma would be 0 or very small
       # Initialize to 1.0 for a reasonable starting point
       if (isTRUE(comp$is_dynamic)) {
         sigma <- 1.0
         # Also reset coefficients to small values for dynamic models
-        coefs <- rep(0.1, length(coefs))
+        if (length(coefs) > 0) {
+          coefs <- rep(0.1, length(coefs))
+        }
       }
 
       # Apply any fixed coefficient values
@@ -200,7 +208,11 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       comp_params <- c(coefs, rep(0.5, n_free_loadings), second_order$values, sigma)
 
       # Build parameter names
-      coef_names <- paste0(comp$name, "_", comp$covariates)
+      coef_names <- if (length(comp$covariates) > 0) {
+        paste0(comp$name, "_", comp$covariates)
+      } else {
+        character(0)
+      }
       loading_names <- character(0)
       if (n_free_loadings > 0) {
         free_factor_idx <- which(is.na(comp$loading_normalization))
@@ -248,7 +260,11 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       comp_params <- c(coefs, rep(0.5, n_free_loadings), second_order$values)
 
       # Build parameter names
-      coef_names <- paste0(comp$name, "_", comp$covariates)
+      coef_names <- if (length(comp$covariates) > 0) {
+        paste0(comp$name, "_", comp$covariates)
+      } else {
+        character(0)
+      }
       loading_names <- character(0)
       if (n_free_loadings > 0) {
         free_factor_idx <- which(is.na(comp$loading_normalization))
@@ -296,7 +312,11 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         comp_params <- c(coefs, rep(0.5, n_free_loadings), second_order$values)
 
         # Build parameter names
-        coef_names <- paste0(comp$name, "_", comp$covariates)
+        coef_names <- if (length(comp$covariates) > 0) {
+          paste0(comp$name, "_", comp$covariates)
+        } else {
+          character(0)
+        }
         loading_names <- character(0)
         if (n_free_loadings > 0) {
           free_factor_idx <- which(is.na(comp$loading_normalization))
@@ -359,7 +379,11 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
           comp_params <- c(comp_params, choice_coefs, rep(0.5, n_free_loadings), second_order$values)
 
           # Build parameter names for this choice
-          coef_names <- paste0(comp$name, "_c", choice, "_", comp$covariates)
+          coef_names <- if (length(comp$covariates) > 0) {
+            paste0(comp$name, "_c", choice, "_", comp$covariates)
+          } else {
+            character(0)
+          }
           loading_names <- character(0)
           if (n_free_loadings > 0) {
             free_factor_idx <- which(is.na(comp$loading_normalization))

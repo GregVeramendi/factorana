@@ -956,6 +956,17 @@ components_to_latex <- function(result, digits = 3, file = NULL, caption = NULL,
     components <- c(components, "Factor Model")
   }
 
+  # Factor correlations (if correlation = TRUE)
+  if (isTRUE(model_system$factor$correlation) && n_factors > 1) {
+    for (j in 1:(n_factors - 1)) {
+      for (k in (j + 1):n_factors) {
+        param_names <- c(param_names, sprintf("Corr(F%d,F%d)", j, k))
+        param_types <- c(param_types, "factor_corr")
+        components <- c(components, "Factor Model")
+      }
+    }
+  }
+
   # Component parameters - matching initialize_parameters.R logic
   # Key insight: intercept is NOT a separate parameter, it's handled by C++ internally
   for (comp in model_system$components) {
