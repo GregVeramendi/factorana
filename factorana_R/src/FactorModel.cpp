@@ -1,14 +1,17 @@
 #include "FactorModel.h"
 #include "distributions.h"
+#include "gauss_hermite.h"
 #include <cmath>
 #include <stdexcept>
 #include <algorithm>
 #include <iostream>
+#include <set>
 
 FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
                          int n_mix, bool correlated, int n_quad)
     : nobs(n_obs), nvar(n_var), nfac(n_fac), ntyp(n_typ),
-      nmix(n_mix), fac_corr(correlated), nquad_points(n_quad)
+      nmix(n_mix), fac_corr(correlated), nquad_points(n_quad),
+      use_weights(false), use_adaptive(false), adapt_threshold(0.3)
 {
     data.resize(nobs * nvar);
 
@@ -71,6 +74,131 @@ void FactorModel::SetQuadrature(const std::vector<double>& nodes,
 {
     quad_nodes = nodes;
     quad_weights = weights;
+}
+
+void FactorModel::SetObservationWeights(const std::vector<double>& weights)
+{
+    if (weights.size() != nobs) {
+        throw std::runtime_error("Observation weights size mismatch: expected " +
+                                 std::to_string(nobs) + " but got " +
+                                 std::to_string(weights.size()));
+    }
+    obs_weights = weights;
+    use_weights = true;
+}
+
+void FactorModel::SetAdaptiveQuadrature(const std::vector<std::vector<double>>& factor_scores,
+                                        const std::vector<std::vector<double>>& factor_ses,
+                                        const std::vector<double>& factor_vars,
+                                        double threshold,
+                                        int max_quad)
+{
+    // Validate inputs
+    if (factor_scores.size() != nobs) {
+        throw std::runtime_error("factor_scores size mismatch: expected " +
+                                 std::to_string(nobs) + " observations");
+    }
+    if (factor_ses.size() != nobs) {
+        throw std::runtime_error("factor_ses size mismatch: expected " +
+                                 std::to_string(nobs) + " observations");
+    }
+    if (factor_vars.size() != nfac) {
+        throw std::runtime_error("factor_vars size mismatch: expected " +
+                                 std::to_string(nfac) + " factors");
+    }
+
+    // Store settings
+    adapt_threshold = threshold;
+    adapt_factor_var = factor_vars;
+
+    // Resize storage
+    obs_nquad.resize(nobs);
+    obs_fac_center.resize(nobs);
+    obs_weights.resize(nobs, 1.0);
+
+    // Collect all unique nquad values needed
+    std::set<int> needed_nquad;
+
+    // Compute per-observation quadrature settings
+    for (int iobs = 0; iobs < nobs; iobs++) {
+        if (factor_scores[iobs].size() != nfac || factor_ses[iobs].size() != nfac) {
+            throw std::runtime_error("Factor score/SE dimensions mismatch for observation " +
+                                     std::to_string(iobs));
+        }
+
+        obs_nquad[iobs].resize(nfac);
+        obs_fac_center[iobs].resize(nfac);
+
+        for (int ifac = 0; ifac < nfac; ifac++) {
+            double f_score = factor_scores[iobs][ifac];
+            double f_se = factor_ses[iobs][ifac];
+            double f_var = factor_vars[ifac];
+
+            // Store factor score center
+            obs_fac_center[iobs][ifac] = f_score;
+
+            // Determine number of quadrature points based on SE
+            // Formula from legacy code: nquad = 1 + 2 * floor(se / var / threshold)
+            // When SE is small, use 1 point (just the factor score)
+            // When SE is large, use more points
+            double ratio = f_se / f_var / threshold;
+            int nq = 1 + 2 * static_cast<int>(std::floor(ratio));
+
+            // Clamp to reasonable range
+            if (nq < 1) nq = 1;
+            if (nq > max_quad) nq = max_quad;
+
+            // If SE is very large (> sqrt(factor_var)), use default quadrature centered at 0
+            // This handles cases where factor score estimation failed
+            if (f_se > std::sqrt(f_var)) {
+                nq = max_quad;
+                obs_fac_center[iobs][ifac] = 0.0;  // Center at prior mean
+            }
+
+            obs_nquad[iobs][ifac] = nq;
+            needed_nquad.insert(nq);
+        }
+
+        // Note: Importance sampling weights are computed per integration point in CalcLkhd,
+        // not per observation, because they depend on the quadrature node values.
+        obs_weights[iobs] = 1.0;  // Default weight
+    }
+
+    // Pre-compute GH quadrature nodes/weights for all needed sizes
+    adapt_nodes.clear();
+    adapt_weights.clear();
+
+    double sqrt2 = std::sqrt(2.0);
+    double sqrt_pi = std::sqrt(M_PI);
+
+    for (int nq : needed_nquad) {
+        std::vector<double> nodes, weights;
+        calcgausshermitequadrature(nq, nodes, weights);
+
+        // Scale for standard normal: x_scaled = sqrt(2) * x, w_scaled = w / sqrt(pi)
+        for (int i = 0; i < nq; i++) {
+            nodes[i] *= sqrt2;
+            weights[i] /= sqrt_pi;
+        }
+
+        adapt_nodes[nq] = nodes;
+        adapt_weights[nq] = weights;
+    }
+
+    use_weights = true;
+    use_adaptive = true;
+}
+
+void FactorModel::DisableAdaptiveQuadrature()
+{
+    use_adaptive = false;
+    use_weights = false;  // Also reset weights since they may have been set by adaptive mode
+    obs_nquad.clear();
+    obs_fac_center.clear();
+    obs_weights.clear();
+    adapt_factor_var.clear();
+    adapt_nodes.clear();
+    adapt_weights.clear();
 }
 
 void FactorModel::SetParameterConstraints(const std::vector<bool>& fixed)
@@ -216,10 +344,11 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         full_hessL.resize(nparam * nparam, 0.0);
     }
 
-    // ===== STEP 4: Compute total number of integration points =====
-    int nint_points = 1;
+    // ===== STEP 4: Compute default number of integration points =====
+    // (may be overridden per-observation in adaptive mode)
+    int nint_points_default = 1;
     for (int i = 0; i < nfac; i++) {
-        nint_points *= nquad_points;
+        nint_points_default *= nquad_points;
     }
 
     // Temporary storage
@@ -245,6 +374,28 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         if (iflag == 3) std::fill(totalhess.begin(), totalhess.end(), 0.0);
 
         // ===== STEP 6: Multi-dimensional integration over factors =====
+        // Determine per-observation integration settings
+        int nint_points;
+        std::vector<int> obs_nq(nfac);  // Number of quad points per factor
+        std::vector<double> fac_center(nfac);  // Center for factor integration
+
+        if (use_adaptive) {
+            // Adaptive mode: use per-observation quadrature settings
+            nint_points = 1;
+            for (int ifac = 0; ifac < nfac; ifac++) {
+                obs_nq[ifac] = obs_nquad[iobs][ifac];
+                fac_center[ifac] = obs_fac_center[iobs][ifac];
+                nint_points *= obs_nq[ifac];
+            }
+        } else {
+            // Standard mode: use global quadrature settings
+            nint_points = nint_points_default;
+            for (int ifac = 0; ifac < nfac; ifac++) {
+                obs_nq[ifac] = nquad_points;
+                fac_center[ifac] = factor_mean[ifac];
+            }
+        }
+
         // Use "odometer" method: facint tracks indices for each dimension
         std::vector<int> facint(nfac, 0);
 
@@ -256,14 +407,20 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             // Get integration weight (product over dimensions)
             double probilk = 1.0;
             for (int ifac = 0; ifac < nfac; ifac++) {
-                probilk *= quad_weights[facint[ifac]];
+                if (use_adaptive) {
+                    int nq = obs_nq[ifac];
+                    probilk *= adapt_weights.at(nq)[facint[ifac]];
+                } else {
+                    probilk *= quad_weights[facint[ifac]];
+                }
             }
 
             // Compute factor values at this integration point
             std::vector<double> fac_val(nfac);
 
-            if (fac_corr && nfac == 2) {
+            if (fac_corr && nfac == 2 && !use_adaptive) {
                 // Correlated 2-factor model: use Cholesky transformation
+                // (Not supported in adaptive mode - requires independent factors)
                 // f1 = σ1 * z1
                 // f2 = ρ*σ2*z1 + σ2*√(1-ρ²)*z2
                 // where z1, z2 are independent GH quadrature nodes
@@ -276,13 +433,38 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 fac_val[1] = rho * sigma2 * z1 + sigma2 * sqrt_1_minus_rho2 * z2 + factor_mean[1];
             } else {
                 // Independent factors: standard transformation
+                // In adaptive mode: center at factor score instead of 0
                 for (int ifac = 0; ifac < nfac; ifac++) {
                     double sigma = std::sqrt(factor_var[ifac]);
-                    double x_node = quad_nodes[facint[ifac]];
+                    double x_node;
+                    if (use_adaptive) {
+                        int nq = obs_nq[ifac];
+                        x_node = adapt_nodes.at(nq)[facint[ifac]];
+                    } else {
+                        x_node = quad_nodes[facint[ifac]];
+                    }
                     // Factor transformation for GH quadrature
-                    // Empirically, f = sigma * x gives correct parameter recovery
-                    // (without sqrt(2) factor that theory suggests)
-                    fac_val[ifac] = sigma * x_node + factor_mean[ifac];
+                    // f = sigma * x + center (where center is factor_score in adaptive mode)
+                    fac_val[ifac] = sigma * x_node + fac_center[ifac];
+                }
+            }
+
+            // Apply importance sampling correction for adaptive quadrature
+            // When centering at factor score instead of 0, we need to correct for
+            // the different normalizing constant of the prior density.
+            // Correction: exp(x²/2) × exp(-f²/(2σ²)) for each factor
+            // where x is the GH node and f is the factor value at this point.
+            if (use_adaptive) {
+                for (int ifac = 0; ifac < nfac; ifac++) {
+                    int nq = obs_nq[ifac];
+                    double x_node = adapt_nodes.at(nq)[facint[ifac]];
+                    double f = fac_val[ifac];
+                    double var = factor_var[ifac];
+
+                    // Importance sampling weight correction
+                    // This accounts for centering at fac_center instead of prior mean (0)
+                    double is_correction = std::exp(x_node * x_node / 2.0 - f * f / (2.0 * var));
+                    probilk *= is_correction;
                 }
             }
 
@@ -831,37 +1013,40 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             if (intpt < nint_points - 1) {
                 for (int ifac = 0; ifac < nfac; ifac++) {
                     facint[ifac]++;
-                    if (facint[ifac] < nquad_points) break;
+                    if (facint[ifac] < obs_nq[ifac]) break;
                     facint[ifac] = 0;
                 }
             }
         }
 
         // ===== STEP 12: Compute log-likelihood for this observation =====
-        if (totalprob > 1e-100) {
-            logLkhd += std::log(totalprob);
+        // Apply observation weight (default 1.0 if no weights set)
+        double obs_weight = use_weights ? obs_weights[iobs] : 1.0;
 
-            // Gradient: d(log L)/dθ = (1/L) * dL/dθ
+        if (totalprob > 1e-100) {
+            logLkhd += obs_weight * std::log(totalprob);
+
+            // Gradient: d(log L)/dθ = (1/L) * dL/dθ (weighted by observation)
             if (iflag >= 2) {
                 for (int ipar = 0; ipar < nparam; ipar++) {
-                    full_gradL[ipar] += totalgrad[ipar] / totalprob;
+                    full_gradL[ipar] += obs_weight * totalgrad[ipar] / totalprob;
                 }
             }
 
-            // Hessian: d²(log L)/dθ² = (1/L)*d²L/dθ² - (1/L²)*(dL/dθ)²
+            // Hessian: d²(log L)/dθ² = (1/L)*d²L/dθ² - (1/L²)*(dL/dθ)² (weighted)
             if (iflag == 3) {
                 for (int i = 0; i < nparam; i++) {
                     for (int j = i; j < nparam; j++) {
                         int idx = i * nparam + j;
                         double term1 = totalhess[idx] / totalprob;
                         double term2 = (totalgrad[i] * totalgrad[j]) / (totalprob * totalprob);
-                        full_hessL[idx] += term1 - term2;
+                        full_hessL[idx] += obs_weight * (term1 - term2);
                     }
                 }
             }
         } else {
             // Numerical underflow
-            logLkhd += -1e10;
+            logLkhd += obs_weight * (-1e10);
         }
     }
 

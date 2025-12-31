@@ -63,6 +63,8 @@ devtools::install_github("GregVeramendi/factorana",
 - Fix regression coefficients to specific values via `fix_coefficient()`
 - Fix type-specific intercepts to zero via `fix_type_intercepts()` (for multi-type models)
 - Multi-stage/sequential estimation with fixed early-stage parameters
+- **Adaptive integration**: Per-observation quadrature based on factor score uncertainty for efficient two-stage estimation
+- **Observation weights**: Survey weights or importance sampling via `weights` parameter
 - Automatically initialize parameters using component-by-component estimation
 - Fast C++ backend with R-level parallelization for large datasets
 - Analytical Hessian for fast convergence and accurate standard errors
@@ -403,6 +405,129 @@ print(result_stage2$std_errors)   # Standard errors preserved from stage 1
 
 ---
 
+## Adaptive Integration
+
+For large-scale two-stage estimation, adaptive integration dramatically reduces computation time by using factor scores from Stage 1 to determine how many integration points each observation needs in Stage 2:
+
+- **Small SE** (factor well-identified): 1 integration point centered at factor score
+- **Medium SE**: Fewer points with importance sampling correction
+- **Large SE** (factor poorly identified): Full quadrature at prior mean
+
+**Formula:** `n_quad_obs = 1 + 2 × floor(factor_se / factor_variance / threshold)`
+
+<details>
+<summary><b>Click to expand adaptive integration example</b></summary>
+
+```r
+library(factorana)
+
+# === STAGE 1: Estimate measurement model ===
+fm <- define_factor_model(n_factors = 2, n_types = 1)
+ctrl <- define_estimation_control(n_quad_points = 16, num_cores = 4)
+
+# Define measurement components...
+ms_stage1 <- define_model_system(components = list(mc1, mc2, mc3, mc4), factor = fm)
+result_s1 <- estimate_model_rcpp(ms_stage1, data, control = ctrl)
+
+# Get factor scores and standard errors
+fscores <- estimate_factorscores_rcpp(ms_stage1, data, result_s1$par, ctrl)
+factor_scores <- fscores$factor_scores   # matrix [nobs x nfac]
+factor_ses <- fscores$factor_ses         # matrix [nobs x nfac]
+
+# === STAGE 2: Estimate with adaptive integration ===
+# Add structural components...
+ms_stage2 <- define_model_system(
+  components = list(mc1, mc2, mc3, mc4, mc_outcome),
+  factor = fm
+)
+
+# Initialize FactorModel for Stage 2
+fm_ptr <- initialize_factor_model_cpp(ms_stage2, data, n_quad = 16)
+
+# Extract factor variances from Stage 1
+factor_vars <- c(result_s1$par["factor_var_1"], result_s1$par["factor_var_2"])
+
+# Enable adaptive integration (prints diagnostic summary)
+set_adaptive_quadrature_cpp(
+  fm_ptr,
+  factor_scores,   # From Stage 1
+  factor_ses,      # From Stage 1
+  factor_vars,     # Factor variances from Stage 1
+  threshold = 0.3, # Smaller = more integration points
+  max_quad = 16,   # Maximum points per factor
+  verbose = TRUE   # Print summary table
+)
+
+# Output example:
+# Adaptive Integration Summary
+# ----------------------------
+# Threshold: 0.3, Max quad points: 16
+#
+# Integration points per observation:
+#   Points   Observations   Percent
+#        1            400      80.0%
+#        3            100      20.0%
+#
+# Average integration points: 1.4 (vs 256 standard)
+# Computational reduction: 99.4%
+
+# Run estimation with the adaptive FactorModel...
+```
+
+</details>
+
+**Key points:**
+- Importance sampling correction is applied automatically
+- Works best when most observations have well-identified factor scores
+- Can achieve 90%+ computational reduction for well-identified models
+- Use `disable_adaptive_quadrature_cpp()` to revert to standard integration
+
+---
+
+## Observation Weights
+
+Observation weights allow different observations to have different influence on the likelihood. This is useful for:
+- **Survey weights**: Make estimates representative of a population
+- **Importance sampling**: As used internally by adaptive integration
+- **Down-weighting outliers**: Reduce influence of problematic observations
+
+<details>
+<summary><b>Click to expand observation weights example</b></summary>
+
+```r
+library(factorana)
+
+# Create data with survey weights
+data$survey_weight <- compute_ipw_weights(data)  # Your weight function
+
+# Define factor model and components...
+fm <- define_factor_model(n_factors = 1, n_types = 1)
+mc1 <- define_model_component(...)
+mc2 <- define_model_component(...)
+
+# Specify weights in define_model_system()
+ms <- define_model_system(
+  components = list(mc1, mc2),
+  factor = fm,
+  weights = "survey_weight"  # Column name in data
+)
+
+# Estimate - weights applied automatically
+ctrl <- define_estimation_control(n_quad_points = 16, num_cores = 4)
+result <- estimate_model_rcpp(ms, data, control = ctrl, verbose = TRUE)
+# Output: "Using observation weights from 'survey_weight' (range: 0.5 to 2.0)"
+```
+
+</details>
+
+**Requirements:**
+- Weights must be a numeric column in the data
+- Weights must be positive (warning if any are ≤ 0)
+- Weights cannot contain NA values
+- Each observation's log-likelihood contribution is multiplied by its weight
+
+---
+
 ## Concepts
 
 ### Latent factors & normalization
@@ -548,7 +673,7 @@ More detailed explanations within functions.
   - Fixed type intercepts are excluded from the parameter vector entirely
   - Useful when type effects should operate only through factor loadings, not direct intercept shifts
 
-### define_model_system(components, factor, previous_stage = NULL)
+### define_model_system(components, factor, previous_stage = NULL, weights = NULL)
 - Bundles components and the shared factor model into a `"model_system"`.
 - `previous_stage` (optional): Result object from a previous `estimate_model_rcpp()` call
   - Enables multi-stage/sequential estimation
@@ -556,11 +681,22 @@ More detailed explanations within functions.
   - Previous-stage components are prepended to new components
   - Standard errors are preserved from previous stage
   - See "Two-Stage Estimation" section for usage example
+- `weights` (optional): Name of a variable in the data containing observation weights
+  - Each observation's log-likelihood contribution is multiplied by its weight
+  - Useful for survey weights, importance sampling, or differential weighting
+  - Weights must be positive and cannot contain NA values
+  - Example: `define_model_system(components, fm, weights = "survey_weight")`
 
-### define_estimation_control(n_quad_points = 16, num_cores = 1)
+### define_estimation_control(n_quad_points = 16, num_cores = 1, adaptive_integration = FALSE, adapt_int_thresh = 0.3)
 - Container for estimation settings including numerical integration and parallelization.
 - `n_quad_points` (int ≥1): Number of Gauss-Hermite quadrature points for numerical integration (default: 16)
 - `num_cores`: Number of CPU cores to use for parallel estimation (default: 1)
+- `adaptive_integration` (logical): Enable adaptive integration for two-stage estimation (default: FALSE)
+  - When TRUE, quadrature points vary by observation based on factor score precision
+  - See "Adaptive Integration" section for usage
+- `adapt_int_thresh` (numeric): Threshold for adaptive integration (default: 0.3)
+  - Smaller values → more integration points
+  - Formula: `n_quad_obs = 1 + 2 × floor(factor_se / factor_var / threshold)`
 
 ### estimate_model_rcpp(model_system, data, init_params = NULL, control = NULL, optimizer = "nlminb", parallel = TRUE, verbose = TRUE)
 - Main estimation function using C++ backend with R-level parallelization

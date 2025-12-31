@@ -85,6 +85,43 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// set_observation_weights_cpp
+void set_observation_weights_cpp(SEXP fm_ptr, NumericVector weights);
+RcppExport SEXP _factorana_set_observation_weights_cpp(SEXP fm_ptrSEXP, SEXP weightsSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type fm_ptr(fm_ptrSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type weights(weightsSEXP);
+    set_observation_weights_cpp(fm_ptr, weights);
+    return R_NilValue;
+END_RCPP
+}
+// set_adaptive_quadrature_cpp
+void set_adaptive_quadrature_cpp(SEXP fm_ptr, NumericMatrix factor_scores, NumericMatrix factor_ses, NumericVector factor_vars, double threshold, int max_quad, bool verbose);
+RcppExport SEXP _factorana_set_adaptive_quadrature_cpp(SEXP fm_ptrSEXP, SEXP factor_scoresSEXP, SEXP factor_sesSEXP, SEXP factor_varsSEXP, SEXP thresholdSEXP, SEXP max_quadSEXP, SEXP verboseSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type fm_ptr(fm_ptrSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type factor_scores(factor_scoresSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type factor_ses(factor_sesSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type factor_vars(factor_varsSEXP);
+    Rcpp::traits::input_parameter< double >::type threshold(thresholdSEXP);
+    Rcpp::traits::input_parameter< int >::type max_quad(max_quadSEXP);
+    Rcpp::traits::input_parameter< bool >::type verbose(verboseSEXP);
+    set_adaptive_quadrature_cpp(fm_ptr, factor_scores, factor_ses, factor_vars, threshold, max_quad, verbose);
+    return R_NilValue;
+END_RCPP
+}
+// disable_adaptive_quadrature_cpp
+void disable_adaptive_quadrature_cpp(SEXP fm_ptr);
+RcppExport SEXP _factorana_disable_adaptive_quadrature_cpp(SEXP fm_ptrSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type fm_ptr(fm_ptrSEXP);
+    disable_adaptive_quadrature_cpp(fm_ptr);
+    return R_NilValue;
+END_RCPP
+}
 // evaluate_factorscore_likelihood_cpp
 List evaluate_factorscore_likelihood_cpp(SEXP fm_ptr, int iobs, NumericVector factor_values, NumericVector model_params, bool compute_gradient, bool compute_hessian);
 RcppExport SEXP _factorana_evaluate_factorscore_likelihood_cpp(SEXP fm_ptrSEXP, SEXP iobsSEXP, SEXP factor_valuesSEXP, SEXP model_paramsSEXP, SEXP compute_gradientSEXP, SEXP compute_hessianSEXP) {
@@ -111,6 +148,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_factorana_evaluate_loglik_only_cpp", (DL_FUNC) &_factorana_evaluate_loglik_only_cpp, 2},
     {"_factorana_get_parameter_info_cpp", (DL_FUNC) &_factorana_get_parameter_info_cpp, 1},
     {"_factorana_extract_free_params_cpp", (DL_FUNC) &_factorana_extract_free_params_cpp, 2},
+    {"_factorana_set_observation_weights_cpp", (DL_FUNC) &_factorana_set_observation_weights_cpp, 2},
+    {"_factorana_set_adaptive_quadrature_cpp", (DL_FUNC) &_factorana_set_adaptive_quadrature_cpp, 7},
+    {"_factorana_disable_adaptive_quadrature_cpp", (DL_FUNC) &_factorana_disable_adaptive_quadrature_cpp, 1},
     {"_factorana_evaluate_factorscore_likelihood_cpp", (DL_FUNC) &_factorana_evaluate_factorscore_likelihood_cpp, 6},
     {"_rcpp_module_boot_factorana_module", (DL_FUNC) &_rcpp_module_boot_factorana_module, 0},
     {NULL, NULL, 0}

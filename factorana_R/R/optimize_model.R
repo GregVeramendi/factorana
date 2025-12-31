@@ -501,6 +501,21 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   # Convert data to matrix
   data_mat <- as.matrix(data)
 
+  # Validate observation weights if specified
+  if (!is.null(model_system$weights)) {
+    weights_var <- model_system$weights
+    if (!weights_var %in% colnames(data_mat)) {
+      stop(sprintf("Weights variable '%s' not found in data", weights_var))
+    }
+    weights_vec <- data_mat[, weights_var]
+    if (any(is.na(weights_vec))) {
+      stop("Observation weights contain NA values")
+    }
+    if (any(weights_vec <= 0)) {
+      warning("Some observation weights are <= 0. This may cause issues.")
+    }
+  }
+
   # Setup parallel cluster if requested
   cl <- NULL
   if (parallel && control$num_cores > 1) {
@@ -570,9 +585,39 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     })
 
     fm_ptrs <- NULL  # Not used; pointers stored on workers
+
+    # Set observation weights if specified in model_system
+    if (!is.null(model_system$weights)) {
+      weights_var <- model_system$weights
+      # Export weights variable name
+      parallel::clusterExport(cl, "weights_var", envir = environment())
+      # Each worker extracts and sets weights for its data subset
+      parallel::clusterEvalQ(cl, {
+        worker_id <- .self_id
+        idx <- data_splits[[worker_id]]
+        weights_subset <- data_mat[idx, weights_var]
+        set_observation_weights_cpp(.fm_ptr, weights_subset)
+      })
+      if (verbose) {
+        weights_vec <- data_mat[, weights_var]
+        message(sprintf("Using observation weights from '%s' (range: %.3f to %.3f)",
+                       weights_var, min(weights_vec), max(weights_vec)))
+      }
+    }
   } else {
     # Single worker initialization
     fm_ptrs <- list(initialize_factor_model_cpp(model_system, data_mat, n_quad, full_init_params))
+
+    # Set observation weights if specified in model_system
+    if (!is.null(model_system$weights)) {
+      weights_var <- model_system$weights
+      weights_vec <- data_mat[, weights_var]
+      set_observation_weights_cpp(fm_ptrs[[1]], weights_vec)
+      if (verbose) {
+        message(sprintf("Using observation weights from '%s' (range: %.3f to %.3f)",
+                       weights_var, min(weights_vec), max(weights_vec)))
+      }
+    }
   }
 
   # Get parameter count and extract free parameters

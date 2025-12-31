@@ -72,6 +72,48 @@ extract_free_params_cpp <- function(fm_ptr, full_params) {
     .Call(`_factorana_extract_free_params_cpp`, fm_ptr, full_params)
 }
 
+#' Set observation weights for weighted likelihood estimation
+#'
+#' Sets per-observation weights for the likelihood calculation. When weights
+#' are set, each observation's contribution to the log-likelihood is multiplied
+#' by its weight. This is used for importance sampling in adaptive integration.
+#'
+#' @param fm_ptr External pointer to FactorModel object
+#' @param weights Numeric vector of observation weights (length = n_obs)
+#' @export
+set_observation_weights_cpp <- function(fm_ptr, weights) {
+    invisible(.Call(`_factorana_set_observation_weights_cpp`, fm_ptr, weights))
+}
+
+#' Set up adaptive quadrature based on factor scores and standard errors
+#'
+#' Enables adaptive integration where the number of quadrature points varies
+#' by observation based on the precision of factor score estimates. When factor
+#' scores are well-determined (small SE), fewer integration points are used.
+#' Importance sampling weights are computed automatically.
+#'
+#' @param fm_ptr External pointer to FactorModel object
+#' @param factor_scores Matrix (n_obs x n_factors) of factor score estimates
+#' @param factor_ses Matrix (n_obs x n_factors) of standard errors
+#' @param factor_vars Vector (n_factors) of factor variances from previous stage
+#' @param threshold Threshold for determining quadrature points (default 0.3)
+#' @param max_quad Maximum quadrature points per factor (default 16)
+#' @param verbose Whether to print summary of adaptive quadrature setup (default TRUE)
+#' @export
+set_adaptive_quadrature_cpp <- function(fm_ptr, factor_scores, factor_ses, factor_vars, threshold = 0.3, max_quad = 16L, verbose = TRUE) {
+    invisible(.Call(`_factorana_set_adaptive_quadrature_cpp`, fm_ptr, factor_scores, factor_ses, factor_vars, threshold, max_quad, verbose))
+}
+
+#' Disable adaptive quadrature
+#'
+#' Reverts to standard (non-adaptive) quadrature integration.
+#'
+#' @param fm_ptr External pointer to FactorModel object
+#' @export
+disable_adaptive_quadrature_cpp <- function(fm_ptr) {
+    invisible(.Call(`_factorana_disable_adaptive_quadrature_cpp`, fm_ptr))
+}
+
 #' Evaluate log-likelihood for a single observation at given factor values
 #'
 #' Used for factor score estimation. The model parameters are held fixed,

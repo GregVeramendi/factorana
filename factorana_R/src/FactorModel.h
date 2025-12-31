@@ -4,6 +4,7 @@
 #include "Model.h"
 #include <vector>
 #include <memory>
+#include <map>
 #include <Rcpp.h>
 #include <RcppEigen.h>
 
@@ -40,6 +41,19 @@ private:
     std::vector<double> quad_nodes;    // GH quadrature nodes (scaled for different npoints)
     std::vector<double> quad_weights;  // GH quadrature weights
 
+    // Observation weights (for weighted likelihood)
+    std::vector<double> obs_weights;   // Weight per observation (default: all 1.0)
+    bool use_weights;                  // Whether observation weights are set
+
+    // Adaptive integration (for second-stage estimation with factor scores)
+    bool use_adaptive;                 // Whether adaptive integration is enabled
+    std::vector<std::vector<int>> obs_nquad;     // Per-obs, per-factor quadrature point counts
+    std::vector<std::vector<double>> obs_fac_center;  // Per-obs factor score centers [iobs][ifac]
+    std::vector<double> adapt_factor_var;       // Factor variances for adaptive mode
+    double adapt_threshold;                     // Threshold for determining n_quad per obs
+    std::map<int, std::vector<double>> adapt_nodes;   // GH nodes for different nquad values
+    std::map<int, std::vector<double>> adapt_weights; // GH weights for different nquad values
+
     // Parameter organization
     std::vector<int> param_model_start;  // Starting index for each model's parameters
     std::vector<int> param_model_count;  // Number of parameters per model
@@ -59,6 +73,24 @@ public:
     // Set quadrature nodes and weights (computed in R)
     void SetQuadrature(const std::vector<double>& nodes,
                       const std::vector<double>& weights);
+
+    // Set observation weights (for weighted likelihood / importance sampling)
+    void SetObservationWeights(const std::vector<double>& weights);
+
+    // Set up adaptive integration based on factor scores and standard errors
+    // factor_scores: matrix [nobs x nfac] of factor score estimates
+    // factor_ses: matrix [nobs x nfac] of standard errors for factor scores
+    // factor_vars: vector [nfac] of factor variances from previous stage
+    // threshold: threshold for determining quadrature points (smaller = more points)
+    // max_quad: maximum number of quadrature points per factor
+    void SetAdaptiveQuadrature(const std::vector<std::vector<double>>& factor_scores,
+                               const std::vector<std::vector<double>>& factor_ses,
+                               const std::vector<double>& factor_vars,
+                               double threshold,
+                               int max_quad);
+
+    // Disable adaptive integration (revert to standard quadrature)
+    void DisableAdaptiveQuadrature();
 
     // Set which parameters are fixed
     void SetParameterConstraints(const std::vector<bool>& fixed);

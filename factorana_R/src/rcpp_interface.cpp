@@ -528,6 +528,127 @@ NumericVector extract_free_params_cpp(SEXP fm_ptr, NumericVector full_params) {
     return free_params;
 }
 
+//' Set observation weights for weighted likelihood estimation
+//'
+//' Sets per-observation weights for the likelihood calculation. When weights
+//' are set, each observation's contribution to the log-likelihood is multiplied
+//' by its weight. This is used for importance sampling in adaptive integration.
+//'
+//' @param fm_ptr External pointer to FactorModel object
+//' @param weights Numeric vector of observation weights (length = n_obs)
+//' @export
+// [[Rcpp::export]]
+void set_observation_weights_cpp(SEXP fm_ptr, NumericVector weights) {
+    Rcpp::XPtr<FactorModel> fm(fm_ptr);
+    std::vector<double> weights_vec = as<std::vector<double>>(weights);
+    fm->SetObservationWeights(weights_vec);
+}
+
+//' Set up adaptive quadrature based on factor scores and standard errors
+//'
+//' Enables adaptive integration where the number of quadrature points varies
+//' by observation based on the precision of factor score estimates. When factor
+//' scores are well-determined (small SE), fewer integration points are used.
+//' Importance sampling weights are computed automatically.
+//'
+//' @param fm_ptr External pointer to FactorModel object
+//' @param factor_scores Matrix (n_obs x n_factors) of factor score estimates
+//' @param factor_ses Matrix (n_obs x n_factors) of standard errors
+//' @param factor_vars Vector (n_factors) of factor variances from previous stage
+//' @param threshold Threshold for determining quadrature points (default 0.3)
+//' @param max_quad Maximum quadrature points per factor (default 16)
+//' @param verbose Whether to print summary of adaptive quadrature setup (default TRUE)
+//' @export
+// [[Rcpp::export]]
+void set_adaptive_quadrature_cpp(SEXP fm_ptr,
+                                 NumericMatrix factor_scores,
+                                 NumericMatrix factor_ses,
+                                 NumericVector factor_vars,
+                                 double threshold = 0.3,
+                                 int max_quad = 16,
+                                 bool verbose = true) {
+    Rcpp::XPtr<FactorModel> fm(fm_ptr);
+
+    int n_obs = factor_scores.nrow();
+    int n_fac = factor_scores.ncol();
+
+    // Convert to nested vectors
+    std::vector<std::vector<double>> scores_vec(n_obs);
+    std::vector<std::vector<double>> ses_vec(n_obs);
+    for (int i = 0; i < n_obs; i++) {
+        scores_vec[i].resize(n_fac);
+        ses_vec[i].resize(n_fac);
+        for (int j = 0; j < n_fac; j++) {
+            scores_vec[i][j] = factor_scores(i, j);
+            ses_vec[i][j] = factor_ses(i, j);
+        }
+    }
+
+    std::vector<double> vars_vec = as<std::vector<double>>(factor_vars);
+
+    fm->SetAdaptiveQuadrature(scores_vec, ses_vec, vars_vec, threshold, max_quad);
+
+    // Print summary if verbose
+    if (verbose) {
+        Rcpp::Rcout << "\nAdaptive Integration Summary\n";
+        Rcpp::Rcout << "----------------------------\n";
+        Rcpp::Rcout << "Threshold: " << threshold << ", Max quad points: " << max_quad << "\n\n";
+
+        // Compute per-observation total integration points and collect stats
+        std::map<int, int> nquad_counts;  // nquad -> count of observations
+        double total_points = 0.0;
+        double total_points_standard = std::pow(max_quad, n_fac);
+
+        for (int i = 0; i < n_obs; i++) {
+            int obs_total = 1;
+            for (int j = 0; j < n_fac; j++) {
+                // Recompute nquad using same formula as SetAdaptiveQuadrature
+                double f_se = factor_ses(i, j);
+                double f_var = factor_vars[j];
+                double ratio = f_se / f_var / threshold;
+                int nq = 1 + 2 * static_cast<int>(std::floor(ratio));
+                if (nq < 1) nq = 1;
+                if (nq > max_quad) nq = max_quad;
+                if (f_se > std::sqrt(f_var)) nq = max_quad;
+                obs_total *= nq;
+            }
+            nquad_counts[obs_total]++;
+            total_points += obs_total;
+        }
+
+        double avg_points = total_points / n_obs;
+        double reduction = 100.0 * (1.0 - avg_points / total_points_standard);
+
+        // Print distribution table
+        Rcpp::Rcout << "Integration points per observation:\n";
+        Rcpp::Rcout << "  Points   Observations   Percent\n";
+        for (auto& kv : nquad_counts) {
+            double pct = 100.0 * kv.second / n_obs;
+            Rcpp::Rcout << std::setw(8) << kv.first
+                        << std::setw(15) << kv.second
+                        << std::setw(10) << std::fixed << std::setprecision(1) << pct << "%\n";
+        }
+
+        Rcpp::Rcout << "\nAverage integration points: " << std::fixed << std::setprecision(1)
+                    << avg_points << " (vs " << static_cast<int>(total_points_standard)
+                    << " standard)\n";
+        Rcpp::Rcout << "Computational reduction: " << std::fixed << std::setprecision(1)
+                    << reduction << "%\n\n";
+    }
+}
+
+//' Disable adaptive quadrature
+//'
+//' Reverts to standard (non-adaptive) quadrature integration.
+//'
+//' @param fm_ptr External pointer to FactorModel object
+//' @export
+// [[Rcpp::export]]
+void disable_adaptive_quadrature_cpp(SEXP fm_ptr) {
+    Rcpp::XPtr<FactorModel> fm(fm_ptr);
+    fm->DisableAdaptiveQuadrature();
+}
+
 //' Evaluate log-likelihood for a single observation at given factor values
 //'
 //' Used for factor score estimation. The model parameters are held fixed,

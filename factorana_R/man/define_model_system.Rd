@@ -4,7 +4,7 @@
 \alias{define_model_system}
 \title{Define a model system}
 \usage{
-define_model_system(components, factor, previous_stage = NULL)
+define_model_system(components, factor, previous_stage = NULL, weights = NULL)
 }
 \arguments{
 \item{components}{A named list of model_component objects}
@@ -15,6 +15,12 @@ define_model_system(components, factor, previous_stage = NULL)
 If provided, the previous stage components and parameters will be fixed
 and prepended to the new components. This enables sequential/multi-stage
 estimation where early stages are held fixed while later stages are optimized.}
+
+\item{weights}{Optional. Name of a variable in the data containing observation weights.
+When specified, each observation's contribution to the log-likelihood is multiplied
+by its weight. Useful for survey weights, importance sampling, or giving different
+observations different influence on the estimation. Weights should be positive.
+The variable is extracted from the data passed to \code{estimate_model_rcpp()}.}
 }
 \value{
 An object of class "model_system". A list of model_component objects and one factor_model object.

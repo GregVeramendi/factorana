@@ -6,10 +6,15 @@
 #'   If provided, the previous stage components and parameters will be fixed
 #'   and prepended to the new components. This enables sequential/multi-stage
 #'   estimation where early stages are held fixed while later stages are optimized.
+#' @param weights Optional. Name of a variable in the data containing observation weights.
+#'   When specified, each observation's contribution to the log-likelihood is multiplied
+#'   by its weight. Useful for survey weights, importance sampling, or giving different
+#'   observations different influence on the estimation. Weights should be positive.
+#'   The variable is extracted from the data passed to \code{estimate_model_rcpp()}.
 #'
 #' @return An object of class "model_system". A list of model_component objects and one factor_model object.
 #' @export
-define_model_system <- function(components, factor, previous_stage = NULL) {
+define_model_system <- function(components, factor, previous_stage = NULL, weights = NULL) {
   # Validate the inputs:
 
   if (!is.list(components) || !all(sapply(components, inherits, "model_component"))) {
@@ -44,6 +49,13 @@ define_model_system <- function(components, factor, previous_stage = NULL) {
         stop(sprintf("Dynamic component '%s' has invalid outcome_factor (%s). Must be between 1 and %d.",
                      comp$name, comp$outcome_factor, factor$n_factors))
       }
+    }
+  }
+
+  # Validate weights parameter
+  if (!is.null(weights)) {
+    if (!is.character(weights) || length(weights) != 1) {
+      stop("`weights` must be a single character string (variable name in data)")
     }
   }
 
@@ -92,13 +104,15 @@ define_model_system <- function(components, factor, previous_stage = NULL) {
   out <- list(
     components = components,
     factor = factor,
-    previous_stage_info = previous_stage_info)
+    previous_stage_info = previous_stage_info,
+    weights = weights)
   class(out) <- "model_system"
   return(out)
 }
 
 #' @export
 print.model_system <- function(x, ...) {
+
   stopifnot(inherits(x, "model_system")) #check that x is a class model_system
   comps <- x$components
   n <- length(comps)
@@ -107,6 +121,9 @@ print.model_system <- function(x, ...) {
   cat("Model System\n")
   cat("------------\n")
   cat("Components:", n, "\n")
+  if (!is.null(x$weights)) {
+    cat("Observation weights:", x$weights, "\n")
+  }
 
   if (!n) return(invisible(x))
 

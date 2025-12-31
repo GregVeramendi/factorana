@@ -4,16 +4,51 @@
 \alias{define_estimation_control}
 \title{Define estimation control settings}
 \usage{
-define_estimation_control(n_quad_points = 16, num_cores = 1)
+define_estimation_control(
+  n_quad_points = 16,
+  num_cores = 1,
+  adaptive_integration = FALSE,
+  adapt_int_thresh = 0.3
+)
 }
 \arguments{
 \item{n_quad_points}{Integer. Number of Gauss-Hermite quadrature points for numerical integration (default = 16)}
 
 \item{num_cores}{Integer. Number of processes to use for parallel estimation (default = 1)}
+
+\item{adaptive_integration}{Logical. Whether to use adaptive integration in second-stage estimation
+(default = FALSE). When TRUE, the number of quadrature points per observation is determined
+based on the standard error of factor scores from a previous estimation stage.}
+
+\item{adapt_int_thresh}{Numeric. Threshold for adaptive integration (default = 0.3).
+Smaller values use more integration points. The formula is:
+\code{n_quad_obs = 1 + 2 * floor(factor_se / factor_var / adapt_int_thresh)}.
+When factor_se is small relative to factor variance, fewer quadrature points are used.}
 }
 \value{
 An object of class estimation_control containing control settings
 }
 \description{
 Define estimation control settings
+}
+\details{
+Adaptive integration is useful in two-stage estimation where factor scores have been
+estimated in a first stage. The key insight is that observations with well-identified
+factor scores (small SE) need fewer integration points, while observations with
+poorly-identified factors (large SE) need full quadrature.
+
+To use adaptive integration:
+\enumerate{
+\item Estimate Stage 1 model to get factor scores via \code{estimate_factorscores_rcpp()}
+\item Initialize FactorModel for Stage 2 via \code{initialize_factor_model_cpp()}
+\item Call \code{set_adaptive_quadrature_cpp()} with factor scores, SEs, and variances
+\item Run estimation - the adaptive settings are applied automatically
+}
+
+The diagnostic output from \code{set_adaptive_quadrature_cpp(verbose=TRUE)} shows:
+\itemize{
+\item Distribution of integration points across observations
+\item Average integration points vs standard (shows computational savings)
+\item Computational reduction percentage
+}
 }
