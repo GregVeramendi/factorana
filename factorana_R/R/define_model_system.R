@@ -21,7 +21,7 @@ define_model_system <- function(components, factor, previous_stage = NULL, weigh
     stop("Input must be a list of model_component objects.")
   }
 
-  if (!is.null(names(components))){
+  if (is.null(names(components))){
     stop("model_component objects must be named")
   }
 
