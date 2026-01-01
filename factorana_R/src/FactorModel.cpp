@@ -365,6 +365,16 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     std::vector<double> hessilk;
     if (iflag == 3) hessilk.resize(nparam * nparam, 0.0);
 
+    // Pre-allocate working vectors outside the loops for performance
+    // These are reused across observations and integration points
+    std::vector<double> fac_val(nfac);
+    std::vector<double> type_weighted_grad(nparam, 0.0);
+    std::vector<double> type_weighted_hess;
+    if (iflag == 3) type_weighted_hess.resize(nparam * nparam, 0.0);
+    std::vector<double> grad_this_type(nparam, 0.0);
+    std::vector<double> hess_this_type;
+    if (iflag == 3) hess_this_type.resize(nparam * nparam, 0.0);
+
     // ===== STEP 5: Loop over observations =====
     for (int iobs = 0; iobs < nobs; iobs++) {
         int iobs_offset = iobs * nvar;
@@ -415,9 +425,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 }
             }
 
-            // Compute factor values at this integration point
-            std::vector<double> fac_val(nfac);
-
+            // Compute factor values at this integration point (fac_val pre-allocated)
             if (fac_corr && nfac == 2 && !use_adaptive) {
                 // Correlated 2-factor model: use Cholesky transformation
                 // (Not supported in adaptive mode - requires independent factors)
@@ -475,11 +483,10 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             // Compute type probabilities (returns [1.0] for ntyp == 1)
             std::vector<double> type_probs = ComputeTypeProbabilities(fac_val);
 
-            // Accumulators for type-weighted contributions
+            // Accumulators for type-weighted contributions (pre-allocated, zero here)
             double type_weighted_prob = 0.0;
-            std::vector<double> type_weighted_grad(nparam, 0.0);
-            std::vector<double> type_weighted_hess;
-            if (iflag == 3) type_weighted_hess.resize(nparam * nparam, 0.0);
+            if (iflag >= 2) std::fill(type_weighted_grad.begin(), type_weighted_grad.end(), 0.0);
+            if (iflag == 3) std::fill(type_weighted_hess.begin(), type_weighted_hess.end(), 0.0);
 
             // Loop over types
             for (int ityp = 0; ityp < ntyp; ityp++) {
@@ -488,10 +495,9 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 // Likelihood product for this type
                 double prob_this_type = 1.0;
 
-                // Gradient accumulators for this type
-                std::vector<double> grad_this_type(nparam, 0.0);
-                std::vector<double> hess_this_type;
-                if (iflag == 3) hess_this_type.resize(nparam * nparam, 0.0);
+                // Gradient accumulators for this type (pre-allocated, zero here)
+                if (iflag >= 2) std::fill(grad_this_type.begin(), grad_this_type.end(), 0.0);
+                if (iflag == 3) std::fill(hess_this_type.begin(), hess_this_type.end(), 0.0);
 
                 // Evaluate all models for this type
                 for (size_t imod = 0; imod < models.size(); imod++) {
