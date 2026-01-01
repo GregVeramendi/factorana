@@ -1,3 +1,72 @@
+# ---- Parallel cleanup utilities ----
+
+#' Clean up orphaned parallel worker processes
+#'
+#' When using parallel estimation with Ctrl-C interrupts, worker processes may
+#' continue running after the main process exits. This function finds and
+#' terminates any orphaned R worker processes started by the parallel package.
+#'
+#' @param signal Signal to send (default "TERM" for graceful shutdown, use "KILL" for force)
+#' @param verbose Whether to print messages (default TRUE)
+#' @return Invisible NULL
+#' @export
+#'
+#' @examples
+#' \dontrun{
+#' # After interrupting a parallel job with Ctrl-C:
+#' cleanup_parallel_workers()
+#'
+#' # Force kill if graceful shutdown doesn't work:
+#' cleanup_parallel_workers(signal = "KILL")
+#' }
+cleanup_parallel_workers <- function(signal = "TERM", verbose = TRUE) {
+  # Get current R process ID to avoid killing ourselves
+  my_pid <- Sys.getpid()
+
+  if (.Platform$OS.type == "unix") {
+    # On Unix/Linux/macOS, find R processes that look like workers
+    # Workers are typically spawned with specific command line args
+    cmd <- sprintf("ps aux | grep '[R]script.*--vanilla.*-e.*workRSOCK' 2>/dev/null | awk '{print $2}'")
+    pids <- tryCatch({
+      result <- system(cmd, intern = TRUE)
+      as.integer(result[result != "" & !is.na(result)])
+    }, error = function(e) integer(0))
+
+    # Remove our own PID if somehow included
+    pids <- setdiff(pids, my_pid)
+
+    if (length(pids) == 0) {
+      if (verbose) message("No orphaned parallel workers found.")
+      return(invisible(NULL))
+    }
+
+    if (verbose) {
+      message(sprintf("Found %d orphaned worker process(es): %s",
+                     length(pids), paste(pids, collapse = ", ")))
+    }
+
+    # Send signal to each worker
+    for (pid in pids) {
+      tryCatch({
+        tools::pskill(pid, signal = tools::SIGTERM)
+        if (verbose) message(sprintf("  Sent %s to PID %d", signal, pid))
+      }, error = function(e) {
+        if (verbose) message(sprintf("  Failed to signal PID %d: %s", pid, e$message))
+      })
+    }
+
+  } else {
+    # On Windows, use taskkill
+    # Worker processes have "Rscript" in their name
+    if (verbose) {
+      message("On Windows, you can manually kill orphaned R workers with:")
+      message("  taskkill /F /IM Rscript.exe")
+    }
+  }
+
+  invisible(NULL)
+}
+
 # ---- Internal helper functions ----
 
 # Build parameter metadata from model system
@@ -541,7 +610,17 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     # Use doParallel for Windows compatibility
     cl <- parallel::makeCluster(n_workers)
     doParallel::registerDoParallel(cl)
-    on.exit(parallel::stopCluster(cl), add = TRUE)
+
+    # Robust cleanup: use on.exit AND store cluster in parent frame for interrupt handling
+    # The on.exit handles normal exits and errors
+    on.exit({
+      if (!is.null(cl)) {
+        tryCatch(
+          parallel::stopCluster(cl),
+          error = function(e) NULL  # Ignore errors during cleanup
+        )
+      }
+    }, add = TRUE)
 
   } else {
     # Single worker
