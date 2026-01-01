@@ -498,6 +498,12 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     control <- define_estimation_control()
   }
 
+  # Print version info
+  if (verbose) {
+    pkg_version <- utils::packageVersion("factorana")
+    message(sprintf("factorana version %s", pkg_version))
+  }
+
   # Convert data to matrix
   data_mat <- as.matrix(data)
 
