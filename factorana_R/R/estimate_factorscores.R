@@ -189,6 +189,11 @@ estimate_factorscores_parallel <- function(model_system, data_mat, estimates,
     foreach::registerDoSEQ()
   }, add = TRUE)
 
+  # Export library paths to workers (ensures workers can find factorana)
+  current_lib_paths <- .libPaths()
+  parallel::clusterExport(cl, "current_lib_paths", envir = environment())
+  parallel::clusterEvalQ(cl, .libPaths(current_lib_paths))
+
   # Split observations across workers
   obs_splits <- split(seq_len(n_obs), cut(seq_len(n_obs), n_cores, labels = FALSE))
 

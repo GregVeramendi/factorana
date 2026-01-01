@@ -563,13 +563,18 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   n_quad <- control$n_quad_points
 
   if (!is.null(cl)) {
+    # Export library paths to workers (ensures workers can find factorana)
+    current_lib_paths <- .libPaths()
+    parallel::clusterExport(cl, "current_lib_paths", envir = environment())
+    parallel::clusterEvalQ(cl, {
+      .libPaths(current_lib_paths)
+      library(factorana)
+    })
+
     # Export necessary objects to workers
     # Note: model_system no longer contains data (stripped in define_model_component)
     parallel::clusterExport(cl, c("model_system", "data_mat", "n_quad", "data_splits", "full_init_params"),
                            envir = environment())
-    parallel::clusterEvalQ(cl, {
-      library(factorana)
-    })
 
     # Set worker IDs (1 to n_workers) in each worker's global environment
     for (i in seq_along(cl)) {
