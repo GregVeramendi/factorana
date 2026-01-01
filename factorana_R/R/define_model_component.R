@@ -350,9 +350,10 @@ define_model_component <- function(name,
   # Number of observations used (after evaluation indicator filtering)
   n_obs <- nrow(data)
 
+  # Data is only needed for validation during component creation.
+  # It is not stored to avoid memory duplication (data is passed separately to estimate_model_rcpp).
   out <- list(
     name = name,
-    data = as.data.frame(data),
     outcome = outcome,
     factor = factor,
     evaluation_indicator = evaluation_indicator,

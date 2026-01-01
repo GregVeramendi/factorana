@@ -198,6 +198,7 @@ estimate_factorscores_parallel <- function(model_system, data_mat, estimates,
   }
 
   # Serialize model_system for worker transfer
+  # Note: model_system no longer contains data (stripped in define_model_component)
   model_system_raw <- serialize(model_system, NULL)
   n_quad <- control$n_quad_points
 

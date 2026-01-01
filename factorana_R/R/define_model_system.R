@@ -21,8 +21,13 @@ define_model_system <- function(components, factor, previous_stage = NULL, weigh
     stop("Input must be a list of model_component objects.")
   }
 
-  if (is.null(names(components))){
-    stop("model_component objects must be named")
+  # Auto-name components from their internal name field if list is unnamed
+  if (is.null(names(components))) {
+    comp_names <- vapply(components, function(c) c$name, character(1))
+    if (any(is.na(comp_names) | comp_names == "")) {
+      stop("model_component objects must have names (either via list names or internal 'name' field)")
+    }
+    names(components) <- comp_names
   }
 
   if (!inherits(factor, "factor_model")) {

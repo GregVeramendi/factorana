@@ -122,37 +122,29 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       comp_data <- data
     }
 
-    # For dynamic models, the outcome column is a dummy column in comp$data
-    # Get outcome from component's internal data if it's not in comp_data
+    # Get outcome - for dynamic models, use zeros; otherwise from data
     if (comp$outcome %in% names(comp_data)) {
       outcome <- comp_data[[comp$outcome]]
     } else if (isTRUE(comp$is_dynamic)) {
-      # For dynamic models, create zero outcome
+      # For dynamic models, create zero outcome (the dummy outcome column)
       outcome <- rep(0, nrow(comp_data))
     } else {
-      outcome <- comp$data[[comp$outcome]]
+      stop(sprintf("Outcome '%s' not found in data for component '%s'",
+                   comp$outcome, comp$name))
     }
 
-    # Get covariates - handle case where intercept may be in comp$data but not in external data
-    if (length(comp$covariates) > 0 && all(comp$covariates %in% names(comp_data))) {
-      X <- as.matrix(comp_data[, comp$covariates, drop = FALSE])
-    } else if (length(comp$covariates) > 0) {
-      # Use component's internal data for missing columns
+    # Get covariates - create intercept column if needed
+    if (length(comp$covariates) > 0) {
       X <- matrix(NA_real_, nrow = nrow(comp_data), ncol = length(comp$covariates))
       colnames(X) <- comp$covariates
       for (cov in comp$covariates) {
         if (cov %in% names(comp_data)) {
           X[, cov] <- comp_data[[cov]]
-        } else if (cov == "intercept") {
+        } else if (cov == "intercept" || cov == "constant") {
           X[, cov] <- 1
-        } else if (cov %in% names(comp$data)) {
-          # Match rows if evaluation indicator was applied
-          if (!is.null(comp$evaluation_indicator)) {
-            idx <- data[[comp$evaluation_indicator]] == 1 & !is.na(data[[comp$evaluation_indicator]])
-            X[, cov] <- comp$data[[cov]][idx]
-          } else {
-            X[, cov] <- comp$data[[cov]]
-          }
+        } else {
+          stop(sprintf("Covariate '%s' not found in data for component '%s'",
+                       cov, comp$name))
         }
       }
     } else {

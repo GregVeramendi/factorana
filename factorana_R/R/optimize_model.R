@@ -564,6 +564,7 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
 
   if (!is.null(cl)) {
     # Export necessary objects to workers
+    # Note: model_system no longer contains data (stripped in define_model_component)
     parallel::clusterExport(cl, c("model_system", "data_mat", "n_quad", "data_splits", "full_init_params"),
                            envir = environment())
     parallel::clusterEvalQ(cl, {
@@ -677,6 +678,62 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     if (n_sigma > 0) {
       message(sprintf("Sigma parameters (%d) have lower bound = 0.01", n_sigma))
     }
+  }
+
+  # Benchmark likelihood/gradient/Hessian computation before optimization
+  if (verbose) {
+    message("\nBenchmarking computation times (single evaluation)...")
+
+    # Benchmark log-likelihood only
+    t_loglik <- system.time({
+      if (!is.null(cl)) {
+        parallel::clusterExport(cl, "full_init_params", envir = environment())
+        loglik_parts <- parallel::clusterEvalQ(cl, {
+          evaluate_loglik_only_cpp(.fm_ptr, full_init_params)
+        })
+        loglik_test <- sum(unlist(loglik_parts))
+      } else {
+        loglik_test <- evaluate_loglik_only_cpp(fm_ptrs[[1]], full_init_params)
+      }
+    })[3]
+
+    # Benchmark gradient
+    t_grad <- system.time({
+      if (!is.null(cl)) {
+        grad_parts <- parallel::clusterEvalQ(cl, {
+          result <- evaluate_likelihood_cpp(.fm_ptr, full_init_params,
+                                           compute_gradient = TRUE,
+                                           compute_hessian = FALSE)
+          result$gradient
+        })
+      } else {
+        result <- evaluate_likelihood_cpp(fm_ptrs[[1]], full_init_params,
+                                         compute_gradient = TRUE,
+                                         compute_hessian = FALSE)
+      }
+    })[3]
+
+    # Benchmark Hessian
+    t_hess <- system.time({
+      if (!is.null(cl)) {
+        hess_parts <- parallel::clusterEvalQ(cl, {
+          result <- evaluate_likelihood_cpp(.fm_ptr, full_init_params,
+                                           compute_gradient = FALSE,
+                                           compute_hessian = TRUE)
+          result$hessian
+        })
+      } else {
+        result <- evaluate_likelihood_cpp(fm_ptrs[[1]], full_init_params,
+                                         compute_gradient = FALSE,
+                                         compute_hessian = TRUE)
+      }
+    })[3]
+
+    message(sprintf("  Log-likelihood:  %.3f sec", t_loglik))
+    message(sprintf("  Gradient:        %.3f sec", t_grad))
+    message(sprintf("  Hessian:         %.3f sec", t_hess))
+    message(sprintf("  Initial loglik:  %.4f", loglik_test))
+    message("")
   }
 
   # Define objective function (operates on free parameters only)
