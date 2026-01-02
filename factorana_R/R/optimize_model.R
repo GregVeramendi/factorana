@@ -31,13 +31,13 @@ cleanup_parallel_workers <- function(signal = "TERM", verbose = TRUE, list_only 
     # On Unix/Linux/macOS, find R processes that look like workers
     # Try multiple patterns to catch different worker types
 
-    # Pattern 1: PSOCK workers (Rscript with workRSOCK)
-    # Pattern 2: doParallel/foreach workers (R --slave or R --no-save)
+    # Pattern 1: PSOCK workers with workRSOCK (most reliable - unique to parallel workers)
+    # Pattern 2: R workers with --no-echo --no-restore (common parallel worker flags)
     # Use grep -v grep to exclude grep from matching itself
     patterns <- c(
-      "ps aux | grep 'Rscript.*workRSOCK' | grep -v grep",
-      "ps aux | grep '/R --slave' | grep -v grep",
-      "ps aux | grep '/R --no-save' | grep -v grep"
+      "ps aux | grep 'workRSOCK' | grep -v grep",
+      "ps aux | grep 'slaveRSOCK' | grep -v grep",
+      "ps aux | grep '/R.*--no-echo.*--no-restore.*parallel' | grep -v grep"
     )
 
     all_pids <- integer(0)
