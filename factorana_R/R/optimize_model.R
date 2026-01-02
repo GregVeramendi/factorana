@@ -608,6 +608,12 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   # Use serialize/unserialize for true deep copy
   model_system <- unserialize(serialize(model_system, NULL))
 
+  # Validate init_params (catch common mistake of passing control as 3rd positional arg)
+  if (!is.null(init_params) && inherits(init_params, "estimation_control")) {
+    stop("'init_params' appears to be a control object. Did you mean: control = ...?
+  Correct usage: estimate_model_rcpp(model_system, data, control = my_control)")
+  }
+
   # Default control if not provided
   if (is.null(control)) {
     control <- define_estimation_control()
@@ -653,25 +659,9 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
                      n_workers, control$num_cores))
     }
 
-    # Use FORK clusters on Unix for better performance (shared memory, no serialization)
-    # Fall back to PSOCK on Windows (required) or if FORK fails
-    cluster_type <- "PSOCK"  # Default
-    if (.Platform$OS.type == "unix") {
-      # Try FORK first - much faster due to shared memory
-      cluster_type <- "FORK"
-      if (verbose) message("Using FORK cluster (shared memory)...")
-    }
-
-    cl <- tryCatch({
-      if (cluster_type == "FORK") {
-        parallel::makeForkCluster(n_workers)
-      } else {
-        parallel::makeCluster(n_workers)
-      }
-    }, error = function(e) {
-      if (verbose) message("FORK cluster failed, falling back to PSOCK...")
-      parallel::makeCluster(n_workers)
-    })
+    # Use PSOCK clusters by default (more compatible with Rcpp)
+    # FORK clusters have issues with Rcpp external pointers on some systems
+    cl <- parallel::makeCluster(n_workers)
     doParallel::registerDoParallel(cl)
 
     # Robust cleanup: use on.exit AND store cluster in parent frame for interrupt handling
@@ -711,24 +701,17 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   n_quad <- control$n_quad_points
 
   if (!is.null(cl)) {
-    # Check if this is a FORK cluster (shared memory) or PSOCK (sockets)
-    is_fork <- inherits(cl[[1]], "forknode")
+    # Export library paths to workers (ensures workers can find factorana)
+    current_lib_paths <- .libPaths()
+    parallel::clusterExport(cl, "current_lib_paths", envir = environment())
+    parallel::clusterEvalQ(cl, {
+      .libPaths(current_lib_paths)
+      library(factorana)
+    })
 
-    if (!is_fork) {
-      # PSOCK cluster: need to export library paths and load factorana
-      current_lib_paths <- .libPaths()
-      parallel::clusterExport(cl, "current_lib_paths", envir = environment())
-      parallel::clusterEvalQ(cl, {
-        .libPaths(current_lib_paths)
-        library(factorana)
-      })
-
-      # Export necessary objects to workers
-      # Note: model_system no longer contains data (stripped in define_model_component)
-      parallel::clusterExport(cl, c("model_system", "data_mat", "n_quad", "data_splits", "full_init_params"),
-                             envir = environment())
-    }
-    # FORK cluster: workers inherit parent's environment, no export needed
+    # Export necessary objects to workers
+    parallel::clusterExport(cl, c("model_system", "data_mat", "n_quad", "data_splits", "full_init_params"),
+                           envir = environment())
 
     # Set worker IDs (1 to n_workers) in each worker's global environment
     for (i in seq_along(cl)) {
