@@ -370,3 +370,63 @@ R's dnorm may have additional overhead (bounds checking, special case handling).
 2. Does Model::Eval() have similar inefficiencies?
 3. Is the type model (ntyp > 1) case being tested?
 4. Are there any algorithmic differences between legacy and Rcpp?
+
+---
+
+## Optimizations Implemented (2026-01-02)
+
+### 1. Pre-allocated modEval and modHess Vectors
+In `FactorModel::CalcLkhd()`, modEval and modHess are now pre-allocated to the maximum needed size before the observation loop:
+```cpp
+int max_model_params = 0;
+for (size_t imod = 0; imod < models.size(); imod++) {
+    if (param_model_count[imod] > max_model_params) {
+        max_model_params = param_model_count[imod];
+    }
+}
+int max_ngrad = 1 + nfac + max_model_params;
+int max_hess_dim = nfac + max_model_params;
+std::vector<double> modEval(max_ngrad, 0.0);
+std::vector<double> modHess(max_hess_dim * max_hess_dim, 0.0);
+```
+
+### 2. Conditional Resize in Model::Eval()
+`Model::Eval()` now only resizes vectors when they're too small:
+```cpp
+if (modEval.size() < static_cast<size_t>(ngrad)) {
+    modEval.resize(ngrad);
+}
+std::memset(modEval.data(), 0, ngrad * sizeof(double));
+```
+
+This avoids repeated memory allocation when vectors are already large enough.
+
+### 3. memset for Faster Zeroing
+Replaced `std::fill` with `std::memset` for zeroing arrays:
+```cpp
+// Before:
+std::fill(modEval.begin(), modEval.end(), 0.0);
+
+// After:
+std::memset(modEval.data(), 0, ngrad * sizeof(double));
+```
+
+### 4. Hessian Conditional Resize
+EvalLinear, EvalProbit, EvalLogit, and EvalOprobit now only resize the hessian when needed:
+```cpp
+size_t hess_size = static_cast<size_t>(npar * npar);
+if (hess.size() < hess_size) {
+    hess.resize(hess_size);
+}
+```
+
+### Expected Impact
+These optimizations should reduce:
+- Memory allocation overhead per model evaluation
+- Cache misses from repeated allocation/deallocation
+- Time spent zeroing arrays that don't need full initialization
+
+The main remaining performance gap is likely due to:
+1. R::dnorm vs ROOT::Math::normal_pdf overhead
+2. General Rcpp/R interop overhead vs standalone C++
+3. Possible differences in compiler optimizations between the two codebases

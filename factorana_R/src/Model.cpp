@@ -1,6 +1,7 @@
 #include "Model.h"
 #include "distributions.h"
 #include <cmath>
+#include <cstring>
 #include <stdexcept>
 #include <algorithm>
 
@@ -52,7 +53,7 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
     if (facnorm.size() == 0) ifreefac = numfac + numtyp*(outcome_idx != -2);
 
     // Determine size of gradient vector
-    // PERFORMANCE: Use resize + fill instead of clear + resize to reuse memory
+    // PERFORMANCE: Only resize if vector is too small, reuse existing capacity
     if (flag >= 2) {
         // Layout: 1 (likelihood) + numfac (d/dtheta for factor variances) +
         //         nregressors (d/dbeta) + ifreefac (d/dalpha for free linear loadings) +
@@ -67,11 +68,16 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
         }
         if (modtype == ModelType::OPROBIT) ngrad += (numchoice - 1);  // thresholds
 
-        modEval.resize(ngrad);
-        std::fill(modEval.begin(), modEval.end(), 0.0);
-        hess.clear();  // Hess is populated by Eval* functions, clear is OK here
+        // OPTIMIZATION: Only resize if needed, use memset for faster zeroing
+        if (modEval.size() < static_cast<size_t>(ngrad)) {
+            modEval.resize(ngrad);
+        }
+        std::memset(modEval.data(), 0, ngrad * sizeof(double));
+        // Note: hess is populated by Eval* functions, no need to clear here
     } else {
-        modEval.resize(1);
+        if (modEval.size() < 1) {
+            modEval.resize(1);
+        }
     }
 
     modEval[0] = 1.0;
@@ -207,11 +213,16 @@ void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
     int npar = numfac + nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings + 1; // +1 for sigma
 
     // Initialize Hessian if needed
+    // OPTIMIZATION: Only resize if too small, avoid repeated allocation
     if (flag == 3) {
-        hess.resize(npar * npar);
+        size_t hess_size = static_cast<size_t>(npar * npar);
+        if (hess.size() < hess_size) {
+            hess.resize(hess_size);
+        }
+        double neg_inv_sigma2 = -1.0 / (sigma*sigma);
         for (int i = 0; i < npar; i++) {
             for (int j = i; j < npar; j++) {
-                hess[i*npar + j] = -1.0 / (sigma*sigma);
+                hess[i*npar + j] = neg_inv_sigma2;
             }
         }
     }
@@ -541,8 +552,12 @@ void Model::EvalProbit(double expres, double obsSign, const std::vector<double>&
 
     int npar = numfac + nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings;
 
+    // OPTIMIZATION: Only resize if too small, avoid repeated allocation
     if (flag == 3) {
-        hess.resize(npar * npar, 0.0);
+        size_t hess_size = static_cast<size_t>(npar * npar);
+        if (hess.size() < hess_size) {
+            hess.resize(hess_size);
+        }
         for (int i = 0; i < npar; i++) {
             for (int j = i; j < npar; j++) {
                 hess[i*npar + j] = 1.0;
@@ -1140,8 +1155,13 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
     }
 
     // ===== HESSIAN CALCULATION =====
+    // OPTIMIZATION: Only resize if too small, use memset for zeroing
     if (flag == 3) {
-        hess.resize(npar * npar, 0.0);
+        size_t hess_size = static_cast<size_t>(npar * npar);
+        if (hess.size() < hess_size) {
+            hess.resize(hess_size);
+        }
+        std::memset(hess.data(), 0, hess_size * sizeof(double));
 
         // Second-order derivative terms: dZ/dtheta dalpha
         if (obsCat > 0) {
@@ -1666,13 +1686,13 @@ void Model::EvalOprobit(double expres, int outcome_value,
 
     int npar = numfac + nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings + (numchoice - 1);  // includes thresholds
 
+    // OPTIMIZATION: Only resize if too small, use memset for zeroing
     if (flag == 3) {
-        hess.resize(npar * npar, 0.0);
-        for (int i = 0; i < npar; i++) {
-            for (int j = i; j < npar; j++) {
-                hess[i*npar + j] = 0.0;
-            }
+        size_t hess_size = static_cast<size_t>(npar * npar);
+        if (hess.size() < hess_size) {
+            hess.resize(hess_size);
         }
+        std::memset(hess.data(), 0, hess_size * sizeof(double));
     }
 
     // Loop over two terms: lower threshold (iterm=0) and upper threshold (iterm=1)

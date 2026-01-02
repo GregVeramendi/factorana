@@ -362,8 +362,21 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     }
 
     // Temporary storage
-    std::vector<double> modEval;
+    // OPTIMIZATION: Pre-allocate modEval and modHess to maximum needed size
+    // This avoids repeated resize operations inside the hot loop
+    int max_model_params = 0;
+    for (size_t imod = 0; imod < models.size(); imod++) {
+        if (param_model_count[imod] > max_model_params) {
+            max_model_params = param_model_count[imod];
+        }
+    }
+    int max_ngrad = 1 + nfac + max_model_params;  // Maximum gradient size for any model
+    int max_hess_dim = nfac + max_model_params;   // Maximum Hessian dimension
+    std::vector<double> modEval(max_ngrad, 0.0);
     std::vector<double> modHess;
+    if (iflag == 3) {
+        modHess.resize(max_hess_dim * max_hess_dim, 0.0);
+    }
     std::vector<double> totalgrad(nparam, 0.0);
     std::vector<double> totalhess;
     if (iflag == 3) totalhess.resize(nparam * nparam, 0.0);
