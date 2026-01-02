@@ -659,9 +659,21 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
                      n_workers, control$num_cores))
     }
 
-    # Use FORK clusters on Unix for better performance (shared memory)
-    # Fall back to PSOCK on Windows or if FORK fails
-    if (.Platform$OS.type == "unix") {
+    # Determine cluster type based on control setting
+    cluster_type <- control$cluster_type
+    if (is.null(cluster_type)) cluster_type <- "auto"  # Backwards compatibility
+
+    if (cluster_type == "auto") {
+      # Auto: use FORK on Unix, PSOCK on Windows
+      if (.Platform$OS.type == "unix") {
+        cluster_type <- "FORK"
+      } else {
+        cluster_type <- "PSOCK"
+      }
+    }
+
+    # Create the cluster
+    if (cluster_type == "FORK") {
       cl <- tryCatch({
         if (verbose) message("Using FORK cluster (shared memory)...")
         parallel::makeForkCluster(n_workers)
@@ -670,6 +682,7 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
         parallel::makeCluster(n_workers)
       })
     } else {
+      if (verbose) message("Using PSOCK cluster...")
       cl <- parallel::makeCluster(n_workers)
     }
     doParallel::registerDoParallel(cl)

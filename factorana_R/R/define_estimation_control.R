@@ -2,6 +2,10 @@
 #'
 #' @param n_quad_points Integer. Number of Gauss-Hermite quadrature points for numerical integration (default = 16)
 #' @param num_cores Integer. Number of processes to use for parallel estimation (default = 1)
+#' @param cluster_type Character. Type of parallel cluster to use: "auto" (default), "FORK", or "PSOCK".
+#'   "auto" uses FORK on Unix (faster, shared memory) and PSOCK on Windows.
+#'   "FORK" forces fork-based parallelism (Unix only, faster due to shared memory).
+#'   "PSOCK" forces socket-based parallelism (works on all platforms, more overhead).
 #' @param adaptive_integration Logical. Whether to use adaptive integration in second-stage estimation
 #'   (default = FALSE). When TRUE, the number of quadrature points per observation is determined
 #'   based on the standard error of factor scores from a previous estimation stage.
@@ -34,6 +38,7 @@
 #' @return An object of class estimation_control containing control settings
 #' @export
 define_estimation_control <- function(n_quad_points = 16, num_cores = 1,
+                                      cluster_type = "auto",
                                       adaptive_integration = FALSE,
                                       adapt_int_thresh = 0.3) {
   if (!is.numeric(n_quad_points) || n_quad_points < 1) {
@@ -41,6 +46,11 @@ define_estimation_control <- function(n_quad_points = 16, num_cores = 1,
   }
   if (!is.numeric(num_cores) || num_cores < 1) {
     stop("num_cores must be a positive integer.")
+  }
+  cluster_type <- match.arg(cluster_type, c("auto", "FORK", "PSOCK"))
+  if (cluster_type == "FORK" && .Platform$OS.type != "unix") {
+    warning("FORK clusters are only available on Unix. Using PSOCK instead.")
+    cluster_type <- "PSOCK"
   }
   if (!is.logical(adaptive_integration)) {
     stop("adaptive_integration must be TRUE or FALSE.")
@@ -52,6 +62,7 @@ define_estimation_control <- function(n_quad_points = 16, num_cores = 1,
   out <- list(
     n_quad_points = as.integer(n_quad_points),
     num_cores = as.integer(num_cores),
+    cluster_type = cluster_type,
     adaptive_integration = adaptive_integration,
     adapt_int_thresh = adapt_int_thresh
   )
@@ -106,6 +117,7 @@ print.estimation_control <- function(x, ...) {
   cat("------------------\n")
   cat("Number of quadrature points:", x$n_quad_points, "\n")
   cat("Number of cores for parallelization:", x$num_cores, "\n")
+  cat("Cluster type:", x$cluster_type, "\n")
   if (isTRUE(x$adaptive_integration)) {
     cat("Adaptive integration: enabled (threshold =", x$adapt_int_thresh, ")\n")
   } else {
