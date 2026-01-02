@@ -8,7 +8,8 @@
 #'
 #' @param signal Signal to send (default "TERM" for graceful shutdown, use "KILL" for force)
 #' @param verbose Whether to print messages (default TRUE)
-#' @return Invisible NULL
+#' @param list_only If TRUE, only list potential workers without killing them (default FALSE)
+#' @return Invisible NULL (or vector of PIDs if list_only = TRUE)
 #' @export
 #'
 #' @examples
@@ -16,39 +17,84 @@
 #' # After interrupting a parallel job with Ctrl-C:
 #' cleanup_parallel_workers()
 #'
+#' # First check what processes would be killed:
+#' cleanup_parallel_workers(list_only = TRUE)
+#'
 #' # Force kill if graceful shutdown doesn't work:
 #' cleanup_parallel_workers(signal = "KILL")
 #' }
-cleanup_parallel_workers <- function(signal = "TERM", verbose = TRUE) {
+cleanup_parallel_workers <- function(signal = "TERM", verbose = TRUE, list_only = FALSE) {
   # Get current R process ID to avoid killing ourselves
   my_pid <- Sys.getpid()
 
   if (.Platform$OS.type == "unix") {
     # On Unix/Linux/macOS, find R processes that look like workers
-    # Workers are typically spawned with specific command line args
-    cmd <- sprintf("ps aux | grep '[R]script.*--vanilla.*-e.*workRSOCK' 2>/dev/null | awk '{print $2}'")
-    pids <- tryCatch({
-      result <- system(cmd, intern = TRUE)
-      as.integer(result[result != "" & !is.na(result)])
-    }, error = function(e) integer(0))
+    # Try multiple patterns to catch different worker types
+
+    # Pattern 1: PSOCK workers (Rscript with workRSOCK)
+    # Pattern 2: doParallel/foreach workers (R --slave or R --no-save)
+    # Use grep -v grep to exclude grep from matching itself
+    patterns <- c(
+      "ps aux | grep 'Rscript.*workRSOCK' | grep -v grep",
+      "ps aux | grep '/R --slave' | grep -v grep",
+      "ps aux | grep '/R --no-save' | grep -v grep"
+    )
+
+    all_pids <- integer(0)
+    all_info <- character(0)
+
+    for (pattern in patterns) {
+      tryCatch({
+        result <- suppressWarnings(system(pattern, intern = TRUE, ignore.stderr = TRUE))
+        if (length(result) > 0) {
+          # Extract PIDs (second field) and full line for info
+          for (line in result) {
+            # Skip lines that are clearly not R worker processes
+            if (grepl("grep", line, fixed = TRUE)) next
+            fields <- strsplit(trimws(line), "\\s+")[[1]]
+            if (length(fields) >= 2) {
+              pid <- as.integer(fields[2])
+              if (!is.na(pid) && !(pid %in% all_pids)) {
+                all_pids <- c(all_pids, pid)
+                all_info <- c(all_info, line)
+              }
+            }
+          }
+        }
+      }, error = function(e) NULL)
+    }
 
     # Remove our own PID if somehow included
-    pids <- setdiff(pids, my_pid)
+    keep <- !(all_pids %in% my_pid)
+    all_pids <- all_pids[keep]
+    all_info <- all_info[keep]
 
-    if (length(pids) == 0) {
+    if (length(all_pids) == 0) {
       if (verbose) message("No orphaned parallel workers found.")
       return(invisible(NULL))
     }
 
-    if (verbose) {
-      message(sprintf("Found %d orphaned worker process(es): %s",
-                     length(pids), paste(pids, collapse = ", ")))
+    if (verbose || list_only) {
+      message(sprintf("Found %d potential worker process(es):", length(all_pids)))
+      for (i in seq_along(all_pids)) {
+        # Truncate long lines for display
+        info <- if (nchar(all_info[i]) > 100) {
+          paste0(substr(all_info[i], 1, 97), "...")
+        } else {
+          all_info[i]
+        }
+        message(sprintf("  PID %d: %s", all_pids[i], info))
+      }
+    }
+
+    if (list_only) {
+      return(invisible(all_pids))
     }
 
     # Send signal to each worker
-    for (pid in pids) {
+    for (pid in all_pids) {
       tryCatch({
-        tools::pskill(pid, signal = tools::SIGTERM)
+        tools::pskill(pid, signal = if (signal == "KILL") tools::SIGKILL else tools::SIGTERM)
         if (verbose) message(sprintf("  Sent %s to PID %d", signal, pid))
       }, error = function(e) {
         if (verbose) message(sprintf("  Failed to signal PID %d: %s", pid, e$message))
