@@ -653,8 +653,25 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
                      n_workers, control$num_cores))
     }
 
-    # Use doParallel for Windows compatibility
-    cl <- parallel::makeCluster(n_workers)
+    # Use FORK clusters on Unix for better performance (shared memory, no serialization)
+    # Fall back to PSOCK on Windows (required) or if FORK fails
+    cluster_type <- "PSOCK"  # Default
+    if (.Platform$OS.type == "unix") {
+      # Try FORK first - much faster due to shared memory
+      cluster_type <- "FORK"
+      if (verbose) message("Using FORK cluster (shared memory)...")
+    }
+
+    cl <- tryCatch({
+      if (cluster_type == "FORK") {
+        parallel::makeForkCluster(n_workers)
+      } else {
+        parallel::makeCluster(n_workers)
+      }
+    }, error = function(e) {
+      if (verbose) message("FORK cluster failed, falling back to PSOCK...")
+      parallel::makeCluster(n_workers)
+    })
     doParallel::registerDoParallel(cl)
 
     # Robust cleanup: use on.exit AND store cluster in parent frame for interrupt handling
@@ -694,18 +711,24 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   n_quad <- control$n_quad_points
 
   if (!is.null(cl)) {
-    # Export library paths to workers (ensures workers can find factorana)
-    current_lib_paths <- .libPaths()
-    parallel::clusterExport(cl, "current_lib_paths", envir = environment())
-    parallel::clusterEvalQ(cl, {
-      .libPaths(current_lib_paths)
-      library(factorana)
-    })
+    # Check if this is a FORK cluster (shared memory) or PSOCK (sockets)
+    is_fork <- inherits(cl[[1]], "forknode")
 
-    # Export necessary objects to workers
-    # Note: model_system no longer contains data (stripped in define_model_component)
-    parallel::clusterExport(cl, c("model_system", "data_mat", "n_quad", "data_splits", "full_init_params"),
-                           envir = environment())
+    if (!is_fork) {
+      # PSOCK cluster: need to export library paths and load factorana
+      current_lib_paths <- .libPaths()
+      parallel::clusterExport(cl, "current_lib_paths", envir = environment())
+      parallel::clusterEvalQ(cl, {
+        .libPaths(current_lib_paths)
+        library(factorana)
+      })
+
+      # Export necessary objects to workers
+      # Note: model_system no longer contains data (stripped in define_model_component)
+      parallel::clusterExport(cl, c("model_system", "data_mat", "n_quad", "data_splits", "full_init_params"),
+                             envir = environment())
+    }
+    # FORK cluster: workers inherit parent's environment, no export needed
 
     # Set worker IDs (1 to n_workers) in each worker's global environment
     for (i in seq_along(cl)) {
