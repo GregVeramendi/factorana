@@ -385,13 +385,29 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     std::vector<double> hess_this_type;
     if (iflag == 3) hess_this_type.resize(nparam * nparam, 0.0);
 
+    // OPTIMIZATION: Pre-allocate vectors for chain rule factors
+    // These store sqrt(factor_var), quadrature nodes, and df/d(sigma^2) per factor
+    // Computed once per integration point, reused throughout type/model loops
+    std::vector<double> sigma_fac(nfac);
+    std::vector<double> x_node_fac(nfac);
+    std::vector<double> df_dsigma2(nfac);
+
     // ===== STEP 5: Loop over observations =====
     for (int iobs = 0; iobs < nobs; iobs++) {
         int iobs_offset = iobs * nvar;
 
         double totalprob = 0.0;
         if (iflag >= 2) std::fill(totalgrad.begin(), totalgrad.end(), 0.0);
-        if (iflag == 3) std::fill(totalhess.begin(), totalhess.end(), 0.0);
+        // OPTIMIZATION: Only zero free parameter entries (like legacy code)
+        if (iflag == 3) {
+            for (int fi = 0; fi < nparam_free; fi++) {
+                int i = freeparlist[fi];
+                for (int fj = fi; fj < nparam_free; fj++) {
+                    int j = freeparlist[fj];
+                    totalhess[i * nparam + j] = 0.0;
+                }
+            }
+        }
 
         // ===== STEP 6: Multi-dimensional integration over factors =====
         // Determine per-observation integration settings
@@ -422,7 +438,16 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         for (int intpt = 0; intpt < nint_points; intpt++) {
             // Reset gradient/Hessian for this integration point
             if (iflag >= 2) std::fill(gradilk.begin(), gradilk.end(), 0.0);
-            if (iflag == 3) std::fill(hessilk.begin(), hessilk.end(), 0.0);
+            // OPTIMIZATION: Only zero free parameter entries (like legacy code)
+            if (iflag == 3) {
+                for (int fi = 0; fi < nparam_free; fi++) {
+                    int i = freeparlist[fi];
+                    for (int fj = fi; fj < nparam_free; fj++) {
+                        int j = freeparlist[fj];
+                        hessilk[i * nparam + j] = 0.0;
+                    }
+                }
+            }
 
             // Get integration weight (product over dimensions)
             double probilk = 1.0;
@@ -486,7 +511,23 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 }
             }
 
-            // ===== STEP 7: Evaluate all models with type mixture =====
+            // ===== STEP 7: Pre-compute chain rule factors for gradients/Hessians =====
+            // OPTIMIZATION: Compute sqrt(factor_var) and chain rule factors once per integration point,
+            // then reuse throughout the type/model loops to avoid redundant sqrt() calls.
+            // Pre-allocated vectors: sigma_fac, x_node_fac, df_dsigma2 (sized to nfac)
+            for (int ifac = 0; ifac < nfac; ifac++) {
+                sigma_fac[ifac] = std::sqrt(factor_var[ifac]);
+                if (use_adaptive) {
+                    int nq = obs_nq[ifac];
+                    x_node_fac[ifac] = adapt_nodes.at(nq)[facint[ifac]];
+                } else {
+                    x_node_fac[ifac] = quad_nodes[facint[ifac]];
+                }
+                // Chain rule: df/d(sigma^2) = x_node / (2 * sigma)
+                df_dsigma2[ifac] = x_node_fac[ifac] / (2.0 * sigma_fac[ifac]);
+            }
+
+            // ===== STEP 8: Evaluate all models with type mixture =====
             // For ntyp > 1: L = Σ_t π_t(f) × L_t(y|f) where L_t = Π_m L_m(y_m|f, intercept_t)
             // For ntyp == 1: Standard case (no type mixture)
 
@@ -496,7 +537,16 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             // Accumulators for type-weighted contributions (pre-allocated, zero here)
             double type_weighted_prob = 0.0;
             if (iflag >= 2) std::fill(type_weighted_grad.begin(), type_weighted_grad.end(), 0.0);
-            if (iflag == 3) std::fill(type_weighted_hess.begin(), type_weighted_hess.end(), 0.0);
+            // OPTIMIZATION: Only zero free parameter entries (like legacy code)
+            if (iflag == 3) {
+                for (int fi = 0; fi < nparam_free; fi++) {
+                    int i = freeparlist[fi];
+                    for (int fj = fi; fj < nparam_free; fj++) {
+                        int j = freeparlist[fj];
+                        type_weighted_hess[i * nparam + j] = 0.0;
+                    }
+                }
+            }
 
             // Loop over types
             for (int ityp = 0; ityp < ntyp; ityp++) {
@@ -507,7 +557,16 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
                 // Gradient accumulators for this type (pre-allocated, zero here)
                 if (iflag >= 2) std::fill(grad_this_type.begin(), grad_this_type.end(), 0.0);
-                if (iflag == 3) std::fill(hess_this_type.begin(), hess_this_type.end(), 0.0);
+                // OPTIMIZATION: Only zero free parameter entries (like legacy code)
+                if (iflag == 3) {
+                    for (int fi = 0; fi < nparam_free; fi++) {
+                        int i = freeparlist[fi];
+                        for (int fj = fi; fj < nparam_free; fj++) {
+                            int j = freeparlist[fj];
+                            hess_this_type[i * nparam + j] = 0.0;
+                        }
+                    }
+                }
 
                 // Evaluate all models for this type
                 for (size_t imod = 0; imod < models.size(); imod++) {
@@ -532,30 +591,24 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     // Multiply likelihood for this type
                     prob_this_type *= modEval[0];
 
-                    // ===== STEP 8: Accumulate gradients for this type =====
+                    // ===== STEP 9: Accumulate gradients for this type =====
                     if (iflag >= 2) {
                         // Gradients w.r.t. factor variances and correlation
                         if (fac_corr && nfac == 2) {
                             // Correlated 2-factor model: use Cholesky derivatives
-                            double sigma1 = std::sqrt(factor_var[0]);
-                            double sigma2 = std::sqrt(factor_var[1]);
-                            double z1 = quad_nodes[facint[0]];
-                            double z2 = quad_nodes[facint[1]];
-
+                            // Use pre-computed sigma_fac and x_node_fac
                             double dL_df1 = modEval[1];
                             double dL_df2 = modEval[2];
 
-                            grad_this_type[0] += dL_df1 * z1 / (2.0 * sigma1);
-                            double df2_dsigma2sq = (rho * z1 + sqrt_1_minus_rho2 * z2) / (2.0 * sigma2);
+                            grad_this_type[0] += dL_df1 * x_node_fac[0] / (2.0 * sigma_fac[0]);
+                            double df2_dsigma2sq = (rho * x_node_fac[0] + sqrt_1_minus_rho2 * x_node_fac[1]) / (2.0 * sigma_fac[1]);
                             grad_this_type[1] += dL_df2 * df2_dsigma2sq;
-                            double df2_drho = sigma2 * (z1 - rho * z2 / sqrt_1_minus_rho2);
+                            double df2_drho = sigma_fac[1] * (x_node_fac[0] - rho * x_node_fac[1] / sqrt_1_minus_rho2);
                             grad_this_type[2] += dL_df2 * df2_drho;
                         } else {
-                            // Independent factors: standard chain rule
+                            // Independent factors: use pre-computed df_dsigma2
                             for (int ifac = 0; ifac < nfac; ifac++) {
-                                double sigma = std::sqrt(factor_var[ifac]);
-                                double x_node = quad_nodes[facint[ifac]];
-                                grad_this_type[ifac] += modEval[ifac + 1] * x_node / (2.0 * sigma);
+                                grad_this_type[ifac] += modEval[ifac + 1] * df_dsigma2[ifac];
                             }
                         }
 
@@ -588,16 +641,12 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
                         if (fac_corr && nfac == 2) {
                             // ===== Correlated 2-factor Hessian =====
-                            double sigma1 = std::sqrt(factor_var[0]);
-                            double sigma2 = std::sqrt(factor_var[1]);
-                            double z1 = quad_nodes[facint[0]];
-                            double z2 = quad_nodes[facint[1]];
-
-                            double df1_dsigma1sq = z1 / (2.0 * sigma1);
-                            double df2_dsigma2sq = (rho * z1 + sqrt_1_minus_rho2 * z2) / (2.0 * sigma2);
-                            double df2_drho = sigma2 * (z1 - rho * z2 / sqrt_1_minus_rho2);
-                            double d2f2_drho2 = -sigma2 * z2 / (sqrt_1_minus_rho2 * sqrt_1_minus_rho2 * sqrt_1_minus_rho2);
-                            double d2f2_drho_dsigma2sq = (z1 - rho * z2 / sqrt_1_minus_rho2) / (2.0 * sigma2);
+                            // Use pre-computed sigma_fac and x_node_fac (z1, z2)
+                            double df1_dsigma1sq = x_node_fac[0] / (2.0 * sigma_fac[0]);
+                            double df2_dsigma2sq = (rho * x_node_fac[0] + sqrt_1_minus_rho2 * x_node_fac[1]) / (2.0 * sigma_fac[1]);
+                            double df2_drho = sigma_fac[1] * (x_node_fac[0] - rho * x_node_fac[1] / sqrt_1_minus_rho2);
+                            double d2f2_drho2 = -sigma_fac[1] * x_node_fac[1] / (sqrt_1_minus_rho2 * sqrt_1_minus_rho2 * sqrt_1_minus_rho2);
+                            double d2f2_drho_dsigma2sq = (x_node_fac[0] - rho * x_node_fac[1] / sqrt_1_minus_rho2) / (2.0 * sigma_fac[1]);
 
                             double d2L_df1df1 = modHess[0 * nDimModHess + 0];
                             double d2L_df1df2 = modHess[0 * nDimModHess + 1];
@@ -605,13 +654,15 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                             double dL_df1 = modEval[1];
                             double dL_df2 = modEval[2];
 
-                            double d2f1_dsigma1sq_sq = -z1 / (4.0 * sigma1 * sigma1 * sigma1);
+                            double sigma1_cubed = sigma_fac[0] * sigma_fac[0] * sigma_fac[0];
+                            double sigma2_cubed = sigma_fac[1] * sigma_fac[1] * sigma_fac[1];
+                            double d2f1_dsigma1sq_sq = -x_node_fac[0] / (4.0 * sigma1_cubed);
                             hess_this_type[0 * nparam + 0] += d2L_df1df1 * df1_dsigma1sq * df1_dsigma1sq
                                                               + dL_df1 * d2f1_dsigma1sq_sq;
                             hess_this_type[0 * nparam + 1] += d2L_df1df2 * df1_dsigma1sq * df2_dsigma2sq;
                             hess_this_type[0 * nparam + 2] += d2L_df1df2 * df1_dsigma1sq * df2_drho;
 
-                            double d2f2_dsigma2sq_sq = -(rho * z1 + sqrt_1_minus_rho2 * z2) / (4.0 * sigma2 * sigma2 * sigma2);
+                            double d2f2_dsigma2sq_sq = -(rho * x_node_fac[0] + sqrt_1_minus_rho2 * x_node_fac[1]) / (4.0 * sigma2_cubed);
                             hess_this_type[1 * nparam + 1] += d2L_df2df2 * df2_dsigma2sq * df2_dsigma2sq
                                                               + dL_df2 * d2f2_dsigma2sq_sq;
                             hess_this_type[1 * nparam + 2] += d2L_df2df2 * df2_dsigma2sq * df2_drho
@@ -640,6 +691,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                             }
                         } else {
                             // ===== Independent factors Hessian =====
+                            // Use pre-computed df_dsigma2 (chain rule factor) for efficiency
                             for (int i = 0; i < nDimModHess; i++) {
                                 for (int j = i; j < nDimModHess; j++) {
                                     int modhess_idx = i * nDimModHess + j;
@@ -647,24 +699,21 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                     int full_j = (j < nfac) ? j : (firstpar + j - nfac);
                                     int full_idx = full_i * nparam + full_j;
 
+                                    // Use pre-computed df_dsigma2[k] = x_node[k] / (2 * sigma[k])
                                     double chain_factor = 1.0;
                                     if (i < nfac) {
-                                        double sigma_i = std::sqrt(factor_var[i]);
-                                        double x_node_i = quad_nodes[facint[i]];
-                                        chain_factor *= x_node_i / (2.0 * sigma_i);
+                                        chain_factor *= df_dsigma2[i];
                                     }
                                     if (j < nfac) {
-                                        double sigma_j = std::sqrt(factor_var[j]);
-                                        double x_node_j = quad_nodes[facint[j]];
-                                        chain_factor *= x_node_j / (2.0 * sigma_j);
+                                        chain_factor *= df_dsigma2[j];
                                     }
 
                                     hess_this_type[full_idx] += modHess[modhess_idx] * chain_factor;
 
+                                    // Second derivative term for factor variance diagonal
                                     if (i < nfac && i == j) {
-                                        double sigma = std::sqrt(factor_var[i]);
-                                        double x_node = quad_nodes[facint[i]];
-                                        double second_deriv_factor = -x_node / (4.0 * sigma * sigma * sigma);
+                                        double sigma_cubed = sigma_fac[i] * sigma_fac[i] * sigma_fac[i];
+                                        double second_deriv_factor = -x_node_fac[i] / (4.0 * sigma_cubed);
                                         hess_this_type[full_idx] += modEval[i + 1] * second_deriv_factor;
                                     }
                                 }
@@ -687,14 +736,10 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                 // modHess[k * nDimModHess + nfac] = d²L/df_k d(intercept)
                                 double hess_fk_intercept = modHess[k * nDimModHess + nfac];
 
-                                // Apply chain rule for factor variance: df/d(sigma²) = x_node / (2*sigma)
-                                double sigma_k = std::sqrt(factor_var[k]);
-                                double x_node_k = quad_nodes[facint[k]];
-                                double chain_factor = x_node_k / (2.0 * sigma_k);
-
+                                // Use pre-computed df_dsigma2[k] = x_node / (2*sigma)
                                 // Hessian cross-term: d²L/d(factor_var_k)d(type_intercept)
                                 int full_idx = k * nparam + type_intercept_idx;
-                                hess_this_type[full_idx] += hess_fk_intercept * chain_factor;
+                                hess_this_type[full_idx] += hess_fk_intercept * df_dsigma2[k];
                             }
 
                             // Cross-terms with base model parameters
@@ -748,10 +793,6 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                         // where df_k/dσ²_k = x_q / (2 * σ_k) since f = σ * x and dσ/dσ² = 1/(2σ)
                         // and dπ_t/df_k = Σ_s π_t * (δ_{t,s} - π_s) * λ_{s,k}
                         for (int k = 0; k < nfac; k++) {
-                            double sigma_k = std::sqrt(factor_var[k]);
-                            double x_node_k = quad_nodes[facint[k]];
-                            double df_dsigma2 = x_node_k / (2.0 * sigma_k);
-
                             // Compute dπ_t/df_k = Σ_s π_t * (δ_{t,s} - π_s) * λ_{s,k}
                             double dpi_df_k = 0.0;
                             for (int s = 0; s < ntyp - 1; s++) {
@@ -762,7 +803,8 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                             }
 
                             // Add (dπ_t/dσ²_k) * L_t to factor variance gradient
-                            type_weighted_grad[k] += dpi_df_k * df_dsigma2 * prob_this_type;
+                            // Use pre-computed df_dsigma2[k]
+                            type_weighted_grad[k] += dpi_df_k * df_dsigma2[k] * prob_this_type;
                         }
                     }
                 }
@@ -848,11 +890,8 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                         // 3. Hessian terms for factor variance through type probabilities
                         // dπ_t/dσ²_k = dπ_t/df_k * df_k/dσ²_k
                         // where df/dσ² = x_q / (2σ) since f = σ * x and dσ/dσ² = 1/(2σ)
+                        // Use pre-computed df_dsigma2[k]
                         for (int k = 0; k < nfac; k++) {
-                            double sigma_k = std::sqrt(factor_var[k]);
-                            double x_node_k = quad_nodes[facint[k]];
-                            double df_dsigma2_k = x_node_k / (2.0 * sigma_k);
-
                             // Compute dπ_t/df_k = Σ_s π_t * (δ_{t,s} - π_s) * λ_{s,k}
                             double dpi_df_k = 0.0;
                             for (int s = 0; s < ntyp - 1; s++) {
@@ -861,7 +900,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                 double delta_ts = (ityp == s + 1) ? 1.0 : 0.0;
                                 dpi_df_k += type_probs[ityp] * (delta_ts - type_probs[s + 1]) * lambda_sk;
                             }
-                            double dpi_dsigma2_k = dpi_df_k * df_dsigma2_k;
+                            double dpi_dsigma2_k = dpi_df_k * df_dsigma2[k];
 
                             // 3a. Cross terms: dπ_t/dσ²_k * dL_t/dθ (for σ² × model_param)
                             for (int ipar = 0; ipar < nparam; ipar++) {
@@ -883,11 +922,8 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
                             // 3b. Cross terms: dπ_t/dσ²_k * dL_t/dσ²_l (for σ²_k × σ²_l)
                             // Plus second derivative d²π_t/dσ²_k dσ²_l * L_t
+                            // Use pre-computed df_dsigma2[l]
                             for (int l = k; l < nfac; l++) {
-                                double sigma_l = std::sqrt(factor_var[l]);
-                                double x_node_l = quad_nodes[facint[l]];
-                                double df_dsigma2_l = x_node_l / (2.0 * sigma_l);
-
                                 // Compute dπ_t/df_l
                                 double dpi_df_l = 0.0;
                                 for (int s = 0; s < ntyp - 1; s++) {
@@ -896,7 +932,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                     double delta_ts = (ityp == s + 1) ? 1.0 : 0.0;
                                     dpi_df_l += type_probs[ityp] * (delta_ts - type_probs[s + 1]) * lambda_sl;
                                 }
-                                double dpi_dsigma2_l = dpi_df_l * df_dsigma2_l;
+                                double dpi_dsigma2_l = dpi_df_l * df_dsigma2[l];
 
                                 int idx = k * nparam + l;
 
@@ -932,7 +968,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                         d2pi_df_k_df_l += d2pi_deta_s_r * lambda_sk * lambda_rl;
                                     }
                                 }
-                                double d2pi_dsigma2_k_l = d2pi_df_k_df_l * df_dsigma2_k * df_dsigma2_l;
+                                double d2pi_dsigma2_k_l = d2pi_df_k_df_l * df_dsigma2[k] * df_dsigma2[l];
                                 type_weighted_hess[idx] += d2pi_dsigma2_k_l * prob_this_type;
                             }
 
@@ -956,7 +992,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                     double delta_kl = (k == l) ? 1.0 : 0.0;
 
                                     // df_l/dσ²_k = 0 if k != l, else x_node_k / (2 * σ_k)
-                                    double df_l_dsigma2_k = delta_kl * df_dsigma2_k;
+                                    double df_l_dsigma2_k = delta_kl * df_dsigma2[k];
 
                                     // dπ_s/dσ²_k (for the type s+1)
                                     double dpi_s_df_k = 0.0;
@@ -966,7 +1002,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                         double delta_s1_r1 = (s == r) ? 1.0 : 0.0;
                                         dpi_s_df_k += type_probs[s + 1] * (delta_s1_r1 - type_probs[r + 1]) * lambda_rk;
                                     }
-                                    double dpi_s_dsigma2_k = dpi_s_df_k * df_dsigma2_k;
+                                    double dpi_s_dsigma2_k = dpi_s_df_k * df_dsigma2[k];
 
                                     // d²(π_t*(δ_{t,s}-π_s)*f_l)/dσ²_k
                                     double d2_term = dpi_dsigma2_k * (delta_ts - type_probs[s + 1]) * fac_val[l]

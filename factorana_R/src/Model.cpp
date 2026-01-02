@@ -44,11 +44,6 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
                  int flag,
                  double type_intercept)
 {
-    // Always clear vectors first to ensure no stale data persists
-    // This is critical for consistent behavior across different flag values
-    modEval.clear();
-    hess.clear();
-
     // Count free factor loadings FIRST (needed for gradient vector sizing)
     int ifreefac = 0;
     for (size_t i = 0; i < facnorm.size(); i++) {
@@ -57,6 +52,7 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
     if (facnorm.size() == 0) ifreefac = numfac + numtyp*(outcome_idx != -2);
 
     // Determine size of gradient vector
+    // PERFORMANCE: Use resize + fill instead of clear + resize to reuse memory
     if (flag >= 2) {
         // Layout: 1 (likelihood) + numfac (d/dtheta for factor variances) +
         //         nregressors (d/dbeta) + ifreefac (d/dalpha for free linear loadings) +
@@ -71,7 +67,9 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
         }
         if (modtype == ModelType::OPROBIT) ngrad += (numchoice - 1);  // thresholds
 
-        modEval.resize(ngrad, 0.0);  // Initialize all to 0.0
+        modEval.resize(ngrad);
+        std::fill(modEval.begin(), modEval.end(), 0.0);
+        hess.clear();  // Hess is populated by Eval* functions, clear is OK here
     } else {
         modEval.resize(1);
     }
@@ -85,11 +83,15 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
     if (ignore) return;
 
     // Build linear predictor(s)
+    // PERFORMANCE: Use thread_local static to avoid allocation on every call
+    // This is safe because Model::Eval is not called recursively
     int numlogitchoice = 2;
-    std::vector<double> expres(1, 0.0);
+    static thread_local std::vector<double> expres;
+    expres.assign(1, 0.0);
 
     if (modtype == ModelType::LOGIT && numchoice > 2) {
-        expres.resize(numchoice - 1, 0.0);
+        expres.resize(numchoice - 1);
+        std::fill(expres.begin(), expres.end(), 0.0);
         numlogitchoice = numchoice;
     }
 
