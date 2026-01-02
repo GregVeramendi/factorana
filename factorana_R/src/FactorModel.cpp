@@ -399,11 +399,12 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     if (iflag == 3) hess_this_type.resize(nparam * nparam, 0.0);
 
     // OPTIMIZATION: Pre-allocate vectors for chain rule factors
-    // These store sqrt(factor_var), quadrature nodes, and df/d(sigma^2) per factor
+    // These store sqrt(factor_var), quadrature nodes, and derivatives per factor
     // Computed once per integration point, reused throughout type/model loops
     std::vector<double> sigma_fac(nfac);
     std::vector<double> x_node_fac(nfac);
-    std::vector<double> df_dsigma2(nfac);
+    std::vector<double> df_dsigma2(nfac);      // First derivative: x_node / (2 * sigma)
+    std::vector<double> d2f_dsigma2_sq(nfac);  // Second derivative: -x_node / (4 * sigma³)
 
     // ===== STEP 5: Loop over observations =====
     for (int iobs = 0; iobs < nobs; iobs++) {
@@ -526,10 +527,13 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
             // ===== STEP 7: Pre-compute chain rule factors for gradients/Hessians =====
             // sigma_fac and x_node_fac are already pre-computed at the start of the integration point loop
-            // Here we just compute the chain rule factor for variance derivatives
+            // Here we compute first and second derivative factors for variance derivatives
             for (int ifac = 0; ifac < nfac; ifac++) {
                 // Chain rule: df/d(sigma^2) = x_node / (2 * sigma)
                 df_dsigma2[ifac] = x_node_fac[ifac] / (2.0 * sigma_fac[ifac]);
+                // Second derivative: d²f/d(sigma²)² = -x_node / (4 * sigma³)
+                double sigma_cubed = sigma_fac[ifac] * sigma_fac[ifac] * sigma_fac[ifac];
+                d2f_dsigma2_sq[ifac] = -x_node_fac[ifac] / (4.0 * sigma_cubed);
             }
 
             // ===== STEP 8: Evaluate all models with type mixture =====
@@ -716,10 +720,9 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                     hess_this_type[full_idx] += modHess[modhess_idx] * chain_factor;
 
                                     // Second derivative term for factor variance diagonal
+                                    // Uses pre-computed d2f_dsigma2_sq[i] = -x_node[i] / (4 * sigma[i]³)
                                     if (i < nfac && i == j) {
-                                        double sigma_cubed = sigma_fac[i] * sigma_fac[i] * sigma_fac[i];
-                                        double second_deriv_factor = -x_node_fac[i] / (4.0 * sigma_cubed);
-                                        hess_this_type[full_idx] += modEval[i + 1] * second_deriv_factor;
+                                        hess_this_type[full_idx] += modEval[i + 1] * d2f_dsigma2_sq[i];
                                     }
                                 }
                             }
