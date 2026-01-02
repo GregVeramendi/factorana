@@ -659,9 +659,19 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
                      n_workers, control$num_cores))
     }
 
-    # Use PSOCK clusters by default (more compatible with Rcpp)
-    # FORK clusters have issues with Rcpp external pointers on some systems
-    cl <- parallel::makeCluster(n_workers)
+    # Use FORK clusters on Unix for better performance (shared memory)
+    # Fall back to PSOCK on Windows or if FORK fails
+    if (.Platform$OS.type == "unix") {
+      cl <- tryCatch({
+        if (verbose) message("Using FORK cluster (shared memory)...")
+        parallel::makeForkCluster(n_workers)
+      }, error = function(e) {
+        if (verbose) message("FORK cluster failed, using PSOCK...")
+        parallel::makeCluster(n_workers)
+      })
+    } else {
+      cl <- parallel::makeCluster(n_workers)
+    }
     doParallel::registerDoParallel(cl)
 
     # Robust cleanup: use on.exit AND store cluster in parent frame for interrupt handling
@@ -701,13 +711,21 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   n_quad <- control$n_quad_points
 
   if (!is.null(cl)) {
-    # Export library paths to workers (ensures workers can find factorana)
-    current_lib_paths <- .libPaths()
-    parallel::clusterExport(cl, "current_lib_paths", envir = environment())
-    parallel::clusterEvalQ(cl, {
-      .libPaths(current_lib_paths)
-      library(factorana)
-    })
+    # Check if this is a FORK cluster
+    is_fork <- inherits(cl[[1]], "forknode")
+
+    if (is_fork) {
+      # FORK cluster: load library on workers (they inherit parent's state but need explicit library)
+      parallel::clusterEvalQ(cl, library(factorana))
+    } else {
+      # PSOCK cluster: need to set library paths and load factorana
+      current_lib_paths <- .libPaths()
+      parallel::clusterExport(cl, "current_lib_paths", envir = environment())
+      parallel::clusterEvalQ(cl, {
+        .libPaths(current_lib_paths)
+        library(factorana)
+      })
+    }
 
     # Export necessary objects to workers
     parallel::clusterExport(cl, c("model_system", "data_mat", "n_quad", "data_splits", "full_init_params"),
