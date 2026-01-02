@@ -21,6 +21,7 @@ private:
     // Parameters
     std::vector<double> param;         // Full parameter vector
     std::vector<bool> param_fixed;     // Which parameters are fixed
+    std::vector<int> freeparlist;      // Indices of free parameters (for Hessian optimization)
     int nparam;                        // Total number of parameters
     int nparam_free;                   // Number of free parameters
 

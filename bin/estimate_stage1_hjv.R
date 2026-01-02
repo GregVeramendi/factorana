@@ -370,10 +370,40 @@ saveRDS(result, output_path)
 cat("\nResults saved to:", output_path, "\n")
 
 # Save estimates in CSV format (similar to meas_par.txt but with names)
+# Parse param_names to extract model and coefficient names
+# Format examples: "factor_var_1", "seng9_intercept", "seng9_loading_1", "seng9_sigma"
+parse_param_name <- function(name) {
+  # Factor variance parameters
+  if (grepl("^factor_var_", name)) {
+    return(c(model = "factor", coefficient = name))
+  }
+  # Factor correlation
+  if (grepl("^factor_corr_", name)) {
+    return(c(model = "factor", coefficient = name))
+  }
+  # Model parameters: split on first underscore after model name
+  # Find the model name (everything before _intercept, _loading, _sigma, _thresh, or first covariate)
+  parts <- strsplit(name, "_")[[1]]
+  if (length(parts) >= 2) {
+    # Common suffixes that indicate coefficient type
+    suffixes <- c("intercept", "loading", "sigma", "thresh", "beta")
+    for (i in seq_along(parts)) {
+      if (parts[i] %in% suffixes || grepl("^loading$", parts[i])) {
+        model_name <- paste(parts[1:(i-1)], collapse = "_")
+        coef_name <- paste(parts[i:length(parts)], collapse = "_")
+        return(c(model = model_name, coefficient = coef_name))
+      }
+    }
+  }
+  # Fallback: use full name as both
+  return(c(model = name, coefficient = name))
+}
+
+parsed <- t(sapply(result$param_names, parse_param_name))
 params_df <- data.frame(
   index = seq_along(result$estimates) - 1,  # 0-based index
-  model = result$param_table$component,
-  coefficient = result$param_table$parameter,
+  model = parsed[, "model"],
+  coefficient = parsed[, "coefficient"],
   estimate = result$estimates,
   std_error = result$std_errors,
   row.names = NULL

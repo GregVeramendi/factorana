@@ -208,8 +208,13 @@ void FactorModel::SetParameterConstraints(const std::vector<bool>& fixed)
     }
     param_fixed = fixed;
     nparam_free = 0;
-    for (bool f : fixed) {
-        if (!f) nparam_free++;
+    freeparlist.clear();
+    freeparlist.reserve(nparam);
+    for (int i = 0; i < nparam; i++) {
+        if (!fixed[i]) {
+            freeparlist.push_back(i);
+            nparam_free++;
+        }
     }
 
     // Initialize parameter vector with default values
@@ -233,8 +238,13 @@ void FactorModel::SetParameterConstraints(const std::vector<bool>& fixed,
 
     param_fixed = fixed;
     nparam_free = 0;
-    for (bool f : fixed) {
-        if (!f) nparam_free++;
+    freeparlist.clear();
+    freeparlist.reserve(nparam);
+    for (int i = 0; i < nparam; i++) {
+        if (!fixed[i]) {
+            freeparlist.push_back(i);
+            nparam_free++;
+        }
     }
 
     // Initialize parameter vector with provided values
@@ -761,8 +771,11 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     // ===== STEP 9c: Hessian for model parameters (original formula) =====
                     // d²L_t/dθdφ = L_t * [d²(log L_t)/dθdφ + d(log L_t)/dθ * d(log L_t)/dφ]
                     // Weighted by π_t: contribution to d²L_mix/dθdφ is π_t * d²L_t/dθdφ
-                    for (int i = 0; i < nparam; i++) {
-                        for (int j = i; j < nparam; j++) {
+                    // OPTIMIZATION: Only compute entries for free parameters (like legacy code)
+                    for (int fi = 0; fi < nparam_free; fi++) {
+                        int i = freeparlist[fi];
+                        for (int fj = fi; fj < nparam_free; fj++) {
+                            int j = freeparlist[fj];
                             int idx = i * nparam + j;
                             // Accumulate Hessian weighted by type probability
                             type_weighted_hess[idx] += type_prob * prob_this_type *
@@ -987,9 +1000,12 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             if (iflag == 3 && type_weighted_prob > 1e-100) {
                 // hessilk needs d²(log L_mixture)/dθ² which involves complex chain rule
                 // For now, convert to log scale: H_log = (1/L)*H - (1/L²)*g*g^T
+                // OPTIMIZATION: Only compute entries for free parameters
                 double L = type_weighted_prob;
-                for (int i = 0; i < nparam; i++) {
-                    for (int j = i; j < nparam; j++) {
+                for (int fi = 0; fi < nparam_free; fi++) {
+                    int i = freeparlist[fi];
+                    for (int fj = fi; fj < nparam_free; fj++) {
+                        int j = freeparlist[fj];
                         int idx = i * nparam + j;
                         hessilk[idx] = type_weighted_hess[idx] / L
                             - (type_weighted_grad[i] * type_weighted_grad[j]) / (L * L);
@@ -1007,8 +1023,11 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             }
 
             if (iflag == 3) {
-                for (int i = 0; i < nparam; i++) {
-                    for (int j = i; j < nparam; j++) {
+                // OPTIMIZATION: Only compute entries for free parameters (like legacy code)
+                for (int fi = 0; fi < nparam_free; fi++) {
+                    int i = freeparlist[fi];
+                    for (int fj = fi; fj < nparam_free; fj++) {
+                        int j = freeparlist[fj];
                         int idx = i * nparam + j;
                         totalhess[idx] += probilk * (hessilk[idx] + gradilk[i] * gradilk[j]);
                     }
@@ -1040,9 +1059,12 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             }
 
             // Hessian: d²(log L)/dθ² = (1/L)*d²L/dθ² - (1/L²)*(dL/dθ)² (weighted)
+            // OPTIMIZATION: Only compute entries for free parameters (like legacy code)
             if (iflag == 3) {
-                for (int i = 0; i < nparam; i++) {
-                    for (int j = i; j < nparam; j++) {
+                for (int fi = 0; fi < nparam_free; fi++) {
+                    int i = freeparlist[fi];
+                    for (int fj = fi; fj < nparam_free; fj++) {
+                        int j = freeparlist[fj];
                         int idx = i * nparam + j;
                         double term1 = totalhess[idx] / totalprob;
                         double term2 = (totalgrad[i] * totalgrad[j]) / (totalprob * totalprob);
