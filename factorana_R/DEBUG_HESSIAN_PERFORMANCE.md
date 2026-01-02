@@ -430,3 +430,55 @@ The main remaining performance gap is likely due to:
 1. R::dnorm vs ROOT::Math::normal_pdf overhead
 2. General Rcpp/R interop overhead vs standalone C++
 3. Possible differences in compiler optimizations between the two codebases
+
+---
+
+## Final Optimization Results (2026-01-02)
+
+### Additional Optimizations Implemented
+
+#### 5. Pre-computed sqrt(factor_var) (v0.2.9)
+Consolidated 2-3 sqrt() calls per integration point to 1:
+```cpp
+// Computed once at start of integration point loop
+for (int ifac = 0; ifac < nfac; ifac++) {
+    sigma_fac[ifac] = std::sqrt(factor_var[ifac]);
+    x_node_fac[ifac] = quad_nodes[facint[ifac]];
+    df_dsigma2[ifac] = x_node_fac[ifac] / (2.0 * sigma_fac[ifac]);
+}
+```
+
+#### 6. Pre-computed second derivative factor (v0.2.10)
+Pre-computed d2f_dsigma2_sq to avoid computing sigma³ in Hessian loop:
+```cpp
+// Computed once at start of integration point loop
+d2f_dsigma2_sq[ifac] = -x_node_fac[ifac] / (4.0 * sigma_cubed);
+```
+
+### Benchmark Results Summary
+
+| Version | 10k obs, 32 cores | Improvement |
+|---------|------------------|-------------|
+| v0.2.6 | Hessian: 186s | baseline |
+| v0.2.8 | Hessian: 77s | 2.4× faster |
+| v0.2.9 | Hessian: 74.3s | 2.5× faster |
+
+### Comparison with Legacy C++ (scaled to 100k obs, 304 params)
+
+| Implementation | Log-likelihood | Gradient | Hessian |
+|----------------|---------------|----------|---------|
+| Legacy C++ | 2.20s | 4.93s | 264s |
+| Rcpp v0.2.9 (est) | ~4.5s | ~11s | ~743s |
+| **Ratio** | 2.0× slower | 2.3× slower | 2.8× slower |
+
+### Conclusion
+
+The main optimizations have been completed. The remaining ~2.8× performance gap is due to:
+1. R's distribution functions (R::dnorm, R::pnorm) vs ROOT's optimized implementations
+2. General Rcpp/R interop overhead
+3. Compiler optimization differences between the two build systems
+
+Further significant gains would require:
+- Custom distribution function implementations (avoid R::dnorm)
+- Restructuring the code to minimize R/C++ boundary crossings
+- Profiling to identify specific bottlenecks
