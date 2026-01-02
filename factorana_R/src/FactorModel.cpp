@@ -462,6 +462,18 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 }
             }
 
+            // OPTIMIZATION: Pre-compute sigma_fac and x_node_fac once per integration point
+            // These are reused for fac_val computation and gradient/Hessian chain rules
+            for (int ifac = 0; ifac < nfac; ifac++) {
+                sigma_fac[ifac] = std::sqrt(factor_var[ifac]);
+                if (use_adaptive) {
+                    int nq = obs_nq[ifac];
+                    x_node_fac[ifac] = adapt_nodes.at(nq)[facint[ifac]];
+                } else {
+                    x_node_fac[ifac] = quad_nodes[facint[ifac]];
+                }
+            }
+
             // Get integration weight (product over dimensions)
             double probilk = 1.0;
             for (int ifac = 0; ifac < nfac; ifac++) {
@@ -474,34 +486,22 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             }
 
             // Compute factor values at this integration point (fac_val pre-allocated)
+            // OPTIMIZATION: Use pre-computed sigma_fac and x_node_fac instead of recalculating
             if (fac_corr && nfac == 2 && !use_adaptive) {
                 // Correlated 2-factor model: use Cholesky transformation
                 // (Not supported in adaptive mode - requires independent factors)
                 // f1 = σ1 * z1
                 // f2 = ρ*σ2*z1 + σ2*√(1-ρ²)*z2
                 // where z1, z2 are independent GH quadrature nodes
-                double sigma1 = std::sqrt(factor_var[0]);
-                double sigma2 = std::sqrt(factor_var[1]);
-                double z1 = quad_nodes[facint[0]];
-                double z2 = quad_nodes[facint[1]];
-
-                fac_val[0] = sigma1 * z1 + factor_mean[0];
-                fac_val[1] = rho * sigma2 * z1 + sigma2 * sqrt_1_minus_rho2 * z2 + factor_mean[1];
+                fac_val[0] = sigma_fac[0] * x_node_fac[0] + factor_mean[0];
+                fac_val[1] = rho * sigma_fac[1] * x_node_fac[0] + sigma_fac[1] * sqrt_1_minus_rho2 * x_node_fac[1] + factor_mean[1];
             } else {
                 // Independent factors: standard transformation
                 // In adaptive mode: center at factor score instead of 0
                 for (int ifac = 0; ifac < nfac; ifac++) {
-                    double sigma = std::sqrt(factor_var[ifac]);
-                    double x_node;
-                    if (use_adaptive) {
-                        int nq = obs_nq[ifac];
-                        x_node = adapt_nodes.at(nq)[facint[ifac]];
-                    } else {
-                        x_node = quad_nodes[facint[ifac]];
-                    }
                     // Factor transformation for GH quadrature
                     // f = sigma * x + center (where center is factor_score in adaptive mode)
-                    fac_val[ifac] = sigma * x_node + fac_center[ifac];
+                    fac_val[ifac] = sigma_fac[ifac] * x_node_fac[ifac] + fac_center[ifac];
                 }
             }
 
@@ -525,17 +525,9 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             }
 
             // ===== STEP 7: Pre-compute chain rule factors for gradients/Hessians =====
-            // OPTIMIZATION: Compute sqrt(factor_var) and chain rule factors once per integration point,
-            // then reuse throughout the type/model loops to avoid redundant sqrt() calls.
-            // Pre-allocated vectors: sigma_fac, x_node_fac, df_dsigma2 (sized to nfac)
+            // sigma_fac and x_node_fac are already pre-computed at the start of the integration point loop
+            // Here we just compute the chain rule factor for variance derivatives
             for (int ifac = 0; ifac < nfac; ifac++) {
-                sigma_fac[ifac] = std::sqrt(factor_var[ifac]);
-                if (use_adaptive) {
-                    int nq = obs_nq[ifac];
-                    x_node_fac[ifac] = adapt_nodes.at(nq)[facint[ifac]];
-                } else {
-                    x_node_fac[ifac] = quad_nodes[facint[ifac]];
-                }
                 // Chain rule: df/d(sigma^2) = x_node / (2 * sigma)
                 df_dsigma2[ifac] = x_node_fac[ifac] / (2.0 * sigma_fac[ifac]);
             }
