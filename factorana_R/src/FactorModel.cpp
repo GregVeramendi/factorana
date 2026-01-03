@@ -524,25 +524,31 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             std::vector<double> type_probs = ComputeTypeProbabilities(fac_val);
 
             // Accumulators for type-weighted contributions (pre-allocated, zero here)
+            // OPTIMIZATION: For ntyp=1, skip zeroing type_weighted_* - we accumulate directly into total*
             double type_weighted_prob = 0.0;
-            if (iflag >= 2) std::fill(type_weighted_grad.begin(), type_weighted_grad.end(), 0.0);
-            // OPTIMIZATION: Only zero free parameter entries (like legacy code)
-            if (iflag == 3) {
-                for (int fi = 0; fi < nparam_free; fi++) {
-                    int i = freeparlist[fi];
-                    for (int fj = fi; fj < nparam_free; fj++) {
-                        int j = freeparlist[fj];
-                        type_weighted_hess[i * nparam + j] = 0.0;
+            if (ntyp > 1) {
+                if (iflag >= 2) std::fill(type_weighted_grad.begin(), type_weighted_grad.end(), 0.0);
+                // OPTIMIZATION: Only zero free parameter entries (like legacy code)
+                if (iflag == 3) {
+                    for (int fi = 0; fi < nparam_free; fi++) {
+                        int i = freeparlist[fi];
+                        for (int fj = fi; fj < nparam_free; fj++) {
+                            int j = freeparlist[fj];
+                            type_weighted_hess[i * nparam + j] = 0.0;
+                        }
                     }
                 }
             }
+
+            // Likelihood product for this type (declared outside loop for ntyp=1 optimization)
+            double prob_this_type = 1.0;
 
             // Loop over types
             for (int ityp = 0; ityp < ntyp; ityp++) {
                 double type_prob = type_probs[ityp];
 
-                // Likelihood product for this type
-                double prob_this_type = 1.0;
+                // Reset likelihood product for this type
+                prob_this_type = 1.0;
 
                 // Gradient accumulators for this type (pre-allocated, zero here)
                 if (iflag >= 2) std::fill(grad_this_type.begin(), grad_this_type.end(), 0.0);
@@ -750,14 +756,21 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 } // End of model loop for this type
 
                 // ===== Weight by type probability and accumulate =====
-                type_weighted_prob += type_prob * prob_this_type;
+                // OPTIMIZATION: For ntyp=1, skip type_weighted_* and accumulate directly into total* later
+                if (ntyp > 1) {
+                    type_weighted_prob += type_prob * prob_this_type;
+                }
 
                 if (iflag >= 2) {
                     // Gradient of type-weighted likelihood:
                     // d(π_t * L_t)/dθ = (dπ_t/dθ) * L_t + π_t * (dL_t/dθ)
                     // For model parameters: dπ_t/dθ = 0, so just π_t * (dL_t/dθ)
-                    for (int ipar = 0; ipar < nparam; ipar++) {
-                        type_weighted_grad[ipar] += type_prob * prob_this_type * grad_this_type[ipar];
+                    // OPTIMIZATION: For ntyp=1, skip - we'll use grad_this_type directly later
+                    if (ntyp > 1) {
+                        for (int fi = 0; fi < nparam_free; fi++) {
+                            int ipar = freeparlist[fi];
+                            type_weighted_grad[ipar] += type_prob * prob_this_type * grad_this_type[ipar];
+                        }
                     }
 
                     // Gradient w.r.t. type model loadings (for types > 1)
@@ -801,15 +814,17 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     // ===== STEP 9c: Hessian for model parameters (original formula) =====
                     // d²L_t/dθdφ = L_t * [d²(log L_t)/dθdφ + d(log L_t)/dθ * d(log L_t)/dφ]
                     // Weighted by π_t: contribution to d²L_mix/dθdφ is π_t * d²L_t/dθdφ
-                    // OPTIMIZATION: Only compute entries for free parameters (like legacy code)
-                    for (int fi = 0; fi < nparam_free; fi++) {
-                        int i = freeparlist[fi];
-                        for (int fj = fi; fj < nparam_free; fj++) {
-                            int j = freeparlist[fj];
-                            int idx = i * nparam + j;
-                            // Accumulate Hessian weighted by type probability
-                            type_weighted_hess[idx] += type_prob * prob_this_type *
-                                (hess_this_type[idx] + grad_this_type[i] * grad_this_type[j]);
+                    // OPTIMIZATION: For ntyp=1, skip - we'll use hess_this_type directly later
+                    if (ntyp > 1) {
+                        for (int fi = 0; fi < nparam_free; fi++) {
+                            int i = freeparlist[fi];
+                            for (int fj = fi; fj < nparam_free; fj++) {
+                                int j = freeparlist[fj];
+                                int idx = i * nparam + j;
+                                // Accumulate Hessian weighted by type probability
+                                type_weighted_hess[idx] += type_prob * prob_this_type *
+                                    (hess_this_type[idx] + grad_this_type[i] * grad_this_type[j]);
+                            }
                         }
                     }
 
@@ -1033,25 +1048,56 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             // probilk is the quadrature weight at this point
             double quad_weight = probilk;
 
-            // Update totalprob with weighted likelihood
-            totalprob += quad_weight * type_weighted_prob;
+            // OPTIMIZATION: For ntyp=1, use grad_this_type/hess_this_type directly
+            // instead of going through type_weighted_* intermediates. This combines
+            // two O(nparam²) loops into one for the Hessian.
+            if (ntyp == 1) {
+                // For ntyp=1, prob_this_type is the likelihood at this quad point
+                // (type_prob = 1.0 for single type)
+                totalprob += quad_weight * prob_this_type;
 
-            // Accumulate raw gradient (not log-gradient)
-            if (iflag >= 2) {
-                for (int ipar = 0; ipar < nparam; ipar++) {
-                    totalgrad[ipar] += quad_weight * type_weighted_grad[ipar];
+                if (iflag >= 2) {
+                    // grad_this_type = d(log L)/dθ, so raw gradient = L * grad = prob_this_type * grad_this_type
+                    double combined_weight = quad_weight * prob_this_type;
+                    for (int fi = 0; fi < nparam_free; fi++) {
+                        int ipar = freeparlist[fi];
+                        totalgrad[ipar] += combined_weight * grad_this_type[ipar];
+                    }
                 }
-            }
 
-            // Accumulate raw Hessian directly - no hessilk conversion needed!
-            // OPTIMIZATION: Only compute entries for free parameters (like legacy code)
-            if (iflag == 3) {
-                for (int fi = 0; fi < nparam_free; fi++) {
-                    int i = freeparlist[fi];
-                    for (int fj = fi; fj < nparam_free; fj++) {
-                        int j = freeparlist[fj];
-                        int idx = i * nparam + j;
-                        totalhess[idx] += quad_weight * type_weighted_hess[idx];
+                if (iflag == 3) {
+                    // Raw Hessian = L * (d²(log L)/dθ² + d(log L)/dθ * d(log L)/dθ')
+                    //             = prob_this_type * (hess_this_type + grad_this_type * grad_this_type')
+                    double combined_weight = quad_weight * prob_this_type;
+                    for (int fi = 0; fi < nparam_free; fi++) {
+                        int i = freeparlist[fi];
+                        for (int fj = fi; fj < nparam_free; fj++) {
+                            int j = freeparlist[fj];
+                            int idx = i * nparam + j;
+                            totalhess[idx] += combined_weight *
+                                (hess_this_type[idx] + grad_this_type[i] * grad_this_type[j]);
+                        }
+                    }
+                }
+            } else {
+                // ntyp > 1: Use type_weighted_* which already accumulated across types
+                totalprob += quad_weight * type_weighted_prob;
+
+                if (iflag >= 2) {
+                    for (int fi = 0; fi < nparam_free; fi++) {
+                        int ipar = freeparlist[fi];
+                        totalgrad[ipar] += quad_weight * type_weighted_grad[ipar];
+                    }
+                }
+
+                if (iflag == 3) {
+                    for (int fi = 0; fi < nparam_free; fi++) {
+                        int i = freeparlist[fi];
+                        for (int fj = fi; fj < nparam_free; fj++) {
+                            int j = freeparlist[fj];
+                            int idx = i * nparam + j;
+                            totalhess[idx] += quad_weight * type_weighted_hess[idx];
+                        }
                     }
                 }
             }
@@ -1074,8 +1120,10 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             logLkhd += obs_weight * std::log(totalprob);
 
             // Gradient: d(log L)/dθ = (1/L) * dL/dθ (weighted by observation)
+            // OPTIMIZATION: Only accumulate for free parameters
             if (iflag >= 2) {
-                for (int ipar = 0; ipar < nparam; ipar++) {
+                for (int fi = 0; fi < nparam_free; fi++) {
+                    int ipar = freeparlist[fi];
                     full_gradL[ipar] += obs_weight * totalgrad[ipar] / totalprob;
                 }
             }
