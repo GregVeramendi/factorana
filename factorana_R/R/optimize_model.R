@@ -1033,6 +1033,9 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   current_start <- init_params[param_constraints$free_idx]
   n_restarts_used <- 0
 
+  # Track optimization timing
+  optimization_start_time <- Sys.time()
+
   # Helper function to run one optimization attempt
   run_one_optimization <- function(start_params, verbose_opt) {
     if (optimizer == "nloptr") {
@@ -1365,12 +1368,17 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     }
   })
 
+  # Calculate total optimization time
+  optimization_end_time <- Sys.time()
+  optimization_time_secs <- as.numeric(difftime(optimization_end_time, optimization_start_time, units = "secs"))
+
   if (verbose) {
     # Report convergence status based on optimizer
     if ((optimizer %in% c("optim", "nlminb") && convergence == 0) ||
         (optimizer %in% c("L-BFGS", "L-BFGS-B") && convergence == 0) ||
         (optimizer == "trust" && convergence == TRUE)) {
-      message(sprintf("Converged successfully. Log-likelihood: %.4f", loglik))
+      message(sprintf("Converged successfully in %.1f seconds. Log-likelihood: %.4f",
+                     optimization_time_secs, loglik))
     } else {
       # Convergence failed - determine reason
       if (optimizer == "nlminb") {
@@ -1385,20 +1393,36 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       } else {
         reason <- "failed to converge"
       }
-      message(sprintf("Convergence FAILED (%s). Log-likelihood: %.4f", reason, loglik))
+      message(sprintf("Convergence FAILED (%s) after %.1f seconds. Log-likelihood: %.4f",
+                     reason, optimization_time_secs, loglik))
     }
   }
+
+  # Build param_table for easier access to organized parameter info
+  param_table <- data.frame(
+    name = param_metadata$names,
+    type = param_metadata$types,
+    component = sapply(param_metadata$component_id, function(id) {
+      if (id == 0) "factor" else model_system$components[[id]]$name
+    }),
+    estimate = estimates,
+    std_error = std_errors,
+    fixed = param_constraints$param_fixed,
+    stringsAsFactors = FALSE
+  )
 
   # Return results with class for print/summary methods
   result <- list(
     estimates = estimates,
     std_errors = std_errors,
     param_names = param_metadata$names,
+    param_table = param_table,
     loglik = loglik,
     convergence = convergence,
     n_restarts = n_restarts_used,
     iterations = opt_result$iterations,
     evaluations = opt_result$evaluations,
+    optimization_time = optimization_time_secs,
     model_system = model_system,
     optimizer = optimizer
   )

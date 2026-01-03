@@ -20,7 +20,19 @@ print.factorana_result <- function(x, digits = 4, ...) {
   cat("Convergence: ", if (converged) "Yes" else "No", "\n")
   cat("Optimizer:   ", x$optimizer, "\n")
   cat("Log-lik:     ", format(round(x$loglik, digits), nsmall = digits), "\n")
-  cat("Parameters:  ", length(x$estimates), "\n\n")
+  cat("Parameters:  ", length(x$estimates), "\n")
+
+  # Optimization time if available
+  if (!is.null(x$optimization_time)) {
+    if (x$optimization_time >= 60) {
+      mins <- floor(x$optimization_time / 60)
+      secs <- round(x$optimization_time %% 60, 1)
+      cat("Time:        ", sprintf("%d min %.1f sec", mins, secs), "\n")
+    } else {
+      cat("Time:        ", sprintf("%.1f sec", x$optimization_time), "\n")
+    }
+  }
+  cat("\n")
 
   # Build parameter table
   param_df <- .build_param_table(x)
@@ -941,7 +953,82 @@ components_to_latex <- function(result, digits = 3, file = NULL, caption = NULL,
   estimates <- result$estimates
   std_errors <- result$std_errors
   model_system <- result$model_system
+  n_actual <- length(estimates)
 
+  # Use stored param_names if available (preferred - matches exactly what optimizer used)
+  if (!is.null(result$param_names) && length(result$param_names) == n_actual) {
+    # Parse param_names to extract component and type info
+    param_names <- result$param_names
+    param_types <- character(n_actual)
+    components <- character(n_actual)
+
+    for (i in seq_len(n_actual)) {
+      name <- param_names[i]
+
+      # Determine component and type from parameter name
+      if (grepl("^factor_var_", name)) {
+        components[i] <- "Factor Model"
+        param_types[i] <- "factor_var"
+      } else if (grepl("^factor_corr_", name)) {
+        components[i] <- "Factor Model"
+        param_types[i] <- "factor_corr"
+      } else if (grepl("^type_[0-9]+_loading_", name)) {
+        components[i] <- "Factor Model"
+        param_types[i] <- "type_loading"
+      } else {
+        # Extract component name (first part before underscore pattern)
+        # Pattern: component_param where param is intercept, sigma, loading_N, thresh_N, or covariate
+        parts <- strsplit(name, "_")[[1]]
+
+        # Find where the component name ends
+        comp_end <- 1
+        for (j in seq_along(parts)) {
+          if (parts[j] %in% c("intercept", "sigma", "loading", "thresh", "c1", "c2", "c3", "quad", "inter") ||
+              grepl("^c[0-9]+$", parts[j])) {
+            comp_end <- j - 1
+            break
+          }
+          comp_end <- j
+        }
+
+        if (comp_end >= 1) {
+          components[i] <- paste(parts[1:comp_end], collapse = "_")
+        } else {
+          components[i] <- "Model"
+        }
+
+        # Determine type
+        if (grepl("_sigma$", name)) {
+          param_types[i] <- "sigma"
+        } else if (grepl("_loading_quad_", name)) {
+          param_types[i] <- "loading_quad"
+        } else if (grepl("_loading_inter_", name)) {
+          param_types[i] <- "loading_inter"
+        } else if (grepl("_loading_", name)) {
+          param_types[i] <- "loading"
+        } else if (grepl("_thresh_", name)) {
+          param_types[i] <- "cutpoint"
+        } else if (grepl("_intercept", name)) {
+          param_types[i] <- "intercept"
+        } else if (grepl("_type_[0-9]+_intercept", name)) {
+          param_types[i] <- "type_intercept"
+        } else {
+          param_types[i] <- "beta"
+        }
+      }
+    }
+
+    return(data.frame(
+      component = components,
+      param_label = param_names,
+      param_type = param_types,
+      estimate = estimates,
+      se = std_errors,
+      stringsAsFactors = FALSE
+    ))
+  }
+
+  # Fallback: rebuild from model_system (legacy behavior)
   n_factors <- model_system$factor$n_factors
 
   # Build the same metadata as initialize_parameters.R
@@ -1052,7 +1139,6 @@ components_to_latex <- function(result, digits = 3, file = NULL, caption = NULL,
 
   # Handle case where names don't match (e.g., if result has different structure)
   n_expected <- length(param_names)
-  n_actual <- length(estimates)
 
   if (n_expected != n_actual) {
     # Fall back to simple numbering if structure doesn't match
