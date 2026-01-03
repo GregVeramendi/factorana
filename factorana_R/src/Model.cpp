@@ -84,9 +84,21 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
 
     // Check missing indicator
     if (missing_idx > -1) {
-        if (data[iobs_offset + missing_idx] == 0) return;
+        if (data[iobs_offset + missing_idx] == 0) {
+            // Clear Hessian to avoid stale data contaminating cross-component derivatives
+            if (flag == 3 && hess.size() > 0) {
+                std::fill(hess.begin(), hess.end(), 0.0);
+            }
+            return;
+        }
     }
-    if (ignore) return;
+    if (ignore) {
+        // Clear Hessian to avoid stale data
+        if (flag == 3 && hess.size() > 0) {
+            std::fill(hess.begin(), hess.end(), 0.0);
+        }
+        return;
+    }
 
     // Build linear predictor(s)
     // PERFORMANCE: Use thread_local static to avoid allocation on every call
