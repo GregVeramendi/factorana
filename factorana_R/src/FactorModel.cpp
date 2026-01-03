@@ -381,13 +381,6 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     std::vector<double> totalhess;
     if (iflag == 3) totalhess.resize(nparam * nparam, 0.0);
 
-    // Constant for quadrature transformation
-    const double sqrt_2 = std::sqrt(2.0);
-
-    std::vector<double> gradilk(nparam, 0.0);  // Gradient at integration point
-    std::vector<double> hessilk;
-    if (iflag == 3) hessilk.resize(nparam * nparam, 0.0);
-
     // Pre-allocate working vectors outside the loops for performance
     // These are reused across observations and integration points
     std::vector<double> fac_val(nfac);
@@ -450,19 +443,6 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         std::vector<int> facint(nfac, 0);
 
         for (int intpt = 0; intpt < nint_points; intpt++) {
-            // Reset gradient/Hessian for this integration point
-            if (iflag >= 2) std::fill(gradilk.begin(), gradilk.end(), 0.0);
-            // OPTIMIZATION: Only zero free parameter entries (like legacy code)
-            if (iflag == 3) {
-                for (int fi = 0; fi < nparam_free; fi++) {
-                    int i = freeparlist[fi];
-                    for (int fj = fi; fj < nparam_free; fj++) {
-                        int j = freeparlist[fj];
-                        hessilk[i * nparam + j] = 0.0;
-                    }
-                }
-            }
-
             // OPTIMIZATION: Pre-compute sigma_fac and x_node_fac once per integration point
             // These are reused for fac_val computation and gradient/Hessian chain rules
             for (int ifac = 0; ifac < nfac; ifac++) {
@@ -1029,51 +1009,49 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 }
             } // End of type loop
 
-            // Use type-weighted values for the integration point
-            // probilk already contains w_q (quadrature weight), multiply by mixture likelihood
-            probilk *= type_weighted_prob;
-
-            // gradilk needs to be d(log L_mixture)/dθ = (1/L_mixture) * dL_mixture/dθ
-            // type_weighted_grad = dL_mixture/dθ = Σ_t π_t * dL_t/dθ
-            // type_weighted_prob = L_mixture = Σ_t π_t * L_t
-            if (iflag >= 2 && type_weighted_prob > 1e-100) {
-                for (int ipar = 0; ipar < nparam; ipar++) {
-                    gradilk[ipar] = type_weighted_grad[ipar] / type_weighted_prob;
-                }
-            }
-            if (iflag == 3 && type_weighted_prob > 1e-100) {
-                // hessilk needs d²(log L_mixture)/dθ² which involves complex chain rule
-                // For now, convert to log scale: H_log = (1/L)*H - (1/L²)*g*g^T
-                // OPTIMIZATION: Only compute entries for free parameters
-                double L = type_weighted_prob;
-                for (int fi = 0; fi < nparam_free; fi++) {
-                    int i = freeparlist[fi];
-                    for (int fj = fi; fj < nparam_free; fj++) {
-                        int j = freeparlist[fj];
-                        int idx = i * nparam + j;
-                        hessilk[idx] = type_weighted_hess[idx] / L
-                            - (type_weighted_grad[i] * type_weighted_grad[j]) / (L * L);
-                    }
-                }
-            }
-
             // ===== STEP 10: Accumulate weighted contributions =====
-            totalprob += probilk;
+            // OPTIMIZATION: Accumulate raw likelihood derivatives directly, convert once at end.
+            // This eliminates the O(nparam²) hessilk conversion loop per integration point.
+            //
+            // Mathematical justification:
+            // We need: totalhess = Σ w_q * d²L/dθ²  (raw Hessian, not log-likelihood)
+            //          totalgrad = Σ w_q * dL/dθ    (raw gradient)
+            //          totalprob = Σ w_q * L        (total probability)
+            //
+            // type_weighted_hess = L * (d²(log L)/dθ² + d(log L)/dθ * d(log L)/dθ')
+            //                    = d²L/dθ²  (this IS the raw Hessian, not log!)
+            // type_weighted_grad = L * d(log L)/dθ = dL/dθ  (raw gradient)
+            // type_weighted_prob = L
+            //
+            // So: totalhess += quad_weight * type_weighted_hess = w_q * d²L/dθ²
+            //     totalgrad += quad_weight * type_weighted_grad = w_q * dL/dθ
+            //     totalprob += quad_weight * type_weighted_prob = w_q * L
+            //
+            // At the end per observation, convert to log-likelihood:
+            //     d²(log L)/dθ² = totalhess/totalprob - totalgrad*totalgrad'/(totalprob²)
 
+            // probilk is the quadrature weight at this point
+            double quad_weight = probilk;
+
+            // Update totalprob with weighted likelihood
+            totalprob += quad_weight * type_weighted_prob;
+
+            // Accumulate raw gradient (not log-gradient)
             if (iflag >= 2) {
                 for (int ipar = 0; ipar < nparam; ipar++) {
-                    totalgrad[ipar] += probilk * gradilk[ipar];
+                    totalgrad[ipar] += quad_weight * type_weighted_grad[ipar];
                 }
             }
 
+            // Accumulate raw Hessian directly - no hessilk conversion needed!
+            // OPTIMIZATION: Only compute entries for free parameters (like legacy code)
             if (iflag == 3) {
-                // OPTIMIZATION: Only compute entries for free parameters (like legacy code)
                 for (int fi = 0; fi < nparam_free; fi++) {
                     int i = freeparlist[fi];
                     for (int fj = fi; fj < nparam_free; fj++) {
                         int j = freeparlist[fj];
                         int idx = i * nparam + j;
-                        totalhess[idx] += probilk * (hessilk[idx] + gradilk[i] * gradilk[j]);
+                        totalhess[idx] += quad_weight * type_weighted_hess[idx];
                     }
                 }
             }
