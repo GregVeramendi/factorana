@@ -1,5 +1,8 @@
 ## Makevars.win for factorana (Windows)
 
 PKG_CPPFLAGS = -DEIGEN_PERMANENTLY_DISABLE_STUPID_WARNINGS
-PKG_CXXFLAGS = -std=c++11
-PKG_LIBS =
+
+## Use O3 for more aggressive optimization
+PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) -O3
+
+PKG_LIBS = $(SHLIB_OPENMP_LDFLAGS)

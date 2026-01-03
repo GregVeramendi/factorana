@@ -1,5 +1,9 @@
 ## Makevars for factorana
 
 PKG_CPPFLAGS = -DEIGEN_PERMANENTLY_DISABLE_STUPID_WARNINGS
-PKG_CXXFLAGS = -std=c++11
-PKG_LIBS =
+
+## Use O3 for more aggressive optimization, native arch for CPU-specific optimizations
+PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) -O3 -march=native
+
+## Link against Accelerate framework on macOS for optimized math (exp, erfc, etc.)
+PKG_LIBS = $(SHLIB_OPENMP_LDFLAGS) -framework Accelerate
