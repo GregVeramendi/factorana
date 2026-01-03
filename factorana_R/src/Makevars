@@ -2,8 +2,8 @@
 
 PKG_CPPFLAGS = -DEIGEN_PERMANENTLY_DISABLE_STUPID_WARNINGS
 
-## Use O3 for more aggressive optimization, native arch for CPU-specific optimizations
-PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) -O3 -march=native
+## Use O2 for optimization (same as legacy code), native arch for CPU-specific optimizations
+PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) -O2 -march=native
 
 ## OS-specific libraries
 ## On macOS: link against Accelerate framework for optimized math
