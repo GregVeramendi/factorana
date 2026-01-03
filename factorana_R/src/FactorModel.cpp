@@ -399,13 +399,88 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     std::vector<int> facint(nfac);           // Integration point indices (odometer)
     std::vector<double> type_probs(ntyp);    // Type probabilities (avoid allocation in ComputeTypeProbabilities)
 
-    // OPTIMIZATION: Pre-allocate vectors for chain rule factors
-    // These store sqrt(factor_var), quadrature nodes, and derivatives per factor
-    // Computed once per integration point, reused throughout type/model loops
+    // OPTIMIZATION: Precompute sigma_fac ONCE (sqrt of factor variances)
+    // These are constant for all observations and all integration points
     std::vector<double> sigma_fac(nfac);
+    for (int ifac = 0; ifac < nfac; ifac++) {
+        sigma_fac[ifac] = std::sqrt(factor_var[ifac]);
+    }
+
+    // OPTIMIZATION: In non-adaptive mode, precompute integration point tables
+    // This avoids redundant computation across observations
+    // Tables: fac_val, probilk, df_dsigma2, d2f_dsigma2_sq for each integration point
+    std::vector<std::vector<double>> fac_val_table;
+    std::vector<double> probilk_table;
+    std::vector<std::vector<double>> df_dsigma2_table;
+    std::vector<std::vector<double>> d2f_dsigma2_table;  // Second derivative for Hessian
+
+    if (!use_adaptive) {
+        fac_val_table.resize(nint_points_default, std::vector<double>(nfac));
+        probilk_table.resize(nint_points_default);
+        if (iflag >= 2) {
+            df_dsigma2_table.resize(nint_points_default, std::vector<double>(nfac));
+        }
+        if (iflag == 3) {
+            d2f_dsigma2_table.resize(nint_points_default, std::vector<double>(nfac));
+        }
+
+        // Use odometer method to iterate through all integration points
+        std::vector<int> precomp_facint(nfac, 0);
+        for (int intpt = 0; intpt < nint_points_default; intpt++) {
+            // Compute weight (product over dimensions)
+            double probilk = 1.0;
+            for (int ifac = 0; ifac < nfac; ifac++) {
+                probilk *= quad_weights[precomp_facint[ifac]];
+            }
+            probilk_table[intpt] = probilk;
+
+            // Compute factor values at this integration point
+            if (fac_corr && nfac == 2) {
+                // Correlated 2-factor model: use Cholesky transformation
+                double x0 = quad_nodes[precomp_facint[0]];
+                double x1 = quad_nodes[precomp_facint[1]];
+                fac_val_table[intpt][0] = sigma_fac[0] * x0 + factor_mean[0];
+                fac_val_table[intpt][1] = rho * sigma_fac[1] * x0 + sigma_fac[1] * sqrt_1_minus_rho2 * x1 + factor_mean[1];
+            } else {
+                // Independent factors
+                for (int ifac = 0; ifac < nfac; ifac++) {
+                    double x_node = quad_nodes[precomp_facint[ifac]];
+                    fac_val_table[intpt][ifac] = sigma_fac[ifac] * x_node + factor_mean[ifac];
+                }
+            }
+
+            // Precompute chain rule factors for gradients
+            if (iflag >= 2) {
+                for (int ifac = 0; ifac < nfac; ifac++) {
+                    double x_node = quad_nodes[precomp_facint[ifac]];
+                    // df/d(sigma^2) = x_node / (2 * sigma)
+                    df_dsigma2_table[intpt][ifac] = x_node / (2.0 * sigma_fac[ifac]);
+                }
+            }
+
+            // Precompute second derivatives for Hessian
+            if (iflag == 3) {
+                for (int ifac = 0; ifac < nfac; ifac++) {
+                    double x_node = quad_nodes[precomp_facint[ifac]];
+                    double sigma_cubed = sigma_fac[ifac] * sigma_fac[ifac] * sigma_fac[ifac];
+                    // d²f/d(sigma²)² = -x_node / (4 * sigma³)
+                    d2f_dsigma2_table[intpt][ifac] = -x_node / (4.0 * sigma_cubed);
+                }
+            }
+
+            // Odometer increment
+            for (int ifac = 0; ifac < nfac; ifac++) {
+                precomp_facint[ifac]++;
+                if (precomp_facint[ifac] < nquad_points) break;
+                precomp_facint[ifac] = 0;
+            }
+        }
+    }
+
+    // Working vectors for adaptive mode (per-integration-point values)
     std::vector<double> x_node_fac(nfac);
-    std::vector<double> df_dsigma2(nfac);      // First derivative: x_node / (2 * sigma)
-    std::vector<double> d2f_dsigma2_sq(nfac);  // Second derivative: -x_node / (4 * sigma³)
+    std::vector<double> df_dsigma2(nfac);
+    std::vector<double> d2f_dsigma2_sq(nfac);
 
     // ===== STEP 5: Loop over observations =====
     for (int iobs = 0; iobs < nobs; iobs++) {
@@ -456,77 +531,71 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         std::fill(facint.begin(), facint.end(), 0);
 
         for (int intpt = 0; intpt < nint_points; intpt++) {
-            // OPTIMIZATION: Pre-compute sigma_fac and x_node_fac once per integration point
-            // These are reused for fac_val computation and gradient/Hessian chain rules
-            for (int ifac = 0; ifac < nfac; ifac++) {
-                sigma_fac[ifac] = std::sqrt(factor_var[ifac]);
-                if (use_adaptive) {
-                    int nq = obs_nq[ifac];
-                    x_node_fac[ifac] = adapt_nodes.at(nq)[facint[ifac]];
-                } else {
+            // OPTIMIZATION: In non-adaptive mode, use precomputed tables
+            // In adaptive mode, compute values per-observation
+            double probilk;
+
+            if (!use_adaptive) {
+                // Non-adaptive: copy from precomputed tables (same for all observations)
+                // The copy cost is negligible (just nfac doubles per integration point)
+                probilk = probilk_table[intpt];
+                for (int ifac = 0; ifac < nfac; ifac++) {
+                    fac_val[ifac] = fac_val_table[intpt][ifac];
+                    // Also set x_node_fac for correlated factor gradient/Hessian
                     x_node_fac[ifac] = quad_nodes[facint[ifac]];
                 }
-            }
+                if (iflag >= 2) {
+                    for (int ifac = 0; ifac < nfac; ifac++) {
+                        df_dsigma2[ifac] = df_dsigma2_table[intpt][ifac];
+                    }
+                }
+                if (iflag == 3) {
+                    for (int ifac = 0; ifac < nfac; ifac++) {
+                        d2f_dsigma2_sq[ifac] = d2f_dsigma2_table[intpt][ifac];
+                    }
+                }
+            } else {
+                // Adaptive mode: compute per-observation
+                // Get quadrature nodes for this observation
+                for (int ifac = 0; ifac < nfac; ifac++) {
+                    int nq = obs_nq[ifac];
+                    x_node_fac[ifac] = adapt_nodes.at(nq)[facint[ifac]];
+                }
 
-            // Get integration weight (product over dimensions)
-            double probilk = 1.0;
-            for (int ifac = 0; ifac < nfac; ifac++) {
-                if (use_adaptive) {
+                // Compute weight (product over dimensions)
+                probilk = 1.0;
+                for (int ifac = 0; ifac < nfac; ifac++) {
                     int nq = obs_nq[ifac];
                     probilk *= adapt_weights.at(nq)[facint[ifac]];
-                } else {
-                    probilk *= quad_weights[facint[ifac]];
                 }
-            }
 
-            // Compute factor values at this integration point (fac_val pre-allocated)
-            // OPTIMIZATION: Use pre-computed sigma_fac and x_node_fac instead of recalculating
-            if (fac_corr && nfac == 2 && !use_adaptive) {
-                // Correlated 2-factor model: use Cholesky transformation
-                // (Not supported in adaptive mode - requires independent factors)
-                // f1 = σ1 * z1
-                // f2 = ρ*σ2*z1 + σ2*√(1-ρ²)*z2
-                // where z1, z2 are independent GH quadrature nodes
-                fac_val[0] = sigma_fac[0] * x_node_fac[0] + factor_mean[0];
-                fac_val[1] = rho * sigma_fac[1] * x_node_fac[0] + sigma_fac[1] * sqrt_1_minus_rho2 * x_node_fac[1] + factor_mean[1];
-            } else {
-                // Independent factors: standard transformation
-                // In adaptive mode: center at factor score instead of 0
+                // Compute factor values (independent factors in adaptive mode)
                 for (int ifac = 0; ifac < nfac; ifac++) {
-                    // Factor transformation for GH quadrature
-                    // f = sigma * x + center (where center is factor_score in adaptive mode)
                     fac_val[ifac] = sigma_fac[ifac] * x_node_fac[ifac] + fac_center[ifac];
                 }
-            }
 
-            // Apply importance sampling correction for adaptive quadrature
-            // When centering at factor score instead of 0, we need to correct for
-            // the different normalizing constant of the prior density.
-            // Correction: exp(x²/2) × exp(-f²/(2σ²)) for each factor
-            // where x is the GH node and f is the factor value at this point.
-            if (use_adaptive) {
+                // Apply importance sampling correction
                 for (int ifac = 0; ifac < nfac; ifac++) {
                     int nq = obs_nq[ifac];
                     double x_node = adapt_nodes.at(nq)[facint[ifac]];
                     double f = fac_val[ifac];
                     double var = factor_var[ifac];
-
-                    // Importance sampling weight correction
-                    // This accounts for centering at fac_center instead of prior mean (0)
                     double is_correction = std::exp(x_node * x_node / 2.0 - f * f / (2.0 * var));
                     probilk *= is_correction;
                 }
-            }
 
-            // ===== STEP 7: Pre-compute chain rule factors for gradients/Hessians =====
-            // sigma_fac and x_node_fac are already pre-computed at the start of the integration point loop
-            // Here we compute first and second derivative factors for variance derivatives
-            for (int ifac = 0; ifac < nfac; ifac++) {
-                // Chain rule: df/d(sigma^2) = x_node / (2 * sigma)
-                df_dsigma2[ifac] = x_node_fac[ifac] / (2.0 * sigma_fac[ifac]);
-                // Second derivative: d²f/d(sigma²)² = -x_node / (4 * sigma³)
-                double sigma_cubed = sigma_fac[ifac] * sigma_fac[ifac] * sigma_fac[ifac];
-                d2f_dsigma2_sq[ifac] = -x_node_fac[ifac] / (4.0 * sigma_cubed);
+                // Compute chain rule factors for gradients/Hessians in adaptive mode
+                if (iflag >= 2) {
+                    for (int ifac = 0; ifac < nfac; ifac++) {
+                        df_dsigma2[ifac] = x_node_fac[ifac] / (2.0 * sigma_fac[ifac]);
+                    }
+                }
+                if (iflag == 3) {
+                    for (int ifac = 0; ifac < nfac; ifac++) {
+                        double sigma_cubed = sigma_fac[ifac] * sigma_fac[ifac] * sigma_fac[ifac];
+                        d2f_dsigma2_sq[ifac] = -x_node_fac[ifac] / (4.0 * sigma_cubed);
+                    }
+                }
             }
 
             // ===== STEP 8: Evaluate all models with type mixture =====
