@@ -391,6 +391,14 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     std::vector<double> hess_this_type;
     if (iflag == 3) hess_this_type.resize(nparam * nparam, 0.0);
 
+    // OPTIMIZATION: Pre-allocate per-observation vectors outside the loop
+    // These were previously allocated inside the observation loop, causing
+    // nobs vector allocations per call to CalcLkhd
+    std::vector<int> obs_nq(nfac);           // Number of quad points per factor
+    std::vector<double> fac_center(nfac);    // Center for factor integration
+    std::vector<int> facint(nfac);           // Integration point indices (odometer)
+    std::vector<double> type_probs(ntyp);    // Type probabilities (avoid allocation in ComputeTypeProbabilities)
+
     // OPTIMIZATION: Pre-allocate vectors for chain rule factors
     // These store sqrt(factor_var), quadrature nodes, and derivatives per factor
     // Computed once per integration point, reused throughout type/model loops
@@ -404,7 +412,12 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         int iobs_offset = iobs * nvar;
 
         double totalprob = 0.0;
-        if (iflag >= 2) std::fill(totalgrad.begin(), totalgrad.end(), 0.0);
+        // OPTIMIZATION: Only zero free parameter entries (not all nparam)
+        if (iflag >= 2) {
+            for (int fi = 0; fi < nparam_free; fi++) {
+                totalgrad[freeparlist[fi]] = 0.0;
+            }
+        }
         // OPTIMIZATION: Only zero free parameter entries (like legacy code)
         if (iflag == 3) {
             for (int fi = 0; fi < nparam_free; fi++) {
@@ -418,9 +431,8 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
         // ===== STEP 6: Multi-dimensional integration over factors =====
         // Determine per-observation integration settings
+        // OPTIMIZATION: obs_nq and fac_center are pre-allocated outside the observation loop
         int nint_points;
-        std::vector<int> obs_nq(nfac);  // Number of quad points per factor
-        std::vector<double> fac_center(nfac);  // Center for factor integration
 
         if (use_adaptive) {
             // Adaptive mode: use per-observation quadrature settings
@@ -440,7 +452,8 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         }
 
         // Use "odometer" method: facint tracks indices for each dimension
-        std::vector<int> facint(nfac, 0);
+        // OPTIMIZATION: facint is pre-allocated outside the observation loop, just reset to 0
+        std::fill(facint.begin(), facint.end(), 0);
 
         for (int intpt = 0; intpt < nint_points; intpt++) {
             // OPTIMIZATION: Pre-compute sigma_fac and x_node_fac once per integration point
@@ -520,8 +533,9 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             // For ntyp > 1: L = Σ_t π_t(f) × L_t(y|f) where L_t = Π_m L_m(y_m|f, intercept_t)
             // For ntyp == 1: Standard case (no type mixture)
 
-            // Compute type probabilities (returns [1.0] for ntyp == 1)
-            std::vector<double> type_probs = ComputeTypeProbabilities(fac_val);
+            // Compute type probabilities (fills pre-allocated type_probs vector)
+            // OPTIMIZATION: type_probs is pre-allocated outside the observation loop
+            ComputeTypeProbabilities(fac_val, type_probs);
 
             // Accumulators for type-weighted contributions (pre-allocated, zero here)
             // OPTIMIZATION: For ntyp=1, skip zeroing type_weighted_* - we accumulate directly into total*
@@ -1371,23 +1385,25 @@ int FactorModel::GetTypeInterceptIndex(int ityp, int model_idx)
     return base_params + ityp;
 }
 
-std::vector<double> FactorModel::ComputeTypeProbabilities(const std::vector<double>& fac)
+void FactorModel::ComputeTypeProbabilities(const std::vector<double>& fac, std::vector<double>& probs)
 {
     // Compute type probabilities using multinomial logit
     // Type model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
     //
     // P(type=1) = 1 / (1 + sum_{t=2}^T exp(sum_k lambda_t_k * f_k))
     // P(type=t) = exp(sum_k lambda_t_k * f_k) / (1 + sum_{t=2}^T exp(sum_k lambda_t_k * f_k))
-
-    std::vector<double> probs(ntyp);
+    //
+    // OPTIMIZATION: probs is pre-allocated by caller to avoid allocation per call
 
     if (ntyp == 1) {
         probs[0] = 1.0;
-        return probs;
+        return;
     }
 
     // Compute log-odds for types 2, 3, ... relative to type 1
-    std::vector<double> log_odds(ntyp - 1);
+    // OPTIMIZATION: Use stack-based array for small ntyp, heap otherwise
+    double log_odds_stack[16];  // Stack allocation for common case
+    double* log_odds = (ntyp <= 17) ? log_odds_stack : new double[ntyp - 1];
     double max_log_odds = 0.0;  // For numerical stability
 
     for (int t = 0; t < ntyp - 1; t++) {
@@ -1413,5 +1429,8 @@ std::vector<double> FactorModel::ComputeTypeProbabilities(const std::vector<doub
         probs[t + 1] = std::exp(log_odds[t] - max_log_odds) / sum_exp;
     }
 
-    return probs;
+    // Clean up if we used heap allocation
+    if (ntyp > 17) {
+        delete[] log_odds;
+    }
 }

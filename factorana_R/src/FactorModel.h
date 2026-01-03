@@ -178,8 +178,9 @@ private:
     int GetTypeInterceptIndex(int ityp, int model_idx);
 
     // Helper: Compute type probability from multinomial logit
-    // Returns vector of probabilities for each type given factor values
-    std::vector<double> ComputeTypeProbabilities(const std::vector<double>& fac);
+    // Fills pre-allocated probs vector with probabilities for each type given factor values
+    // OPTIMIZATION: Output vector passed by reference to avoid allocation per call
+    void ComputeTypeProbabilities(const std::vector<double>& fac, std::vector<double>& probs);
 };
 
 #endif // FACTORMODEL_H
