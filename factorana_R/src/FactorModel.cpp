@@ -406,22 +406,20 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         sigma_fac[ifac] = std::sqrt(factor_var[ifac]);
     }
 
-    // OPTIMIZATION: In non-adaptive mode, precompute integration point tables
-    // This avoids redundant computation across observations
-    // Tables: fac_val, probilk, df_dsigma2, d2f_dsigma2_sq for each integration point
+    // OPTIMIZATION: Precompute integration point tables for likelihood/gradient only
+    // For Hessian (iflag==3), inline computation is faster due to better cache locality
+    // This gives us: faster likelihood/gradient from precomputation, fast Hessian from inline
+    bool use_precomputed_tables = !use_adaptive && (iflag < 3);
+
     std::vector<std::vector<double>> fac_val_table;
     std::vector<double> probilk_table;
     std::vector<std::vector<double>> df_dsigma2_table;
-    std::vector<std::vector<double>> d2f_dsigma2_table;  // Second derivative for Hessian
 
-    if (!use_adaptive) {
+    if (use_precomputed_tables) {
         fac_val_table.resize(nint_points_default, std::vector<double>(nfac));
         probilk_table.resize(nint_points_default);
         if (iflag >= 2) {
             df_dsigma2_table.resize(nint_points_default, std::vector<double>(nfac));
-        }
-        if (iflag == 3) {
-            d2f_dsigma2_table.resize(nint_points_default, std::vector<double>(nfac));
         }
 
         // Use odometer method to iterate through all integration points
@@ -453,18 +451,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             if (iflag >= 2) {
                 for (int ifac = 0; ifac < nfac; ifac++) {
                     double x_node = quad_nodes[precomp_facint[ifac]];
-                    // df/d(sigma^2) = x_node / (2 * sigma)
                     df_dsigma2_table[intpt][ifac] = x_node / (2.0 * sigma_fac[ifac]);
-                }
-            }
-
-            // Precompute second derivatives for Hessian
-            if (iflag == 3) {
-                for (int ifac = 0; ifac < nfac; ifac++) {
-                    double x_node = quad_nodes[precomp_facint[ifac]];
-                    double sigma_cubed = sigma_fac[ifac] * sigma_fac[ifac] * sigma_fac[ifac];
-                    // d²f/d(sigma²)² = -x_node / (4 * sigma³)
-                    d2f_dsigma2_table[intpt][ifac] = -x_node / (4.0 * sigma_cubed);
                 }
             }
 
@@ -531,17 +518,17 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         std::fill(facint.begin(), facint.end(), 0);
 
         for (int intpt = 0; intpt < nint_points; intpt++) {
-            // OPTIMIZATION: In non-adaptive mode, use precomputed tables
-            // In adaptive mode, compute values per-observation
+            // OPTIMIZATION: Three code paths for different scenarios:
+            // 1. use_precomputed_tables: likelihood/gradient in non-adaptive mode (use precomputed tables)
+            // 2. !use_adaptive && !use_precomputed_tables: Hessian in non-adaptive mode (inline computation)
+            // 3. use_adaptive: any computation in adaptive mode (per-observation settings)
             double probilk;
 
-            if (!use_adaptive) {
-                // Non-adaptive: copy from precomputed tables (same for all observations)
-                // The copy cost is negligible (just nfac doubles per integration point)
+            if (use_precomputed_tables) {
+                // Non-adaptive likelihood/gradient: use precomputed tables
                 probilk = probilk_table[intpt];
                 for (int ifac = 0; ifac < nfac; ifac++) {
                     fac_val[ifac] = fac_val_table[intpt][ifac];
-                    // Also set x_node_fac for correlated factor gradient/Hessian
                     x_node_fac[ifac] = quad_nodes[facint[ifac]];
                 }
                 if (iflag >= 2) {
@@ -549,9 +536,35 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                         df_dsigma2[ifac] = df_dsigma2_table[intpt][ifac];
                     }
                 }
+            } else if (!use_adaptive) {
+                // Non-adaptive Hessian: compute inline for better cache locality
+                // This avoids table allocation overhead that hurts Hessian performance
+                probilk = 1.0;
+                for (int ifac = 0; ifac < nfac; ifac++) {
+                    probilk *= quad_weights[facint[ifac]];
+                    x_node_fac[ifac] = quad_nodes[facint[ifac]];
+                }
+
+                // Compute factor values
+                if (fac_corr && nfac == 2) {
+                    double x0 = x_node_fac[0];
+                    double x1 = x_node_fac[1];
+                    fac_val[0] = sigma_fac[0] * x0 + factor_mean[0];
+                    fac_val[1] = rho * sigma_fac[1] * x0 + sigma_fac[1] * sqrt_1_minus_rho2 * x1 + factor_mean[1];
+                } else {
+                    for (int ifac = 0; ifac < nfac; ifac++) {
+                        fac_val[ifac] = sigma_fac[ifac] * x_node_fac[ifac] + factor_mean[ifac];
+                    }
+                }
+
+                // Compute chain rule factors for gradient/Hessian
+                for (int ifac = 0; ifac < nfac; ifac++) {
+                    df_dsigma2[ifac] = x_node_fac[ifac] / (2.0 * sigma_fac[ifac]);
+                }
                 if (iflag == 3) {
                     for (int ifac = 0; ifac < nfac; ifac++) {
-                        d2f_dsigma2_sq[ifac] = d2f_dsigma2_table[intpt][ifac];
+                        double sigma_cubed = sigma_fac[ifac] * sigma_fac[ifac] * sigma_fac[ifac];
+                        d2f_dsigma2_sq[ifac] = -x_node_fac[ifac] / (4.0 * sigma_cubed);
                     }
                 }
             } else {
