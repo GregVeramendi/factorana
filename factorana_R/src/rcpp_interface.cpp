@@ -64,6 +64,24 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
     int n_mixtures = factor_model["n_mixtures"];
     bool correlation = factor_model["correlation"];
 
+    // Parse factor_structure
+    FactorStructure fac_struct = FactorStructure::INDEPENDENT;
+    if (factor_model.containsElementNamed("factor_structure")) {
+        std::string fac_struct_str = as<std::string>(factor_model["factor_structure"]);
+        if (fac_struct_str == "correlation") {
+            fac_struct = FactorStructure::CORRELATION;
+        } else if (fac_struct_str == "SE_linear") {
+            fac_struct = FactorStructure::SE_LINEAR;
+        } else if (fac_struct_str == "SE_quadratic") {
+            fac_struct = FactorStructure::SE_QUADRATIC;
+        } else if (fac_struct_str == "independent") {
+            fac_struct = FactorStructure::INDEPENDENT;
+        }
+    } else if (correlation) {
+        // Backward compatibility: correlation = TRUE maps to CORRELATION
+        fac_struct = FactorStructure::CORRELATION;
+    }
+
     // Convert data to matrix (handle both data.frame and matrix)
     NumericMatrix data_mat;
     if (Rf_isMatrix(data)) {
@@ -83,9 +101,9 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         Rcpp::stop("Data must have column names for variable indexing");
     }
 
-    // Create FactorModel object
+    // Create FactorModel object using new constructor with factor_structure
     Rcpp::XPtr<FactorModel> fm(
-        new FactorModel(n_obs, n_var, n_fac, n_types, n_mixtures, correlation, n_quad),
+        new FactorModel(n_obs, n_var, n_fac, n_types, n_mixtures, fac_struct, n_quad),
         true
     );
 
@@ -126,7 +144,18 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
 
         // Extract model component information
         std::string model_type_str = as<std::string>(comp["model_type"]);
-        std::string outcome_name = as<std::string>(comp["outcome"]);
+
+        // Handle outcome - can be single string or vector (for exploded logit)
+        std::vector<std::string> outcome_names;
+        SEXP outcome_sexp = comp["outcome"];
+        if (TYPEOF(outcome_sexp) == STRSXP) {
+            CharacterVector outcome_vec = as<CharacterVector>(outcome_sexp);
+            for (int j = 0; j < outcome_vec.size(); j++) {
+                outcome_names.push_back(std::string(outcome_vec[j]));
+            }
+        } else {
+            Rcpp::stop("outcome must be a character vector");
+        }
 
         // Handle covariates = NULL case
         std::vector<std::string> covariate_names;
@@ -138,23 +167,34 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         bool is_dynamic = comp.containsElementNamed("is_dynamic") &&
                          as<bool>(comp["is_dynamic"]);
 
-        // Find variable indices in data
+        // Find outcome variable indices in data
+        // For exploded logit, we need the index of the first outcome
+        // The Model will read consecutive columns: outcome_idx, outcome_idx+1, ..., outcome_idx+nrank-1
         int outcome_idx = -1;
-        for (int j = 0; j < col_names.size(); j++) {
-            if (std::string(col_names[j]) == outcome_name) {
-                outcome_idx = j;
-                break;
+
+        // Verify all outcome columns exist and are consecutive
+        std::vector<int> outcome_indices;
+        for (const auto& outcome_name : outcome_names) {
+            int idx = -1;
+            for (int j = 0; j < col_names.size(); j++) {
+                if (std::string(col_names[j]) == outcome_name) {
+                    idx = j;
+                    break;
+                }
             }
-        }
-        // For dynamic models, outcome is always zero, so use special marker -2
-        // (distinct from -1 which means "missing indicator not present")
-        if (outcome_idx == -1) {
-            if (is_dynamic) {
-                outcome_idx = -2;  // Special marker: outcome is always zero
-            } else {
-                Rcpp::stop("Outcome variable '" + outcome_name + "' not found in data");
+            if (idx == -1) {
+                if (is_dynamic && outcome_names.size() == 1) {
+                    idx = -2;  // Special marker: outcome is always zero
+                } else {
+                    Rcpp::stop("Outcome variable '" + outcome_name + "' not found in data");
+                }
             }
+            outcome_indices.push_back(idx);
         }
+
+        // For exploded logit, outcomes don't need to be consecutive in data
+        // We'll store first outcome index. The Model will use outcome_indices directly.
+        outcome_idx = outcome_indices[0];
 
         // Find covariate indices
         std::vector<int> regressor_idx;
@@ -221,6 +261,10 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         int n_choice = comp.containsElementNamed("num_choices") ?
                       int(comp["num_choices"]) : 2;
 
+        // Number of ranks for exploded logit (default 1 = standard logit)
+        int n_rank = comp.containsElementNamed("nrank") && !Rf_isNull(comp["nrank"]) ?
+                    int(comp["nrank"]) : 1;
+
         // Check if all parameters are fixed (for multi-stage estimation)
         bool all_params_fixed = false;
         if (comp.containsElementNamed("all_params_fixed")) {
@@ -246,8 +290,8 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         // Create Model object
         std::shared_ptr<Model> model = std::make_shared<Model>(
             mtype, outcome_idx, missing_idx, regressor_idx,
-            n_fac, n_types, facnorm, n_choice, 1, all_params_fixed, fspec,
-            is_dynamic, outcome_factor_idx
+            n_fac, n_types, facnorm, n_choice, n_rank, all_params_fixed, fspec,
+            is_dynamic, outcome_factor_idx, outcome_indices
         );
 
         // Calculate number of parameters for this model

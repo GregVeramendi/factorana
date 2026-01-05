@@ -44,8 +44,14 @@ define_model_component <- function(name,
   if (!is.data.frame(data)) stop("`data` must be a data.frame (or data.table/tibble).")
   data <- as.data.frame(data)
 
-  #Does 'outcome' exist in data.frame
-  if (!(outcome %in% names(data))) stop("outcome must be a column in data.frame")
+  # Validate outcome - can be single column name or vector of column names (for exploded logit)
+  if (!is.character(outcome) || length(outcome) < 1L) {
+    stop("`outcome` must be a character vector of column name(s).")
+  }
+  missing_outcomes <- setdiff(outcome, names(data))
+  if (length(missing_outcomes) > 0) {
+    stop("Outcome variable(s) not found in data: ", paste(missing_outcomes, collapse = ", "))
+  }
 
   #is the factor model a list?
   if (!is.list(factor)) stop("`factor` must be a list.") #should it be a list or object of S3 class???
@@ -131,10 +137,23 @@ define_model_component <- function(name,
     stop("`num_choices` cannot exceed 50. Found: ", num_choices)
   }
 
-  # n_rank: is it either NULL or > 1
-  if (!is.null(nrank)) {
+  # n_rank: infer from outcome vector length, or validate explicit parameter
+  # For exploded logit, nrank is the number of ranked choices
+  if (length(outcome) > 1) {
+    # Multiple outcome columns = exploded logit
+    if (model_type != "logit") {
+      stop("Multiple outcome variables (exploded logit) only supported for model_type='logit'.")
+    }
+    inferred_nrank <- length(outcome)
+    if (!is.null(nrank) && nrank != inferred_nrank) {
+      warning("nrank (", nrank, ") does not match length(outcome) (", inferred_nrank, "). Using length(outcome).")
+    }
+    nrank <- inferred_nrank
+  } else if (!is.null(nrank)) {
     nrank <- as.integer(nrank)
     if (!is.finite(nrank) || nrank < 1L) stop("`nrank` must be a positive integer when provided.")
+  } else {
+    nrank <- 1L  # Default: single outcome (standard logit)
   }
 
 
@@ -187,10 +206,16 @@ define_model_component <- function(name,
 
   # ---- 8. Missing value checks ----
   # Error if NAs found in outcome or covariates (users must handle missing data explicitly)
+  # Exception: For exploded logit, missing values in rank outcomes indicate unused ranks (allowed)
 
-  if (anyNA(data[[outcome]][idx])) {
-    stop("Missing values in outcome variable within evaluation subset.")
+  if (length(outcome) == 1) {
+    # Standard single outcome
+    if (anyNA(data[[outcome]][idx])) {
+      stop("Missing values in outcome variable within evaluation subset.")
+    }
   }
+  # For exploded logit (length(outcome) > 1), missing values in rank columns are allowed
+  # They indicate the individual didn't use that rank
 
   # covariates must not have missing (on the same subset)
   if (length(covariates) > 0) {
@@ -257,7 +282,8 @@ define_model_component <- function(name,
 
 
   # ---- 9. Model-type specific validity checks ----
-  y <- data[[outcome]]
+  # For single outcome, extract the column. For multiple outcomes (exploded logit), use first column for probit check
+  y <- if (length(outcome) == 1) data[[outcome]] else data[[outcome[1]]]
 
   if (model_type == "probit") {
     if (!all(y %in% c(0, 1))) {
@@ -269,16 +295,38 @@ define_model_component <- function(name,
   }
 
   if (model_type == "logit") {
-    unique_vals <- sort(unique(na.omit(y)))
-    if (!all(unique_vals %in% 0:(max(unique_vals)))) {
-      stop("Outcome for logit must be integers 0,...,K.")
-    }
-    n_unique <- length(unique_vals)
-    if (n_unique > 50L) {
-      stop("Logit outcome has too many unique values (", n_unique, "). Maximum supported: 50.")
-    }
-    if (num_choices != n_unique) {
-      stop("num_choices (", num_choices, ") does not match detected unique outcome values (", n_unique, ").")
+    # For exploded logit (nrank > 1), validate all outcome columns
+    if (nrank > 1) {
+      all_vals <- c()
+      for (out_col in outcome) {
+        y_rank <- data[[out_col]]
+        # For exploded logit, missing ranks can have values outside 1..num_choices (e.g., 0, NA, -1)
+        # Only validate non-missing values
+        valid_vals <- na.omit(y_rank)
+        valid_vals <- valid_vals[valid_vals >= 1 & valid_vals <= num_choices]
+        all_vals <- c(all_vals, valid_vals)
+      }
+      unique_vals <- sort(unique(all_vals))
+      if (length(unique_vals) == 0) {
+        stop("No valid outcome values found in ranked outcome columns.")
+      }
+      # For exploded logit, we don't require all choices to appear - just validate range
+      if (max(unique_vals) > num_choices) {
+        stop("Outcome values exceed num_choices (", num_choices, "). Found max: ", max(unique_vals))
+      }
+    } else {
+      # Standard logit: validate single outcome column
+      unique_vals <- sort(unique(na.omit(y)))
+      if (!all(unique_vals %in% 0:(max(unique_vals)))) {
+        stop("Outcome for logit must be integers 0,...,K.")
+      }
+      n_unique <- length(unique_vals)
+      if (n_unique > 50L) {
+        stop("Logit outcome has too many unique values (", n_unique, "). Maximum supported: 50.")
+      }
+      if (num_choices != n_unique) {
+        stop("num_choices (", num_choices, ") does not match detected unique outcome values (", n_unique, ").")
+      }
     }
   }
 

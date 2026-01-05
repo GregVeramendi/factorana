@@ -33,6 +33,7 @@ private:
     int numtyp;               // Number of types (for type-specific loadings)
     int numchoice;            // Number of choices (for discrete choice models)
     int numrank;              // Number of rankings (for ranked choice models)
+    std::vector<int> outcome_indices; // Outcome indices for each rank (exploded logit)
     bool ignore;              // If true, skip this model in likelihood
     bool all_params_fixed;    // If true, skip gradient/Hessian computation (use flag=1)
     FactorSpec factor_spec;   // Factor specification (linear, quadratic, interactions, full)
@@ -48,7 +49,8 @@ public:
           const std::vector<double>& fnorm = std::vector<double>(),
           int nchoice = 2, int nrank = 1, bool params_fixed = false,
           FactorSpec fspec = FactorSpec::LINEAR,
-          bool dynamic = false, int outcome_fac_idx = -1);
+          bool dynamic = false, int outcome_fac_idx = -1,
+          const std::vector<int>& outcome_idxs = std::vector<int>());
 
     // Main evaluation function
     // Computes likelihood, gradient, and Hessian for a single observation

@@ -30,16 +30,19 @@ initialize_parameters <- function(mc) {
   }
 
   # Check that the outcome exists and is non-missing
-  if (!mc$outcome %in% names(df0)) stop("Outcome '", mc$outcome, "' not in data.")
-  keep <- keep & !is.na(df0[[mc$outcome]])
+  # For exploded logit (multiple outcomes), use first outcome column
+  outcome_col <- if (length(mc$outcome) > 1) mc$outcome[1] else mc$outcome
+  if (!outcome_col %in% names(df0)) stop("Outcome '", outcome_col, "' not in data.")
+  keep <- keep & !is.na(df0[[outcome_col]])
   df0 <- df0[keep, , drop = FALSE]
   if (nrow(df0) == 0) stop("No rows to estimate for ", mc$name, " after conditioning on eval & non-missing outcome.")
   # -----------------------------------------------------------
 
   # ---- 2. Prepare regression data ----
   # Build y and X matrices, combining into a clean df for fitting
+  # For exploded logit, use first outcome for initialization purposes
 
-  y <- df0[[mc$outcome]]
+  y <- df0[[outcome_col]]
   covars <- unlist(mc$covariates, use.names = FALSE)
   X <- if (length(covars)) df0[, covars, drop = FALSE] else NULL
   df <- if (is.null(X)) data.frame(y = y) else data.frame(y = y, X, check.names = FALSE)

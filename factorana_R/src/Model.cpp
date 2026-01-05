@@ -10,7 +10,8 @@ Model::Model(ModelType type, int outcome, int missing,
              const std::vector<double>& fnorm,
              int nchoice, int nrank, bool params_fixed,
              FactorSpec fspec,
-             bool dynamic, int outcome_fac_idx)
+             bool dynamic, int outcome_fac_idx,
+             const std::vector<int>& outcome_idxs)
     : modtype(type), outcome_idx(outcome), missing_idx(missing),
       regressors(regs), numfac(nfac), numtyp(ntyp),
       facnorm(fnorm), numchoice(nchoice), numrank(nrank),
@@ -19,6 +20,14 @@ Model::Model(ModelType type, int outcome, int missing,
       is_dynamic(dynamic), outcome_factor_idx(outcome_fac_idx)
 {
     nregressors = regressors.size();
+
+    // Initialize outcome_indices for exploded logit
+    if (outcome_idxs.empty()) {
+        // Single outcome - create vector with just the outcome_idx
+        outcome_indices.push_back(outcome_idx);
+    } else {
+        outcome_indices = outcome_idxs;
+    }
 
     // Compute number of quadratic and interaction loadings based on factor_spec
     // For dynamic models, exclude the outcome factor from quadratic/interaction terms
@@ -860,16 +869,10 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
     // Multinomial logit with K choices (numchoice)
     // Choice 0 is reference category with Z_0 = 0
     // For choices 1 to K-1, we have separate parameters
-
-    // Observed choice (0-indexed: 0, 1, ..., numchoice-1)
-    int obsCat = int(outcome) - 1;  // Convert from 1-indexed to 0-indexed
-
-    if (obsCat < 0 || obsCat >= numchoice) {
-        std::cerr << "ERROR: Invalid multinomial choice " << int(outcome)
-                  << " (must be 1 to " << numchoice << ")" << std::endl;
-        modEval[0] = 1e-100;
-        return;
-    }
+    //
+    // For exploded logit (numrank > 1), we have multiple ranked choices per observation.
+    // The likelihood is the product of per-rank likelihoods.
+    // Gradients are the sum of per-rank log-likelihood gradients.
 
     // Count free factor loadings
     int ifreefac = 0;
@@ -881,43 +884,89 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
     // Number of parameters per choice
     int nparamchoice = nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings;
 
-    // Compute logit denominator: 1 + sum_{k=1}^{K-1} exp(Z_k)
-    double logitdenom = 1.0;
-    for (int icat = 1; icat < numchoice; icat++) {
-        logitdenom += std::exp(expres[icat - 1]);
-    }
+    // Initialize total likelihood to 1.0 (will multiply per-rank likelihoods)
+    modEval[0] = 1.0;
 
-    // Likelihood: P(Y = obsCat)
-    double dens = 1.0 / logitdenom;
-    if (obsCat > 0) {
-        dens *= std::exp(expres[obsCat - 1]);
-    }
-
-    modEval[0] = dens;
-
-    // Numerical stability
-    if (modEval[0] < 1e-100) modEval[0] = 1e-100;
-
-    if (flag < 2) return;
-
-    // ===== GRADIENT CALCULATION =====
-
-    // Softmax probabilities for all choices
-    std::vector<double> pdf(numchoice);
-    pdf[0] = 1.0 / logitdenom;
-    for (int icat = 1; icat < numchoice; icat++) {
-        pdf[icat] = std::exp(expres[icat - 1]) / logitdenom;
-    }
-
+    // Number of parameters for gradient/Hessian sizing
     int npar = numfac + (numchoice - 1) * nparamchoice;
 
-    // Intermediate gradient storage for Hessian (if needed)
+    // For exploded logit: track which choices have been made (excluded from later ranks)
+    std::vector<bool> chosen(numchoice, false);
+
+    // Intermediate gradient storage for Hessian (allocated once, reused per rank)
     std::vector<double> logitgrad;
     if (flag == 3) {
         logitgrad.resize(numchoice * npar, 0.0);
     }
 
-    // Gradient for factor variance parameters (theta)
+    // Loop over ranks for exploded logit
+    for (int irank = 0; irank < numrank; irank++) {
+        // Get outcome for this rank
+        double rank_outcome;
+        if (numrank == 1) {
+            rank_outcome = outcome;  // Standard logit: use passed outcome
+        } else {
+            // Exploded logit: read from data using stored outcome indices
+            rank_outcome = data[iobs_offset + outcome_indices[irank]];
+        }
+
+        // Observed choice (0-indexed: 0, 1, ..., numchoice-1)
+        int obsCat = int(rank_outcome) - 1;  // Convert from 1-indexed to 0-indexed
+
+        // Skip invalid ranks (missing choices indicated by value not in 1..numchoice)
+        if (obsCat < 0 || obsCat >= numchoice) {
+            if (numrank == 1) {
+                // For standard logit, invalid choice is an error
+                std::cerr << "ERROR: Invalid multinomial choice " << int(rank_outcome)
+                          << " (must be 1 to " << numchoice << ")" << std::endl;
+                modEval[0] = 1e-100;
+                return;
+            }
+            // For exploded logit, skip this rank (individual didn't use all ranks)
+            continue;
+        }
+
+        // Compute conditional denominator: sum over REMAINING choices only
+        // This is key for exploded logit - exclude already-chosen alternatives
+        double logitdenom = 0.0;
+        for (int icat = 0; icat < numchoice; icat++) {
+            if (!chosen[icat]) {  // Only include if not already chosen
+                if (icat == 0) {
+                    logitdenom += 1.0;  // Reference category
+                } else {
+                    logitdenom += std::exp(expres[icat - 1]);
+                }
+            }
+        }
+
+        // Compute conditional probabilities for remaining choices
+        std::vector<double> pdf(numchoice, 0.0);
+        for (int icat = 0; icat < numchoice; icat++) {
+            if (!chosen[icat]) {
+                if (icat == 0) {
+                    pdf[icat] = 1.0 / logitdenom;
+                } else {
+                    pdf[icat] = std::exp(expres[icat - 1]) / logitdenom;
+                }
+            }
+            // pdf[icat] = 0 for already-chosen alternatives
+        }
+
+        // Per-rank likelihood: P(Y = obsCat | remaining choices)
+        double dens = pdf[obsCat];
+
+        // Multiply into total likelihood
+        modEval[0] *= dens;
+
+        // Mark this choice as taken for subsequent ranks
+        chosen[obsCat] = true;
+
+        if (flag < 2) continue;  // Skip gradient computation for this rank
+
+        // ===== GRADIENT CALCULATION =====
+        // (pdf, npar, logitgrad are already computed/allocated before the rank loop)
+
+        // Gradient for factor variance parameters (theta)
     for (int ifac = 0; ifac < numfac; ifac++) {
         // Get loading value for this factor (either free from param or fixed from facnorm)
         double loading_for_grad;
@@ -1603,6 +1652,10 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         // The "correction" was double-counting these terms, causing the Hessian to be ~5x too large.
     }
 
+    } // End of rank loop
+
+    // Numerical stability for total likelihood
+    if (modEval[0] < 1e-100) modEval[0] = 1e-100;
 }
 
 void Model::EvalOprobit(double expres, int outcome_value,

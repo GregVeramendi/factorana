@@ -11,10 +11,17 @@
 #'   by its weight. Useful for survey weights, importance sampling, or giving different
 #'   observations different influence on the estimation. Weights should be positive.
 #'   The variable is extracted from the data passed to \code{estimate_model_rcpp()}.
+#' @param equality_constraints Optional. A list of character vectors, where each vector
+#'   specifies parameter names that should be constrained to be equal during estimation.
+#'   The first parameter in each group is the "primary" (freely estimated), and all
+#'   other parameters in the group are set equal to the primary.
+#'   Example: \code{list(c("Y1_loading_1", "Y2_loading_2"), c("Y1_sigma", "Y2_sigma"))}
+#'   This is useful for measurement invariance constraints in longitudinal models.
 #'
 #' @return An object of class "model_system". A list of model_component objects and one factor_model object.
 #' @export
-define_model_system <- function(components, factor, previous_stage = NULL, weights = NULL) {
+define_model_system <- function(components, factor, previous_stage = NULL, weights = NULL,
+                                equality_constraints = NULL) {
   # Validate the inputs:
 
   if (!is.list(components) || !all(sapply(components, inherits, "model_component"))) {
@@ -64,6 +71,19 @@ define_model_system <- function(components, factor, previous_stage = NULL, weigh
     }
   }
 
+  # Validate equality_constraints parameter
+  if (!is.null(equality_constraints)) {
+    if (!is.list(equality_constraints)) {
+      stop("`equality_constraints` must be a list of character vectors")
+    }
+    for (i in seq_along(equality_constraints)) {
+      constraint <- equality_constraints[[i]]
+      if (!is.character(constraint) || length(constraint) < 2) {
+        stop(sprintf("Each equality constraint must be a character vector with at least 2 parameter names (constraint %d)", i))
+      }
+    }
+  }
+
   # Handle previous_stage if provided
   previous_stage_info <- NULL
   if (!is.null(previous_stage)) {
@@ -110,7 +130,8 @@ define_model_system <- function(components, factor, previous_stage = NULL, weigh
     components = components,
     factor = factor,
     previous_stage_info = previous_stage_info,
-    weights = weights)
+    weights = weights,
+    equality_constraints = equality_constraints)
   class(out) <- "model_system"
   return(out)
 }
@@ -128,6 +149,12 @@ print.model_system <- function(x, ...) {
   cat("Components:", n, "\n")
   if (!is.null(x$weights)) {
     cat("Observation weights:", x$weights, "\n")
+  }
+  if (!is.null(x$equality_constraints)) {
+    cat("Equality constraints:", length(x$equality_constraints), "group(s)\n")
+    for (i in seq_along(x$equality_constraints)) {
+      cat(sprintf("  [%d] %s\n", i, paste(x$equality_constraints[[i]], collapse = " = ")))
+    }
   }
 
   if (!n) return(invisible(x))

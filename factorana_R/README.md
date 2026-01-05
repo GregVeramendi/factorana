@@ -59,6 +59,8 @@ devtools::install_github("GregVeramendi/factorana",
 - Define any number of latent factors with flexible loading normalization
 - Specify model components independently (linear, logit, probit, oprobit)
 - **Dynamic factor models**: Structural equations between latent factors via `define_dyn_model_component()`
+- **Structural equation factor models**: `factor_structure = "SE_linear"` or `"SE_quadratic"` for causal relationships (f₂ = α + α₁f₁ + ε)
+- **Equality constraints**: Measurement invariance for longitudinal models via `equality_constraints` in `define_model_system()`
 - **Nonlinear factor effects**: Model quadratic (`f²`) and interaction (`f_j × f_k`) factor terms via `factor_spec`
 - Fix regression coefficients to specific values via `fix_coefficient()`
 - Fix type-specific intercepts to zero via `fix_type_intercepts()` (for multi-type models)
@@ -573,10 +575,15 @@ mc2 <- define_model_component(
 ## API (R)
 More detailed explanations within functions.
 
-### define_factor_model(n_factors, n_types, correlation = FALSE, n_mixtures = 1)
+### define_factor_model(n_factors, n_types, correlation = FALSE, factor_structure = "independent", n_mixtures = 1)
 - `n_factors` (int ≥0): number of latent factors (use 0 for models without factors)
 - `n_types` (int ≥1): number of types
-- `correlation` (logical): whether factors are correlated (default: FALSE)
+- `correlation` (logical): **Deprecated**. Use `factor_structure = "correlation"` instead.
+- `factor_structure` (character): Structure of factor dependencies:
+  - `"independent"` (default): Factors are independent
+  - `"correlation"`: Correlated factors via Cholesky decomposition (2 factors only)
+  - `"SE_linear"`: Structural equation f₂ = α + α₁f₁ + ε
+  - `"SE_quadratic"`: Structural equation f₂ = α + α₁f₁ + α₂f₁² + ε
 - `n_mixtures` (int 1-3): number of discrete mixtures (default: 1)
 - Returns an object of class `"factor_model"`
 - **Note**: Loading normalization is specified at the component level via `define_model_component()`. Quadrature points are specified in `define_estimation_control()`.
@@ -673,7 +680,7 @@ More detailed explanations within functions.
   - Fixed type intercepts are excluded from the parameter vector entirely
   - Useful when type effects should operate only through factor loadings, not direct intercept shifts
 
-### define_model_system(components, factor, previous_stage = NULL, weights = NULL)
+### define_model_system(components, factor, previous_stage = NULL, weights = NULL, equality_constraints = NULL)
 - Bundles components and the shared factor model into a `"model_system"`.
 - `previous_stage` (optional): Result object from a previous `estimate_model_rcpp()` call
   - Enables multi-stage/sequential estimation
@@ -686,6 +693,12 @@ More detailed explanations within functions.
   - Useful for survey weights, importance sampling, or differential weighting
   - Weights must be positive and cannot contain NA values
   - Example: `define_model_system(components, fm, weights = "survey_weight")`
+- `equality_constraints` (optional): List of character vectors specifying parameters that should be equal
+  - Each vector defines a group of parameters constrained to be equal
+  - First parameter in each group is the "primary" (freely estimated)
+  - All other parameters are set equal to the primary during optimization
+  - Essential for measurement invariance in longitudinal models
+  - Example: `equality_constraints = list(c("Y1_loading_1", "Y2_loading_2"), c("Y1_sigma", "Y2_sigma"))`
 
 ### define_estimation_control(n_quad_points = 16, num_cores = 1, adaptive_integration = FALSE, adapt_int_thresh = 0.3)
 - Container for estimation settings including numerical integration and parallelization.
@@ -1030,6 +1043,146 @@ components_table(result_stage2)
 - Use `intercept = FALSE` to avoid identification issues with measurement intercepts
 - The variance/correlation checks show consistency between measurement model moments and structural equation parameters
 - Works with `factor_spec = "quadratic"` or `"interactions"` for nonlinear effects
+
+---
+
+### Structural Equation Factor Model (Longitudinal with Measurement Invariance)
+
+Model structural relationships between latent factors at different time points with measurement invariance constraints. This is useful for longitudinal studies where the same measures are used at different ages.
+
+<details>
+<summary><b>Click to expand longitudinal SE model example</b></summary>
+
+```r
+set.seed(123)
+n <- 1000
+
+# True parameters
+true_var_f1 <- 1.2          # Variance of factor at age 10
+true_se_intercept <- 0.0    # Set to 0 for identification
+true_se_linear <- 0.7       # Effect of age-10 factor on age-15 factor
+true_se_quadratic <- 0.15   # Quadratic effect
+true_se_residual_var <- 0.6 # Residual variance
+
+# Generate factors according to structural equation: f2 = alpha + alpha_1*f1 + alpha_2*f1^2 + epsilon
+f1 <- rnorm(n, 0, sqrt(true_var_f1))
+eps <- rnorm(n, 0, sqrt(true_se_residual_var))
+f2 <- true_se_intercept + true_se_linear * f1 + true_se_quadratic * f1^2 + eps
+
+# Measurement system - 3 tests measured at each age
+# Same test properties (measurement invariance)
+true_loading_t2 <- 1.1
+true_loading_t3 <- 0.9
+true_sigma_t1 <- 0.5
+true_sigma_t2 <- 0.6
+true_sigma_t3 <- 0.4
+
+# Age 10 measurements (factor 1)
+T1_age10 <- 0.0 + 1.0 * f1 + rnorm(n, 0, true_sigma_t1)  # loading fixed to 1
+T2_age10 <- 0.5 + true_loading_t2 * f1 + rnorm(n, 0, true_sigma_t2)
+T3_age10 <- 0.3 + true_loading_t3 * f1 + rnorm(n, 0, true_sigma_t3)
+
+# Age 15 measurements (factor 2) - SAME loadings and sigmas (invariance)
+T1_age15 <- 0.0 + 1.0 * f2 + rnorm(n, 0, true_sigma_t1)  # loading fixed to 1
+T2_age15 <- 0.5 + true_loading_t2 * f2 + rnorm(n, 0, true_sigma_t2)
+T3_age15 <- 0.3 + true_loading_t3 * f2 + rnorm(n, 0, true_sigma_t3)
+
+dat <- data.frame(
+  intercept = 1,
+  T1_age10 = T1_age10, T2_age10 = T2_age10, T3_age10 = T3_age10,
+  T1_age15 = T1_age15, T2_age15 = T2_age15, T3_age15 = T3_age15,
+  eval = 1
+)
+
+# ============================================================
+# Define SE_quadratic model: f2 = alpha + alpha_1*f1 + alpha_2*f1^2 + epsilon
+# ============================================================
+
+fm <- define_factor_model(n_factors = 2, factor_structure = "SE_quadratic")
+ctrl <- define_estimation_control(n_quad_points = 16, num_cores = 1)
+
+# Age 10 measurement equations (factor 1 = input factor)
+mc_t1_age10 <- define_model_component(
+  name = "t1_age10", data = dat, outcome = "T1_age10", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(1, 0), evaluation_indicator = "eval"
+)
+mc_t2_age10 <- define_model_component(
+  name = "t2_age10", data = dat, outcome = "T2_age10", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(NA_real_, 0), evaluation_indicator = "eval"
+)
+mc_t3_age10 <- define_model_component(
+  name = "t3_age10", data = dat, outcome = "T3_age10", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(NA_real_, 0), evaluation_indicator = "eval"
+)
+
+# Age 15 measurement equations (factor 2 = outcome factor)
+mc_t1_age15 <- define_model_component(
+  name = "t1_age15", data = dat, outcome = "T1_age15", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(0, 1), evaluation_indicator = "eval"
+)
+mc_t2_age15 <- define_model_component(
+  name = "t2_age15", data = dat, outcome = "T2_age15", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(0, NA_real_), evaluation_indicator = "eval"
+)
+mc_t3_age15 <- define_model_component(
+  name = "t3_age15", data = dat, outcome = "T3_age15", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = c(0, NA_real_), evaluation_indicator = "eval"
+)
+
+# Bundle with EQUALITY CONSTRAINTS for measurement invariance
+ms <- define_model_system(
+  components = list(mc_t1_age10, mc_t2_age10, mc_t3_age10,
+                    mc_t1_age15, mc_t2_age15, mc_t3_age15),
+  factor = fm,
+  equality_constraints = list(
+    # Same loadings across time
+    c("t2_age10_loading_1", "t2_age15_loading_2"),
+    c("t3_age10_loading_1", "t3_age15_loading_2"),
+    # Same sigmas across time
+    c("t1_age10_sigma", "t1_age15_sigma"),
+    c("t2_age10_sigma", "t2_age15_sigma"),
+    c("t3_age10_sigma", "t3_age15_sigma")
+  )
+)
+
+# Estimate
+result <- estimate_model_rcpp(ms, dat, control = ctrl, verbose = FALSE)
+
+# View structural equation parameters
+cat("Structural Equation: f2 = alpha + alpha_1*f1 + alpha_2*f1^2 + epsilon\n")
+cat("-------------------------------------------------------------------\n")
+cat(sprintf("  Var(f1):        %.3f (true = %.3f)\n",
+            result$estimates["factor_var_1"], true_var_f1))
+cat(sprintf("  SE intercept:   %.3f (true = %.3f)\n",
+            result$estimates["se_intercept"], true_se_intercept))
+cat(sprintf("  SE linear:      %.3f (true = %.3f)\n",
+            result$estimates["se_linear_1"], true_se_linear))
+cat(sprintf("  SE quadratic:   %.3f (true = %.3f)\n",
+            result$estimates["se_quadratic_1"], true_se_quadratic))
+cat(sprintf("  Residual var:   %.3f (true = %.3f)\n",
+            result$estimates["se_residual_var"], true_se_residual_var))
+
+# Verify equality constraints hold
+cat("\nEquality Constraints (measurement invariance):\n")
+cat(sprintf("  T2 loading: age10=%.3f, age15=%.3f (should be equal)\n",
+            result$estimates["t2_age10_loading_1"],
+            result$estimates["t2_age15_loading_2"]))
+```
+
+</details>
+
+**Key points:**
+- `factor_structure = "SE_quadratic"` specifies: f₂ = α + α₁f₁ + α₂f₁² + ε
+- Input factor (f₁) variance is estimated from measurement equations
+- Residual variance (σ²_ε) is a free parameter
+- `equality_constraints` enforces measurement invariance (same loadings/sigmas at both ages)
+- Parameter names: `se_intercept`, `se_linear_1`, `se_quadratic_1`, `se_residual_var`
 
 ---
 
@@ -1512,5 +1665,7 @@ Logs are saved to `tests/testthat/test_logs/` with detailed diagnostics.
 - Parameter recovery from simulated data
 - Gradient and Hessian accuracy checks
 - Factor interaction terms (quadratic and cross-product effects for all model types)
+- Structural equation factor models (SE_linear and SE_quadratic)
+- Equality constraints for measurement invariance with proper gradient aggregation
 
 ---

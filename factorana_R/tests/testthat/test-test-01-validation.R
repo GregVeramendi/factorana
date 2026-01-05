@@ -15,7 +15,7 @@ test_that("define_model_component validates inputs", {
   expect_error(
     define_model_component("bad", dat, "NOPE", fm,
                            covariates = "X1", model_type = "linear"),
-    regexp = "outcome must be a column"
+    regexp = "Outcome variable.*not found"
   )
 
   # missing covariate ("NOPE covariate doesn't exist)

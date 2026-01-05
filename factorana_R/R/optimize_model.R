@@ -124,11 +124,52 @@ build_parameter_metadata <- function(model_system) {
   param_types <- character(0)  # "factor_var", "factor_corr", "intercept", "beta", "loading", "sigma", "cutpoint"
   component_id <- integer(0)
 
-  # Add factor variances
-  for (k in seq_len(n_factors)) {
-    param_names <- c(param_names, sprintf("factor_var_%d", k))
-    param_types <- c(param_types, "factor_var")
-    component_id <- c(component_id, 0)  # 0 = factor model
+  # Add factor variances (for SE models, only input factors have variance params)
+  factor_structure <- model_system$factor$factor_structure
+  if (is.null(factor_structure)) factor_structure <- "independent"
+
+  if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
+    # SE models: only first (n_factors - 1) have variance parameters
+    n_input_factors <- n_factors - 1
+    for (k in seq_len(n_input_factors)) {
+      param_names <- c(param_names, sprintf("factor_var_%d", k))
+      param_types <- c(param_types, "factor_var")
+      component_id <- c(component_id, 0)  # 0 = factor model
+    }
+
+    # SE intercept
+    param_names <- c(param_names, "se_intercept")
+    param_types <- c(param_types, "se_intercept")
+    component_id <- c(component_id, 0)
+
+    # SE linear coefficients
+    for (j in seq_len(n_input_factors)) {
+      param_names <- c(param_names, sprintf("se_linear_%d", j))
+      param_types <- c(param_types, "se_linear")
+      component_id <- c(component_id, 0)
+    }
+
+    # SE quadratic coefficients (for SE_quadratic only)
+    if (factor_structure == "SE_quadratic") {
+      for (j in seq_len(n_input_factors)) {
+        param_names <- c(param_names, sprintf("se_quadratic_%d", j))
+        param_types <- c(param_types, "se_quadratic")
+        component_id <- c(component_id, 0)
+      }
+    }
+
+    # SE residual variance
+    param_names <- c(param_names, "se_residual_var")
+    param_types <- c(param_types, "se_residual_var")
+    component_id <- c(component_id, 0)
+
+  } else {
+    # Standard case: all n_factors have variance parameters
+    for (k in seq_len(n_factors)) {
+      param_names <- c(param_names, sprintf("factor_var_%d", k))
+      param_types <- c(param_types, "factor_var")
+      component_id <- c(component_id, 0)  # 0 = factor model
+    }
   }
 
   # Add factor correlation if correlation = TRUE and n_factors = 2
@@ -174,9 +215,12 @@ build_parameter_metadata <- function(model_system) {
         if (!is.null(comp$covariates) && length(comp$covariates) > 0) {
           for (cov in comp$covariates) {
             if (cov != "intercept") {
-              param_names <- c(param_names, sprintf("%s_beta_%s_alt%d", comp_name, cov, alt))
-              param_types <- c(param_types, "beta")
-              component_id <- c(component_id, i)
+              # Skip if this coefficient is fixed for this alternative
+              if (!is_coefficient_fixed(comp, cov, choice = alt)) {
+                param_names <- c(param_names, sprintf("%s_beta_%s_alt%d", comp_name, cov, alt))
+                param_types <- c(param_types, "beta")
+                component_id <- c(component_id, i)
+              }
             }
           }
         }
@@ -224,14 +268,17 @@ build_parameter_metadata <- function(model_system) {
       # Covariate coefficients - naming must match initialize_parameters.R: comp_name_covariate
       if (!is.null(comp$covariates) && length(comp$covariates) > 0) {
         for (cov in comp$covariates) {
-          param_names <- c(param_names, sprintf("%s_%s", comp_name, cov))
-          # Mark intercept type separately for constraint handling
-          if (cov == "intercept") {
-            param_types <- c(param_types, "intercept")
-          } else {
-            param_types <- c(param_types, "beta")
+          # Skip if this coefficient is fixed
+          if (!is_coefficient_fixed(comp, cov, choice = NULL)) {
+            param_names <- c(param_names, sprintf("%s_%s", comp_name, cov))
+            # Mark intercept type separately for constraint handling
+            if (cov == "intercept") {
+              param_types <- c(param_types, "intercept")
+            } else {
+              param_types <- c(param_types, "beta")
+            }
+            component_id <- c(component_id, i)
           }
-          component_id <- c(component_id, i)
         }
       }
 
@@ -462,6 +509,55 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
     }
   }
 
+  # Handle equality constraints
+  # For each constraint group, mark derived params (2nd, 3rd, ...) as fixed
+  # and store the mapping to their primary parameter
+  equality_mapping <- list()  # Maps derived param index -> primary param index
+
+  if (!is.null(model_system$equality_constraints)) {
+    for (constraint in model_system$equality_constraints) {
+      # Find parameter indices for each name in the constraint
+      param_indices <- match(constraint, param_metadata$names)
+
+      # Check that all parameter names were found
+      if (any(is.na(param_indices))) {
+        missing <- constraint[is.na(param_indices)]
+        stop(sprintf("Equality constraint references unknown parameter(s): %s\nAvailable parameters: %s",
+                     paste(missing, collapse = ", "),
+                     paste(param_metadata$names, collapse = ", ")))
+      }
+
+      # First parameter is the primary, rest are derived
+      primary_idx <- param_indices[1]
+
+      # Check that primary is not already fixed or derived
+      if (param_fixed[primary_idx]) {
+        stop(sprintf("Equality constraint primary parameter '%s' is already fixed", constraint[1]))
+      }
+
+      for (i in 2:length(param_indices)) {
+        derived_idx <- param_indices[i]
+
+        # Check that derived is not already fixed or derived
+        if (param_fixed[derived_idx]) {
+          stop(sprintf("Equality constraint parameter '%s' is already fixed", constraint[i]))
+        }
+        if (as.character(derived_idx) %in% names(equality_mapping)) {
+          stop(sprintf("Parameter '%s' appears in multiple equality constraints", constraint[i]))
+        }
+
+        # Mark derived as fixed and store mapping
+        param_fixed[derived_idx] <- TRUE
+        equality_mapping[[as.character(derived_idx)]] <- primary_idx
+
+        if (verbose) {
+          message(sprintf("  Equality constraint: param %d (%s) = param %d (%s)",
+                          derived_idx, constraint[i], primary_idx, constraint[1]))
+        }
+      }
+    }
+  }
+
   free_idx <- which(!param_fixed)
   n_free <- length(free_idx)
 
@@ -472,7 +568,8 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
     free_idx = free_idx,
     n_free = n_free,
     lower_bounds_free = lower_bounds[free_idx],
-    upper_bounds_free = upper_bounds[free_idx]
+    upper_bounds_free = upper_bounds[free_idx],
+    equality_mapping = equality_mapping  # Maps derived -> primary
   ))
 }
 
@@ -909,11 +1006,26 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     message("")
   }
 
+  # Helper function to apply equality constraints to full parameter vector
+  apply_equality_constraints <- function(params_full) {
+    if (length(param_constraints$equality_mapping) > 0) {
+      for (derived_idx_str in names(param_constraints$equality_mapping)) {
+        derived_idx <- as.integer(derived_idx_str)
+        primary_idx <- param_constraints$equality_mapping[[derived_idx_str]]
+        params_full[derived_idx] <- params_full[primary_idx]
+      }
+    }
+    return(params_full)
+  }
+
   # Define objective function (operates on free parameters only)
   objective_fn <- function(params_free) {
     # Reconstruct full parameter vector
     params_full <- init_params
     params_full[param_constraints$free_idx] <- params_free
+
+    # Apply equality constraints: derived params = primary params
+    params_full <- apply_equality_constraints(params_full)
 
     if (!is.null(cl)) {
       # Parallel evaluation: aggregate across workers
@@ -935,6 +1047,9 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     params_full <- init_params
     params_full[param_constraints$free_idx] <- params_free
 
+    # Apply equality constraints: derived params = primary params
+    params_full <- apply_equality_constraints(params_full)
+
     if (!is.null(cl)) {
       # Parallel evaluation: aggregate gradients
       parallel::clusterExport(cl, "params_full", envir = environment())
@@ -952,6 +1067,16 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       grad_full <- result$gradient
     }
 
+    # Aggregate gradients for equality constraints:
+    # grad[primary] += grad[derived] (chain rule for constrained optimization)
+    if (length(param_constraints$equality_mapping) > 0) {
+      for (derived_idx_str in names(param_constraints$equality_mapping)) {
+        derived_idx <- as.integer(derived_idx_str)
+        primary_idx <- param_constraints$equality_mapping[[derived_idx_str]]
+        grad_full[primary_idx] <- grad_full[primary_idx] + grad_full[derived_idx]
+      }
+    }
+
     # Return gradient for free parameters only
     return(-grad_full[param_constraints$free_idx])  # Negative for minimization
   }
@@ -961,6 +1086,9 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     # Reconstruct full parameter vector
     params_full <- init_params
     params_full[param_constraints$free_idx] <- params_free
+
+    # Apply equality constraints: derived params = primary params
+    params_full <- apply_equality_constraints(params_full)
 
     if (!is.null(cl)) {
       # Parallel evaluation: aggregate Hessians
@@ -1006,6 +1134,30 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
         hess_mat_full[i, j] <- hess[idx]
         hess_mat_full[j, i] <- hess[idx]  # Symmetrize
         idx <- idx + 1
+      }
+    }
+
+    # Aggregate Hessian for equality constraints
+    # For constraint θ_d = θ_p, the chain rule gives:
+    # H_new[p,p] = H[p,p] + 2*H[p,d] + H[d,d]
+    # H_new[p,q] = H[p,q] + H[d,q] for any other parameter q
+    if (length(param_constraints$equality_mapping) > 0) {
+      for (derived_idx_str in names(param_constraints$equality_mapping)) {
+        derived_idx <- as.integer(derived_idx_str)
+        primary_idx <- param_constraints$equality_mapping[[derived_idx_str]]
+
+        # Add H[d,d] and 2*H[p,d] to H[p,p]
+        hess_mat_full[primary_idx, primary_idx] <- hess_mat_full[primary_idx, primary_idx] +
+                                                   2 * hess_mat_full[primary_idx, derived_idx] +
+                                                   hess_mat_full[derived_idx, derived_idx]
+
+        # Add H[d,q] to H[p,q] for all other parameters q != p, d
+        for (q in seq_len(n_params_full)) {
+          if (q != primary_idx && q != derived_idx) {
+            hess_mat_full[primary_idx, q] <- hess_mat_full[primary_idx, q] + hess_mat_full[derived_idx, q]
+            hess_mat_full[q, primary_idx] <- hess_mat_full[primary_idx, q]  # Keep symmetric
+          }
+        }
       }
     }
 
@@ -1203,6 +1355,9 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   estimates <- init_params
   estimates[param_constraints$free_idx] <- estimates_free
 
+  # Apply equality constraints to final estimates
+  estimates <- apply_equality_constraints(estimates)
+
   # Compute Hessian for standard errors
   if (verbose) message("Computing Hessian for standard errors...")
 
@@ -1398,6 +1553,16 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     }
   }
 
+  # Build equality constraint info for param_table
+  equality_tied_to <- rep(NA_character_, length(estimates))
+  if (length(param_constraints$equality_mapping) > 0) {
+    for (derived_idx_str in names(param_constraints$equality_mapping)) {
+      derived_idx <- as.integer(derived_idx_str)
+      primary_idx <- param_constraints$equality_mapping[[derived_idx_str]]
+      equality_tied_to[derived_idx] <- param_metadata$names[primary_idx]
+    }
+  }
+
   # Build param_table for easier access to organized parameter info
   param_table <- data.frame(
     name = param_metadata$names,
@@ -1408,6 +1573,7 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     estimate = estimates,
     std_error = std_errors,
     fixed = param_constraints$param_fixed,
+    tied_to = equality_tied_to,
     stringsAsFactors = FALSE
   )
 
@@ -1424,7 +1590,8 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     evaluations = opt_result$evaluations,
     optimization_time = optimization_time_secs,
     model_system = model_system,
-    optimizer = optimizer
+    optimizer = optimizer,
+    equality_constraints = model_system$equality_constraints
   )
   class(result) <- "factorana_result"
   result

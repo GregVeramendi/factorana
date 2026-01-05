@@ -79,10 +79,88 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
     init_params <- rep(1.0, n_factors)
     param_names <- paste0("factor_var_", seq_len(n_factors))
 
-    # Add correlation parameters if correlation = TRUE
-    if (isTRUE(model_system$factor$correlation) && n_factors == 2) {
+    # Add structure-specific parameters based on factor_structure
+    factor_structure <- model_system$factor$factor_structure
+    if (is.null(factor_structure)) factor_structure <- "independent"
+
+    if (factor_structure == "SE_linear") {
+      # SE_linear: f_k = alpha + alpha_1*f_1 + ... + epsilon
+      # For SE_linear, only first (n_factors - 1) variances are estimated
+      # Remove last factor variance and add SE parameters instead
+      init_params <- init_params[1:(n_factors - 1)]
+      param_names <- param_names[1:(n_factors - 1)]
+
+      # Update factor_variance_fixed (only applies to input factors)
+      factor_variance_fixed <- factor_variance_fixed[1:(n_factors - 1)]
+
+      # SE parameters: intercept, linear coefficients, residual variance
+      n_input_factors <- n_factors - 1
+
+      # SE intercept (initialize to 0)
+      init_params <- c(init_params, 0.0)
+      param_names <- c(param_names, "se_intercept")
+
+      # SE linear coefficients (initialize to reasonable values)
+      for (j in seq_len(n_input_factors)) {
+        init_params <- c(init_params, 0.5)
+        param_names <- c(param_names, paste0("se_linear_", j))
+      }
+
+      # SE residual variance (initialize to 1.0)
+      init_params <- c(init_params, 1.0)
+      param_names <- c(param_names, "se_residual_var")
+
+      if (verbose) {
+        message(sprintf("SE_linear structure: f_%d = intercept + linear_coefs * f_1..%d + epsilon",
+                        n_factors, n_input_factors))
+      }
+
+    } else if (factor_structure == "SE_quadratic") {
+      # SE_quadratic: f_k = alpha + alpha_1*f_1 + alpha_q1*f_1^2 + ... + epsilon
+      # Similar to SE_linear but with quadratic terms added
+      # Remove last factor variance and add SE parameters instead
+      init_params <- init_params[1:(n_factors - 1)]
+      param_names <- param_names[1:(n_factors - 1)]
+
+      # Update factor_variance_fixed (only applies to input factors)
+      factor_variance_fixed <- factor_variance_fixed[1:(n_factors - 1)]
+
+      # SE parameters: intercept, linear coefficients, quadratic coefficients, residual variance
+      n_input_factors <- n_factors - 1
+
+      # SE intercept (initialize to 0)
+      init_params <- c(init_params, 0.0)
+      param_names <- c(param_names, "se_intercept")
+
+      # SE linear coefficients (initialize to reasonable values)
+      for (j in seq_len(n_input_factors)) {
+        init_params <- c(init_params, 0.5)
+        param_names <- c(param_names, paste0("se_linear_", j))
+      }
+
+      # SE quadratic coefficients (initialize to 0 - neutral starting point)
+      for (j in seq_len(n_input_factors)) {
+        init_params <- c(init_params, 0.0)
+        param_names <- c(param_names, paste0("se_quadratic_", j))
+      }
+
+      # SE residual variance (initialize to 1.0)
+      init_params <- c(init_params, 1.0)
+      param_names <- c(param_names, "se_residual_var")
+
+      if (verbose) {
+        message(sprintf("SE_quadratic structure: f_%d = intercept + linear_coefs * f_1..%d + quadratic_coefs * f_1^2..%d + epsilon",
+                        n_factors, n_input_factors, n_input_factors))
+      }
+
+    } else if (factor_structure == "correlation" && n_factors == 2) {
       # For 2-factor correlated model, add one correlation parameter
       # Initialize to 0 (uncorrelated) as a neutral starting point
+      init_params <- c(init_params, 0.0)
+      param_names <- c(param_names, "factor_corr_1_2")
+
+    } else if (isTRUE(model_system$factor$correlation) && n_factors == 2) {
+      # Backward compatibility: correlation = TRUE
       init_params <- c(init_params, 0.0)
       param_names <- c(param_names, "factor_corr_1_2")
     }
@@ -123,14 +201,16 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
     }
 
     # Get outcome - for dynamic models, use zeros; otherwise from data
-    if (comp$outcome %in% names(comp_data)) {
-      outcome <- comp_data[[comp$outcome]]
+    # For exploded logit (multiple outcomes), use first outcome column for initialization
+    outcome_col <- if (length(comp$outcome) > 1) comp$outcome[1] else comp$outcome
+    if (outcome_col %in% names(comp_data)) {
+      outcome <- comp_data[[outcome_col]]
     } else if (isTRUE(comp$is_dynamic)) {
       # For dynamic models, create zero outcome (the dummy outcome column)
       outcome <- rep(0, nrow(comp_data))
     } else {
       stop(sprintf("Outcome '%s' not found in data for component '%s'",
-                   comp$outcome, comp$name))
+                   outcome_col, comp$name))
     }
 
     # Get covariates - create intercept column if needed
