@@ -7,6 +7,7 @@
 define_estimation_control(
   n_quad_points = 16,
   num_cores = 1,
+  cluster_type = "auto",
   adaptive_integration = FALSE,
   adapt_int_thresh = 0.3
 )
@@ -15,6 +16,11 @@ define_estimation_control(
 \item{n_quad_points}{Integer. Number of Gauss-Hermite quadrature points for numerical integration (default = 16)}
 
 \item{num_cores}{Integer. Number of processes to use for parallel estimation (default = 1)}
+
+\item{cluster_type}{Character. Type of parallel cluster to use: "auto" (default), "FORK", or "PSOCK".
+"auto" uses FORK on Unix (faster, shared memory) and PSOCK on Windows.
+"FORK" forces fork-based parallelism (Unix only, faster due to shared memory).
+"PSOCK" forces socket-based parallelism (works on all platforms, more overhead).}
 
 \item{adaptive_integration}{Logical. Whether to use adaptive integration in second-stage estimation
 (default = FALSE). When TRUE, the number of quadrature points per observation is determined

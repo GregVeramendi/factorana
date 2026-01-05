@@ -4,15 +4,17 @@
 \alias{cleanup_parallel_workers}
 \title{Clean up orphaned parallel worker processes}
 \usage{
-cleanup_parallel_workers(signal = "TERM", verbose = TRUE)
+cleanup_parallel_workers(signal = "TERM", verbose = TRUE, list_only = FALSE)
 }
 \arguments{
 \item{signal}{Signal to send (default "TERM" for graceful shutdown, use "KILL" for force)}
 
 \item{verbose}{Whether to print messages (default TRUE)}
+
+\item{list_only}{If TRUE, only list potential workers without killing them (default FALSE)}
 }
 \value{
-Invisible NULL
+Invisible NULL (or vector of PIDs if list_only = TRUE)
 }
 \description{
 When using parallel estimation with Ctrl-C interrupts, worker processes may
@@ -23,6 +25,9 @@ terminates any orphaned R worker processes started by the parallel package.
 \dontrun{
 # After interrupting a parallel job with Ctrl-C:
 cleanup_parallel_workers()
+
+# First check what processes would be killed:
+cleanup_parallel_workers(list_only = TRUE)
 
 # Force kill if graceful shutdown doesn't work:
 cleanup_parallel_workers(signal = "KILL")

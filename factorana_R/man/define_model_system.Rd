@@ -4,7 +4,13 @@
 \alias{define_model_system}
 \title{Define a model system}
 \usage{
-define_model_system(components, factor, previous_stage = NULL, weights = NULL)
+define_model_system(
+  components,
+  factor,
+  previous_stage = NULL,
+  weights = NULL,
+  equality_constraints = NULL
+)
 }
 \arguments{
 \item{components}{A named list of model_component objects}
@@ -21,6 +27,13 @@ When specified, each observation's contribution to the log-likelihood is multipl
 by its weight. Useful for survey weights, importance sampling, or giving different
 observations different influence on the estimation. Weights should be positive.
 The variable is extracted from the data passed to \code{estimate_model_rcpp()}.}
+
+\item{equality_constraints}{Optional. A list of character vectors, where each vector
+specifies parameter names that should be constrained to be equal during estimation.
+The first parameter in each group is the "primary" (freely estimated), and all
+other parameters in the group are set equal to the primary.
+Example: \code{list(c("Y1_loading_1", "Y2_loading_2"), c("Y1_sigma", "Y2_sigma"))}
+This is useful for measurement invariance constraints in longitudinal models.}
 }
 \value{
 An object of class "model_system". A list of model_component objects and one factor_model object.

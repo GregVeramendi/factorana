@@ -21,7 +21,7 @@ test_that("correlated two-factor model initializes correctly", {
 
   # Define 2-factor model WITH correlation
 
-  fm <- define_factor_model(n_factors = 2, n_types = 1, correlation = TRUE)
+  fm <- define_factor_model(n_factors = 2, n_types = 1, factor_structure = "correlation")
 
   # Check factor model has correlation flag set
   expect_true(fm$correlation)
@@ -89,7 +89,7 @@ test_that("correlated two-factor linear model converges and recovers correlation
   dat <- data.frame(y1 = y1, y2 = y2, y3 = y3, y4 = y4, intercept = 1)
 
   # Define 2-factor model WITH correlation
-  fm <- define_factor_model(n_factors = 2, n_types = 1, correlation = TRUE)
+  fm <- define_factor_model(n_factors = 2, n_types = 1, factor_structure = "correlation")
 
   mc1 <- define_model_component(
     name = "m1", data = dat, outcome = "y1", factor = fm,
@@ -199,7 +199,7 @@ test_that("correlated two-factor model recovers factor variances with sufficient
 
   dat <- data.frame(y1 = y1, y2 = y2, y3 = y3, y4 = y4, y5 = y5, y6 = y6, intercept = 1)
 
-  fm <- define_factor_model(n_factors = 2, n_types = 1, correlation = TRUE)
+  fm <- define_factor_model(n_factors = 2, n_types = 1, factor_structure = "correlation")
 
   mc1 <- define_model_component(name = "m1", data = dat, outcome = "y1", factor = fm,
     covariates = "intercept", model_type = "linear", loading_normalization = c(1, 0))
@@ -242,7 +242,7 @@ test_that("correlated two-factor model recovers factor variances with sufficient
 # The define_factor_model() function now throws an error if
 # correlation = TRUE and n_factors > 2.
 
-test_that("uncorrelated model (correlation = FALSE) has no correlation parameters", {
+test_that("uncorrelated model (factor_structure = 'independent') has no correlation parameters", {
   isolate_test()
   set.seed(123)
   n <- 100
@@ -253,7 +253,7 @@ test_that("uncorrelated model (correlation = FALSE) has no correlation parameter
   )
 
   # Define 2-factor model WITHOUT correlation (default)
-  fm <- define_factor_model(n_factors = 2, n_types = 1, correlation = FALSE)
+  fm <- define_factor_model(n_factors = 2, n_types = 1, factor_structure = "independent")
 
   # Check factor model has correlation flag NOT set
   expect_false(fm$correlation)
@@ -315,7 +315,7 @@ test_that("negative correlation is recovered correctly", {
 
   dat <- data.frame(y1 = y1, y2 = y2, y3 = y3, y4 = y4, intercept = 1)
 
-  fm <- define_factor_model(n_factors = 2, n_types = 1, correlation = TRUE)
+  fm <- define_factor_model(n_factors = 2, n_types = 1, factor_structure = "correlation")
 
   mc1 <- define_model_component(
     name = "m1", data = dat, outcome = "y1", factor = fm,

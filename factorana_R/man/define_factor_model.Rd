@@ -4,14 +4,25 @@
 \alias{define_factor_model}
 \title{Define latent factor model structure}
 \usage{
-define_factor_model(n_factors, n_types, correlation = FALSE, n_mixtures = 1)
+define_factor_model(
+  n_factors,
+  n_types = 1,
+  factor_structure = "independent",
+  n_mixtures = 1
+)
 }
 \arguments{
 \item{n_factors}{Integer. Number of latent factors (>=0). Use 0 for models without latent factors.}
 
 \item{n_types}{Integer. Number of types (>=1)}
 
-\item{correlation}{Logical. Whether to allow correlation between two factors (default = FALSE)}
+\item{factor_structure}{Character. Structure of factor dependencies. Options:
+\itemize{
+\item \code{"independent"} (default): Factors are independent
+\item \code{"correlation"}: Correlated factors via Cholesky decomposition (2 factors only)
+\item \code{"SE_linear"}: Structural equation f_k = alpha + alpha_1*f_1 + ... + epsilon
+\item \code{"SE_quadratic"}: Adds quadratic terms: f_k = alpha + alpha_1\emph{f_1 + alpha_q1}f_1^2 + ... + epsilon
+}}
 
 \item{n_mixtures}{Integer. Number of discrete mixtures (default = 1, allowed: 1-3)}
 }

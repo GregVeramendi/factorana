@@ -7,7 +7,6 @@
 #'
 #' @param n_factors Integer. Number of latent factors (>=0). Use 0 for models without latent factors.
 #' @param n_types Integer. Number of types (>=1)
-#' @param correlation Logical. Deprecated. Use `factor_structure = "correlation"` instead.
 #' @param factor_structure Character. Structure of factor dependencies. Options:
 #'   - `"independent"` (default): Factors are independent
 #'   - `"correlation"`: Correlated factors via Cholesky decomposition (2 factors only)
@@ -19,7 +18,6 @@
 #' @export
 define_factor_model <- function(n_factors,
                                 n_types = 1,
-                                correlation = FALSE,
                                 factor_structure = "independent",
                                 n_mixtures = 1) {
 
@@ -28,24 +26,12 @@ define_factor_model <- function(n_factors,
 
   if (!is.numeric(n_factors) || n_factors < 0) stop("n_factors must be a non-negative integer.")
   if (!is.numeric(n_types) || n_types < 1) stop("n_types must be a positive integer")
-  if (!is.logical(correlation)) stop("correlation must be either TRUE or FALSE")
   if (!n_mixtures %in% 1:3) stop("n_mixtures should be between 1-3") #currently this is the case, might change later
 
   # Validate factor_structure
   valid_structures <- c("independent", "correlation", "SE_linear", "SE_quadratic")
   if (!factor_structure %in% valid_structures) {
     stop("factor_structure must be one of: ", paste(valid_structures, collapse = ", "))
-  }
-
-  # Handle deprecated 'correlation' parameter
-  if (isTRUE(correlation)) {
-    if (factor_structure != "independent") {
-      stop("Cannot use both 'correlation = TRUE' and 'factor_structure'. ",
-           "Please use 'factor_structure = \"correlation\"' instead.")
-    }
-    warning("The 'correlation' parameter is deprecated. ",
-            "Use 'factor_structure = \"correlation\"' instead.")
-    factor_structure <- "correlation"
   }
 
   # Validate factor_structure requirements

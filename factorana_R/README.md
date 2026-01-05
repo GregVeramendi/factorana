@@ -58,8 +58,8 @@ devtools::install_github("GregVeramendi/factorana",
 ## Features
 - Define any number of latent factors with flexible loading normalization
 - Specify model components independently (linear, logit, probit, oprobit)
-- **Dynamic factor models**: Structural equations between latent factors via `define_dyn_model_component()`
 - **Structural equation factor models**: `factor_structure = "SE_linear"` or `"SE_quadratic"` for causal relationships (f₂ = α + α₁f₁ + ε)
+- **Correlated factors**: `factor_structure = "correlation"` for correlated two-factor models
 - **Equality constraints**: Measurement invariance for longitudinal models via `equality_constraints` in `define_model_system()`
 - **Nonlinear factor effects**: Model quadratic (`f²`) and interaction (`f_j × f_k`) factor terms via `factor_spec`
 - Fix regression coefficients to specific values via `fix_coefficient()`
@@ -575,10 +575,9 @@ mc2 <- define_model_component(
 ## API (R)
 More detailed explanations within functions.
 
-### define_factor_model(n_factors, n_types, correlation = FALSE, factor_structure = "independent", n_mixtures = 1)
+### define_factor_model(n_factors, n_types = 1, factor_structure = "independent", n_mixtures = 1)
 - `n_factors` (int ≥0): number of latent factors (use 0 for models without factors)
 - `n_types` (int ≥1): number of types
-- `correlation` (logical): **Deprecated**. Use `factor_structure = "correlation"` instead.
 - `factor_structure` (character): Structure of factor dependencies:
   - `"independent"` (default): Factors are independent
   - `"correlation"`: Correlated factors via Cholesky decomposition (2 factors only)
@@ -598,36 +597,6 @@ More detailed explanations within functions.
   - `"interactions"`: Include interaction terms (λ × f + λ_inter × f_j × f_k) for multi-factor models
   - `"full"`: Include both quadratic and interaction terms
 - Returns a `"model_component"` with pointers to `factor`.
-
-### define_dyn_model_component(name, data, outcome_factor, factor, covariates = NULL, dyn_type = "linear", factor_spec = "linear", intercept = TRUE, evaluation_indicator = NULL)
-- Creates a **dynamic factor model component** representing a structural equation between latent factors.
-- The model estimates: `f_outcome = X'β + Σ_{k≠outcome} λ_k × f_k + [higher-order terms] + ε`
-- **Parameters**:
-  - `name`: Name for the component
-  - `data`: Data frame (only used for covariates and evaluation_indicator)
-  - `outcome_factor`: Integer index (1-based) of the outcome factor
-  - `factor`: Factor model from `define_factor_model()`
-  - `covariates`: Optional character vector of covariate names
-  - `dyn_type`: Currently only `"linear"` supported (future: `"cobb_douglas"`, `"ces"`)
-  - `factor_spec`: Factor specification for non-outcome factors
-    - `"linear"`: Linear factor terms only
-    - `"quadratic"`: Include f² terms for non-outcome factors
-    - `"interactions"`: Include f_j × f_k terms (excluding outcome factor)
-    - `"full"`: Both quadratic and interaction terms
-  - `intercept`: Whether to include an intercept (default: TRUE)
-  - `evaluation_indicator`: Optional indicator variable for which observations to include
-- **Returns**: Object of class `c("dyn_model_component", "model_component")`
-- **Key differences from `define_model_component()`**:
-  - Quadratic/interaction terms only apply to non-outcome factors
-- **Example**:
-  ```r
-  # 2-factor model: f1 = intercept + lambda*f2 + epsilon
-  fm <- define_factor_model(n_factors = 2)
-  dyn <- define_dyn_model_component(
-    name = "structural", data = dat, outcome_factor = 1, factor = fm,
-    intercept = TRUE
-  )
-  ```
 
 ### fix_coefficient(component, covariate, value, choice = NULL)
 - Fixes a regression coefficient to a specified value during estimation.
@@ -894,155 +863,72 @@ writeLines(latex_code2, "structural_table.tex")
 
 ## Examples
 
-### Dynamic Factor Model (Structural Equation between Factors)
+### Correlated Factors Model
 
-Model structural relationships between latent factors using two-stage estimation:
-- **Stage 1**: Estimate measurement model with correlated factors
-- **Stage 2**: Fix measurement parameters, estimate structural equation `f1 = λ×f2 + ε`
+Estimate a two-factor model where the latent factors are correlated, using `factor_structure = "correlation"`:
 
 <details>
-<summary><b>Click to expand dynamic factor model example</b></summary>
+<summary><b>Click to expand correlated factors example</b></summary>
 
 ```r
-set.seed(111)
-n <- 5000
+set.seed(42)
+n <- 500
 
-# True parameters for structural equation: f1 = lambda*f2 + epsilon
-# Chosen to give Corr(f1,f2) ≈ 0.8
-true_lambda <- 0.6
-true_sigma <- 0.45
+# True parameters
+true_rho <- 0.6  # Correlation between factors
 
-# Generate factors according to structural model
-f2 <- rnorm(n)
-f1 <- true_lambda * f2 + rnorm(n, 0, true_sigma)
+# Generate correlated factors using Cholesky decomposition
+z1 <- rnorm(n)
+z2 <- rnorm(n)
+f1 <- z1
+f2 <- true_rho * z1 + sqrt(1 - true_rho^2) * z2
 
-# Measurement system (3 indicators per factor for reliable variance estimation)
-T1 <- 2.0 + 1.0*f1 + rnorm(n, 0, 0.5)  # f1 loading fixed to 1
-T2 <- 1.5 + 1.2*f1 + rnorm(n, 0, 0.6)
-T3 <- 1.8 + 0.9*f1 + rnorm(n, 0, 0.4)
-T4 <- 1.0 + 1.0*f2 + rnorm(n, 0, 0.4)  # f2 loading fixed to 1
-T5 <- 0.8 + 0.9*f2 + rnorm(n, 0, 0.5)
-T6 <- 1.2 + 1.1*f2 + rnorm(n, 0, 0.45)
+# Measurement system (3 indicators per factor)
+Y1 <- 1.0*f1 + rnorm(n, 0, 0.5)  # f1 loading fixed to 1
+Y2 <- 0.8*f1 + rnorm(n, 0, 0.5)
+Y3 <- 1.2*f1 + rnorm(n, 0, 0.5)
+Y4 <- 1.0*f2 + rnorm(n, 0, 0.5)  # f2 loading fixed to 1
+Y5 <- 0.9*f2 + rnorm(n, 0, 0.5)
+Y6 <- 1.1*f2 + rnorm(n, 0, 0.5)
 
-dat <- data.frame(intercept = 1, T1 = T1, T2 = T2, T3 = T3,
-                  T4 = T4, T5 = T5, T6 = T6, eval = 1)
+dat <- data.frame(intercept = 1, Y1 = Y1, Y2 = Y2, Y3 = Y3,
+                  Y4 = Y4, Y5 = Y5, Y6 = Y6)
 
-# ============================================================
-# STAGE 1: Measurement model with factor correlation
-# ============================================================
-
-# correlation = TRUE because f1 and f2 are correlated in the data
-fm <- define_factor_model(n_factors = 2, n_types = 1, correlation = TRUE)
-ctrl <- define_estimation_control(n_quad_points = 16, num_cores = 1)
+# Define correlated 2-factor model
+fm <- define_factor_model(n_factors = 2, factor_structure = "correlation")
+ctrl <- define_estimation_control(n_quad_points = 16)
 
 # Factor 1 measurement equations
-mc_T1 <- define_model_component(
-  name = "T1", data = dat, outcome = "T1", factor = fm,
-  covariates = "intercept", model_type = "linear",
-  loading_normalization = c(1.0, 0), evaluation_indicator = "eval"
-)
-mc_T2 <- define_model_component(
-  name = "T2", data = dat, outcome = "T2", factor = fm,
-  covariates = "intercept", model_type = "linear",
-  loading_normalization = c(NA_real_, 0), evaluation_indicator = "eval"
-)
-mc_T3 <- define_model_component(
-  name = "T3", data = dat, outcome = "T3", factor = fm,
-  covariates = "intercept", model_type = "linear",
-  loading_normalization = c(NA_real_, 0), evaluation_indicator = "eval"
-)
+mc1 <- define_model_component("m1", dat, "Y1", fm, covariates = "intercept",
+                               model_type = "linear", loading_normalization = c(1, 0))
+mc2 <- define_model_component("m2", dat, "Y2", fm, covariates = "intercept",
+                               model_type = "linear", loading_normalization = c(NA, 0))
+mc3 <- define_model_component("m3", dat, "Y3", fm, covariates = "intercept",
+                               model_type = "linear", loading_normalization = c(NA, 0))
 
 # Factor 2 measurement equations
-mc_T4 <- define_model_component(
-  name = "T4", data = dat, outcome = "T4", factor = fm,
-  covariates = "intercept", model_type = "linear",
-  loading_normalization = c(0, 1.0), evaluation_indicator = "eval"
-)
-mc_T5 <- define_model_component(
-  name = "T5", data = dat, outcome = "T5", factor = fm,
-  covariates = "intercept", model_type = "linear",
-  loading_normalization = c(0, NA_real_), evaluation_indicator = "eval"
-)
-mc_T6 <- define_model_component(
-  name = "T6", data = dat, outcome = "T6", factor = fm,
-  covariates = "intercept", model_type = "linear",
-  loading_normalization = c(0, NA_real_), evaluation_indicator = "eval"
-)
+mc4 <- define_model_component("m4", dat, "Y4", fm, covariates = "intercept",
+                               model_type = "linear", loading_normalization = c(0, 1))
+mc5 <- define_model_component("m5", dat, "Y5", fm, covariates = "intercept",
+                               model_type = "linear", loading_normalization = c(0, NA))
+mc6 <- define_model_component("m6", dat, "Y6", fm, covariates = "intercept",
+                               model_type = "linear", loading_normalization = c(0, NA))
 
-# Estimate measurement model
-ms_stage1 <- define_model_system(
-  components = list(mc_T1, mc_T2, mc_T3, mc_T4, mc_T5, mc_T6),
-  factor = fm
-)
-result_stage1 <- estimate_model_rcpp(ms_stage1, dat, control = ctrl, verbose = FALSE)
+ms <- define_model_system(components = list(mc1, mc2, mc3, mc4, mc5, mc6), factor = fm)
+result <- estimate_model_rcpp(ms, dat, control = ctrl, verbose = FALSE)
 
-cat("Stage 1: Var(f1)=", result_stage1$estimates["factor_var_1"],
-    ", Var(f2)=", result_stage1$estimates["factor_var_2"],
-    ", Corr=", result_stage1$estimates["factor_corr_1_2"], "\n")
-
-# ============================================================
-# STAGE 2: Structural equation with measurement fixed
-# ============================================================
-
-# Create structural equation component
-dyn <- define_dyn_model_component(
-  name = "structural",
-  data = dat,
-  outcome_factor = 1,       # f1 is the "outcome" factor
-  factor = fm,
-  intercept = FALSE,        # No intercept (avoids identification issues)
-  evaluation_indicator = "eval"
-)
-
-# Use previous_stage to FIX all Stage 1 parameters
-ms_stage2 <- define_model_system(
-  components = list(dyn),
-  factor = fm,
-  previous_stage = result_stage1
-)
-
-result_stage2 <- estimate_model_rcpp(ms_stage2, dat, control = ctrl, verbose = FALSE)
-
-# ============================================================
-# Results comparison
-# ============================================================
-
-est_lambda <- result_stage2$estimates["structural_loading_2"]
-est_sigma <- result_stage2$estimates["structural_sigma"]
-est_var1 <- result_stage2$estimates["factor_var_1"]
-est_var2 <- result_stage2$estimates["factor_var_2"]
-est_corr <- result_stage2$estimates["factor_corr_1_2"]
-
-cat("\nStructural equation estimates:\n")
-cat("  lambda: ", round(est_lambda, 3), " (true = ", true_lambda, ")\n", sep = "")
-cat("  sigma:  ", round(est_sigma, 3), " (true = ", true_sigma, ")\n", sep = "")
-
-# Check implied moments from structural parameters
-implied_var1 <- est_lambda^2 * est_var2 + est_sigma^2
-implied_corr <- est_lambda * sqrt(est_var2) / sqrt(implied_var1)
-
-cat("\nVariance check:\n")
-cat("  Var(f1) from measurement: ", round(est_var1, 4), "\n", sep = "")
-cat("  lambda^2*Var(f2)+sigma^2: ", round(implied_var1, 4), "\n", sep = "")
-
-cat("\nCorrelation check:\n")
-cat("  Corr(f1,f2) from measurement: ", round(est_corr, 4), "\n", sep = "")
-cat("  Implied from structural:      ", round(implied_corr, 4), "\n", sep = "")
-
-# View full results
-components_table(result_stage2)
+# Results
+cat("Factor variances: Var(f1)=", result$estimates["factor_var_1"],
+    ", Var(f2)=", result$estimates["factor_var_2"], "\n")
+cat("Factor correlation:", result$estimates["factor_corr_1_2"], "(true:", true_rho, ")\n")
 ```
 
 </details>
 
 **Key points:**
-- **Two-stage estimation**: Stage 1 estimates measurement model with `correlation = TRUE`, Stage 2 fixes those and estimates structural equation
-- `define_dyn_model_component()` creates structural equations between factors
-- `outcome_factor = 1` means f1 is the dependent variable
-- Loading on f2 (λ) is estimated as `structural_loading_2`
-- Use `intercept = FALSE` to avoid identification issues with measurement intercepts
-- The variance/correlation checks show consistency between measurement model moments and structural equation parameters
-- Works with `factor_spec = "quadratic"` or `"interactions"` for nonlinear effects
+- Use `factor_structure = "correlation"` for correlated two-factor models
+- Correlation is estimated via Cholesky decomposition (`factor_corr_1_2` parameter)
+- Currently limited to 2 factors; for more complex factor relationships, use SE models
 
 ---
 
