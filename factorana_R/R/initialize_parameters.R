@@ -440,6 +440,19 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
           colnames(coefs_mat) <- colnames(X)
         } else {
           coefs_mat <- coef(fit)
+          # Ensure coefs_mat is a matrix (multinom returns vector for binary case)
+          if (!is.matrix(coefs_mat)) {
+            coefs_mat <- matrix(coefs_mat, nrow = 1)
+            colnames(coefs_mat) <- colnames(X)
+          }
+          # Check if we got the expected number of rows
+          if (nrow(coefs_mat) < comp$num_choices - 1) {
+            # Some choices might be missing - pad with zeros
+            full_mat <- matrix(0, nrow = comp$num_choices - 1, ncol = ncol(X))
+            colnames(full_mat) <- colnames(X)
+            full_mat[seq_len(nrow(coefs_mat)), ] <- coefs_mat
+            coefs_mat <- full_mat
+          }
         }
 
         if (verbose) {
@@ -454,10 +467,15 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         comp_param_names <- c()
         for (choice in seq_len(comp$num_choices - 1)) {
           # Get coefficients for this choice
+          # Note: multinom names rows by actual choice values (2, 3, ...), not indices (1, 2, ...)
           if (comp$num_choices == 2) {
             choice_coefs <- coefs_mat
-          } else {
+          } else if (is.matrix(coefs_mat) && nrow(coefs_mat) >= choice) {
             choice_coefs <- coefs_mat[choice, ]
+          } else {
+            # Fallback to zeros if coefs_mat doesn't have this choice
+            choice_coefs <- rep(0, ncol(X))
+            names(choice_coefs) <- colnames(X)
           }
 
           # Apply any fixed coefficient values for this choice
