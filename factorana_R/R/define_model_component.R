@@ -10,6 +10,13 @@
 #' @param intercept Logical. Whether to include an intercept (default = TRUE).
 #' @param num_choices Integer. Number of choices (for multinomial models).
 #' @param nrank Integer (optional). Rank for exploded multinomial logit.
+#' @param exclude_chosen Logical. For exploded logit, whether to exclude already-chosen
+#'   alternatives from later ranks (default TRUE). Set to FALSE for exploded nested logit
+#'   where the same nest can be chosen multiple times.
+#' @param rankshare_var Character (optional). Column name (or prefix) for rank-share
+#'   correction variables. These provide rank-and-choice-specific adjustments to the
+#'   linear predictor. Data layout: (num_choices-1) * nrank columns, accessed as
+#'   rankshare_var + (num_choices-1)*irank + icat for irank=0..nrank-1, icat=0..num_choices-2.
 #' @param loading_normalization Numeric vector of length `n_factors` (optional).
 #'   Component-specific loading constraints. Overrides factor model normalization.
 #'   - `NA` → loading is free (estimated).
@@ -35,6 +42,8 @@ define_model_component <- function(name,
                                    intercept = TRUE,
                                    num_choices = 2,
                                    nrank = NULL,
+                                   exclude_chosen = TRUE,
+                                   rankshare_var = NULL,
                                    loading_normalization = NULL,
                                    factor_spec = c("linear", "quadratic", "interactions", "full")) {
   # ---- 1. Basic argument checks ----
@@ -156,6 +165,29 @@ define_model_component <- function(name,
     nrank <- 1L  # Default: single outcome (standard logit)
   }
 
+  # Validate exclude_chosen (for exploded logit)
+  if (!is.logical(exclude_chosen) || length(exclude_chosen) != 1L) {
+    stop("`exclude_chosen` must be a single TRUE/FALSE.")
+  }
+  if (!exclude_chosen && nrank == 1L) {
+    warning("`exclude_chosen=FALSE` has no effect for standard logit (nrank=1).")
+  }
+
+  # Validate rankshare_var (for exploded nested logit)
+  if (!is.null(rankshare_var)) {
+    if (!is.character(rankshare_var) || length(rankshare_var) != 1L) {
+      stop("`rankshare_var` must be a single column name (character).")
+    }
+    if (!(rankshare_var %in% names(data))) {
+      stop("`rankshare_var` '", rankshare_var, "' not found in data.")
+    }
+    if (nrank == 1L) {
+      warning("`rankshare_var` has no effect for standard logit (nrank=1).")
+    }
+    if (model_type != "logit") {
+      stop("`rankshare_var` is only supported for model_type='logit'.")
+    }
+  }
 
   # ---- 6. Evaluation subset conditioning ----
   # Restrict data to rows where evaluation_indicator = TRUE/1
@@ -410,6 +442,8 @@ define_model_component <- function(name,
     intercept = intercept,
     num_choices = num_choices,
     nrank = nrank,
+    exclude_chosen = exclude_chosen,
+    rankshare_var = rankshare_var,
     nparam_model = nparam_model,
     n_obs = n_obs,
     k = k,
@@ -469,8 +503,12 @@ print.model_component <- function(x, ...) {
     cat("Interaction loadings:    ", x$n_interaction_loadings, "\n")
   }
   cat("Number of choices:       ", x$num_choices, "\n")
-  if (!is.null(x$nrank)) {
+  if (!is.null(x$nrank) && x$nrank > 1) {
     cat("Rank (nrank):            ", x$nrank, "\n")
+    cat("Exclude chosen:          ", ifelse(x$exclude_chosen, "Yes", "No"), "\n")
+    if (!is.null(x$rankshare_var)) {
+      cat("Rankshare variable:      ", x$rankshare_var, "\n")
+    }
   }
   if (!is.null(x$evaluation_indicator)) {
     cat("Evaluation indicator:    ", x$evaluation_indicator, "\n")

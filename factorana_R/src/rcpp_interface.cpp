@@ -287,11 +287,33 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             outcome_factor_idx = as<int>(comp["outcome_factor"]) - 1;
         }
 
+        // Extract exclude_chosen for exploded nested logit (default true = standard exploded logit)
+        bool exclude_chosen = true;
+        if (comp.containsElementNamed("exclude_chosen") && !Rf_isNull(comp["exclude_chosen"])) {
+            exclude_chosen = as<bool>(comp["exclude_chosen"]);
+        }
+
+        // Extract rankshare_var index for exploded nested logit
+        int ranksharevar_idx = -1;
+        if (comp.containsElementNamed("rankshare_var") && !Rf_isNull(comp["rankshare_var"])) {
+            std::string rankshare_name = as<std::string>(comp["rankshare_var"]);
+            for (int j = 0; j < col_names.size(); j++) {
+                if (std::string(col_names[j]) == rankshare_name) {
+                    ranksharevar_idx = j;
+                    break;
+                }
+            }
+            if (ranksharevar_idx == -1) {
+                Rcpp::warning("rankshare_var '" + rankshare_name + "' not found in data, ignoring.");
+            }
+        }
+
         // Create Model object
         std::shared_ptr<Model> model = std::make_shared<Model>(
             mtype, outcome_idx, missing_idx, regressor_idx,
             n_fac, n_types, facnorm, n_choice, n_rank, all_params_fixed, fspec,
-            is_dynamic, outcome_factor_idx, outcome_indices
+            is_dynamic, outcome_factor_idx, outcome_indices,
+            exclude_chosen, ranksharevar_idx
         );
 
         // Calculate number of parameters for this model

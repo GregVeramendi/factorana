@@ -34,6 +34,8 @@ private:
     int numchoice;            // Number of choices (for discrete choice models)
     int numrank;              // Number of rankings (for ranked choice models)
     std::vector<int> outcome_indices; // Outcome indices for each rank (exploded logit)
+    bool exclude_chosen;      // If true, exclude already-chosen alternatives in exploded logit
+    int ranksharevar_idx;     // Index of first rankshare column (-1 if none)
     bool ignore;              // If true, skip this model in likelihood
     bool all_params_fixed;    // If true, skip gradient/Hessian computation (use flag=1)
     FactorSpec factor_spec;   // Factor specification (linear, quadratic, interactions, full)
@@ -50,7 +52,8 @@ public:
           int nchoice = 2, int nrank = 1, bool params_fixed = false,
           FactorSpec fspec = FactorSpec::LINEAR,
           bool dynamic = false, int outcome_fac_idx = -1,
-          const std::vector<int>& outcome_idxs = std::vector<int>());
+          const std::vector<int>& outcome_idxs = std::vector<int>(),
+          bool excl_chosen = true, int rankshare_idx = -1);
 
     // Main evaluation function
     // Computes likelihood, gradient, and Hessian for a single observation

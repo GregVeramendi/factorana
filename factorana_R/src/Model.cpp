@@ -11,10 +11,12 @@ Model::Model(ModelType type, int outcome, int missing,
              int nchoice, int nrank, bool params_fixed,
              FactorSpec fspec,
              bool dynamic, int outcome_fac_idx,
-             const std::vector<int>& outcome_idxs)
+             const std::vector<int>& outcome_idxs,
+             bool excl_chosen, int rankshare_idx)
     : modtype(type), outcome_idx(outcome), missing_idx(missing),
       regressors(regs), numfac(nfac), numtyp(ntyp),
       facnorm(fnorm), numchoice(nchoice), numrank(nrank),
+      exclude_chosen(excl_chosen), ranksharevar_idx(rankshare_idx),
       ignore(false), all_params_fixed(params_fixed),
       factor_spec(fspec),
       is_dynamic(dynamic), outcome_factor_idx(outcome_fac_idx)
@@ -893,10 +895,17 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
     // For exploded logit: track which choices have been made (excluded from later ranks)
     std::vector<bool> chosen(numchoice, false);
 
-    // Intermediate gradient storage for Hessian (allocated once, reused per rank)
+    // Intermediate gradient storage for Hessian (allocated once, reset per rank)
     std::vector<double> logitgrad;
     if (flag == 3) {
         logitgrad.resize(numchoice * npar, 0.0);
+
+        // Initialize Hessian BEFORE the rank loop so it accumulates across ranks
+        size_t hess_size = static_cast<size_t>(npar * npar);
+        if (hess.size() < hess_size) {
+            hess.resize(hess_size);
+        }
+        std::memset(hess.data(), 0, hess_size * sizeof(double));
     }
 
     // Loop over ranks for exploded logit
@@ -926,45 +935,64 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
             continue;
         }
 
-        // Compute conditional denominator: sum over REMAINING choices only
-        // This is key for exploded logit - exclude already-chosen alternatives
-        double logitdenom = 0.0;
-        for (int icat = 0; icat < numchoice; icat++) {
-            if (!chosen[icat]) {  // Only include if not already chosen
-                if (icat == 0) {
-                    logitdenom += 1.0;  // Reference category
-                } else {
-                    logitdenom += std::exp(expres[icat - 1]);
+        // Load rank-share corrections for this rank (if ranksharevar is provided)
+        // Layout: ranksharevar_idx + (numchoice-1)*irank + icat for icat=0..numchoice-2
+        std::vector<double> rankedChoiceCorr(numchoice - 1, 0.0);
+        if (ranksharevar_idx >= 0) {
+            for (int icat = 0; icat < numchoice - 1; icat++) {
+                int idx = ranksharevar_idx + (numchoice - 1) * irank + icat;
+                double corr_val = data[iobs_offset + idx];
+                if (corr_val > -9998.0) {
+                    rankedChoiceCorr[icat] = corr_val;
                 }
             }
         }
 
-        // Compute conditional probabilities for remaining choices
+        // Compute conditional denominator
+        // If exclude_chosen=true (standard exploded logit): exclude already-chosen alternatives
+        // If exclude_chosen=false (nested logit): all alternatives remain available
+        double logitdenom = 0.0;
+        for (int icat = 0; icat < numchoice; icat++) {
+            if (!exclude_chosen || !chosen[icat]) {  // Include if not excluding OR not already chosen
+                if (icat == 0) {
+                    logitdenom += 1.0;  // Reference category (no rankshare correction)
+                } else {
+                    logitdenom += std::exp(expres[icat - 1] + rankedChoiceCorr[icat - 1]);
+                }
+            }
+        }
+
+        // Compute conditional probabilities for available choices
         std::vector<double> pdf(numchoice, 0.0);
         for (int icat = 0; icat < numchoice; icat++) {
-            if (!chosen[icat]) {
+            if (!exclude_chosen || !chosen[icat]) {
                 if (icat == 0) {
                     pdf[icat] = 1.0 / logitdenom;
                 } else {
-                    pdf[icat] = std::exp(expres[icat - 1]) / logitdenom;
+                    pdf[icat] = std::exp(expres[icat - 1] + rankedChoiceCorr[icat - 1]) / logitdenom;
                 }
             }
-            // pdf[icat] = 0 for already-chosen alternatives
+            // pdf[icat] = 0 for excluded alternatives
         }
 
-        // Per-rank likelihood: P(Y = obsCat | remaining choices)
+        // Per-rank likelihood: P(Y = obsCat | available choices)
         double dens = pdf[obsCat];
 
         // Multiply into total likelihood
         modEval[0] *= dens;
 
-        // Mark this choice as taken for subsequent ranks
-        chosen[obsCat] = true;
+        // Mark this choice as taken for subsequent ranks (only if excluding)
+        if (exclude_chosen) {
+            chosen[obsCat] = true;
+        }
 
         if (flag < 2) continue;  // Skip gradient computation for this rank
 
         // ===== GRADIENT CALCULATION =====
-        // (pdf, npar, logitgrad are already computed/allocated before the rank loop)
+        // Reset logitgrad for this rank (it stores rank-specific demeaned derivatives for Hessian)
+        if (flag == 3) {
+            std::fill(logitgrad.begin(), logitgrad.end(), 0.0);
+        }
 
         // Gradient for factor variance parameters (theta)
     for (int ifac = 0; ifac < numfac; ifac++) {
@@ -1216,14 +1244,9 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
     }
 
     // ===== HESSIAN CALCULATION =====
-    // OPTIMIZATION: Only resize if too small, use memset for zeroing
+    // NOTE: Hessian is initialized BEFORE the rank loop (lines ~900-910)
+    // and accumulates across ranks. logitgrad is reset per rank.
     if (flag == 3) {
-        size_t hess_size = static_cast<size_t>(npar * npar);
-        if (hess.size() < hess_size) {
-            hess.resize(hess_size);
-        }
-        std::memset(hess.data(), 0, hess_size * sizeof(double));
-
         // Second-order derivative terms: dZ/dtheta dalpha
         if (obsCat > 0) {
             int ifree = 0;
