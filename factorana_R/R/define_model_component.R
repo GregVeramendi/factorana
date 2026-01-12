@@ -28,6 +28,9 @@
 #'   - `"interactions"`: Linear + interaction terms (lambda * f + lambda_inter * f_j * f_k)
 #'   - `"full"`: Linear + quadratic + interaction terms
 #'   Note: Interaction terms require n_factors >= 2.
+#' @param skip_collinearity_check Logical. If TRUE, skip the multicollinearity check
+#'   on the design matrix. Useful when many coefficients will be fixed via fix_coefficient()
+#'   after component creation, which resolves the collinearity. Default FALSE.
 #'
 #' @return An object of class "model_component". A list representing the model component
 #' @export
@@ -45,7 +48,8 @@ define_model_component <- function(name,
                                    exclude_chosen = TRUE,
                                    rankshare_var = NULL,
                                    loading_normalization = NULL,
-                                   factor_spec = c("linear", "quadratic", "interactions", "full")) {
+                                   factor_spec = c("linear", "quadratic", "interactions", "full"),
+                                   skip_collinearity_check = FALSE) {
   # ---- 1. Basic argument checks ----
   # Confirm data types and presence of required columns/objects
 
@@ -264,7 +268,7 @@ define_model_component <- function(name,
   # Note: Users must provide their own intercept column in covariates if needed.
   # The `intercept` parameter is metadata for the model, not auto-added to design matrix.
 
-  if (length(covariates) > 0) {
+  if (length(covariates) > 0 && !skip_collinearity_check) {
     # Build design matrix from user-provided covariates only
     X <- as.matrix(data[idx, covariates, drop = FALSE])
     col_names <- covariates
