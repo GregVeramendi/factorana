@@ -420,8 +420,27 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
           stop("nnet package required for multinomial logit initialization. Install with: install.packages('nnet')")
         }
 
-        fit <- nnet::multinom(outcome ~ X - 1, trace = FALSE)
-        coefs_mat <- coef(fit)
+        # Calculate number of weights needed
+        n_weights <- (comp$num_choices - 1) * ncol(X)
+        max_nwts <- max(1000, n_weights + 100)  # Allow enough for the model
+
+        # Try to fit, fall back to zeros if too large or fails
+        fit <- tryCatch(
+          nnet::multinom(outcome ~ X - 1, trace = FALSE, MaxNWts = max_nwts),
+          error = function(e) {
+            if (verbose) message("  Note: multinom initialization failed, using zeros")
+            NULL
+          }
+        )
+
+        if (is.null(fit)) {
+          # Fall back to zero initialization
+          coefs_mat <- matrix(0, nrow = comp$num_choices - 1, ncol = ncol(X))
+          rownames(coefs_mat) <- as.character(2:comp$num_choices)
+          colnames(coefs_mat) <- colnames(X)
+        } else {
+          coefs_mat <- coef(fit)
+        }
 
         if (verbose) {
           n_fixed <- length(fixed_coefs)

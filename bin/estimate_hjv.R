@@ -374,6 +374,9 @@ cat("Loading Stage 1 results from:", stage1_file, "\n")
 stage1_result <- readRDS(stage1_file)
 cat("Loaded", length(stage1_result$estimates), "fixed parameters from Stage 1\n\n")
 
+# Use factor model from previous stage (must be identical object for define_model_system)
+fm <- stage1_result$model_system$factor
+
 # Define only Stage 2 components (education choices)
 components <- list()
 
@@ -749,6 +752,9 @@ if (!file.exists(stage2_file)) {
 cat("Loading Stage 2 results from:", stage2_file, "\n")
 stage2_result <- readRDS(stage2_file)
 cat("Loaded", length(stage2_result$estimates), "fixed parameters from Stages 1+2\n\n")
+
+# Use factor model from previous stage (must be identical object for define_model_system)
+fm <- stage2_result$model_system$factor
 
 # Define only Stage 3 components (labor market outcomes)
 components <- list()
