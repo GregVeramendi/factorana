@@ -212,15 +212,13 @@ build_parameter_metadata <- function(model_system) {
         }
 
         # Covariate coefficients for this alternative
+        # Include ALL covariates (even fixed ones) to match init_params vector
         if (!is.null(comp$covariates) && length(comp$covariates) > 0) {
           for (cov in comp$covariates) {
             if (cov != "intercept") {
-              # Skip if this coefficient is fixed for this alternative
-              if (!is_coefficient_fixed(comp, cov, choice = alt)) {
-                param_names <- c(param_names, sprintf("%s_beta_%s_alt%d", comp_name, cov, alt))
-                param_types <- c(param_types, "beta")
-                component_id <- c(component_id, i)
-              }
+              param_names <- c(param_names, sprintf("%s_beta_%s_alt%d", comp_name, cov, alt))
+              param_types <- c(param_types, "beta")
+              component_id <- c(component_id, i)
             }
           }
         }
@@ -266,19 +264,17 @@ build_parameter_metadata <- function(model_system) {
     } else {
       # Standard handling for all other model types
       # Covariate coefficients - naming must match initialize_parameters.R: comp_name_covariate
+      # Include ALL covariates (even fixed ones) to match init_params vector
       if (!is.null(comp$covariates) && length(comp$covariates) > 0) {
         for (cov in comp$covariates) {
-          # Skip if this coefficient is fixed
-          if (!is_coefficient_fixed(comp, cov, choice = NULL)) {
-            param_names <- c(param_names, sprintf("%s_%s", comp_name, cov))
-            # Mark intercept type separately for constraint handling
-            if (cov == "intercept") {
-              param_types <- c(param_types, "intercept")
-            } else {
-              param_types <- c(param_types, "beta")
-            }
-            component_id <- c(component_id, i)
+          param_names <- c(param_names, sprintf("%s_%s", comp_name, cov))
+          # Mark intercept type separately for constraint handling
+          if (cov == "intercept") {
+            param_types <- c(param_types, "intercept")
+          } else {
+            param_types <- c(param_types, "beta")
           }
+          component_id <- c(component_id, i)
         }
       }
 
@@ -503,6 +499,60 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
               message(sprintf("  Fixed type intercept: param %d (%s) at 0",
                               i, param_name))
             }
+          }
+        }
+      }
+    }
+
+    # Fix coefficients that were marked as fixed via fix_coefficient()
+    if (param_type == "beta" || param_type == "intercept") {
+      comp <- model_system$components[[comp_id]]
+      if (!is.null(comp) && !is.null(comp$fixed_coefficients) && length(comp$fixed_coefficients) > 0) {
+        param_name <- param_metadata$names[i]
+
+        # Parse covariate name from parameter name
+        # For standard models: compname_covariate (e.g., "Y_x1")
+        # For multinomial logit: compname_beta_covariate_altN (e.g., "Y_beta_x1_alt1")
+        comp_name <- comp$name
+        covariate <- NULL
+        choice <- NULL
+
+        if (comp$model_type == "logit" && !is.null(comp$num_choices) && comp$num_choices > 2) {
+          # Multinomial logit: parse "compname_beta_covariate_altN" or "compname_intercept_altN"
+          if (param_type == "intercept") {
+            # Format: compname_intercept_altN
+            pattern <- sprintf("^%s_intercept_alt([0-9]+)$", comp_name)
+            match <- regmatches(param_name, regexec(pattern, param_name))[[1]]
+            if (length(match) >= 2) {
+              covariate <- "intercept"
+              choice <- as.integer(match[2])
+            }
+          } else {
+            # Format: compname_beta_covariate_altN
+            pattern <- sprintf("^%s_beta_(.+)_alt([0-9]+)$", comp_name)
+            match <- regmatches(param_name, regexec(pattern, param_name))[[1]]
+            if (length(match) >= 3) {
+              covariate <- match[2]
+              choice <- as.integer(match[3])
+            }
+          }
+        } else {
+          # Standard model: parse "compname_covariate"
+          pattern <- sprintf("^%s_(.+)$", comp_name)
+          match <- regmatches(param_name, regexec(pattern, param_name))[[1]]
+          if (length(match) >= 2) {
+            covariate <- match[2]
+          }
+        }
+
+        if (!is.null(covariate) && is_coefficient_fixed(comp, covariate, choice)) {
+          fixed_value <- get_fixed_coefficient_value(comp, covariate, choice)
+          param_fixed[i] <- TRUE
+          lower_bounds[i] <- fixed_value
+          upper_bounds[i] <- fixed_value
+          if (verbose) {
+            message(sprintf("  Fixed coefficient: param %d (%s) at %.6f",
+                            i, param_name, fixed_value))
           }
         }
       }
@@ -933,11 +983,12 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   param_metadata <- build_parameter_metadata(model_system)
 
   # Setup constraints and identify fixed/free parameters
-  param_constraints <- setup_parameter_constraints(model_system, init_params, param_metadata, factor_variance_fixed, verbose)
+  # Use full_init_params (not init_params) because param_metadata covers ALL parameters
+  param_constraints <- setup_parameter_constraints(model_system, full_init_params, param_metadata, factor_variance_fixed, verbose)
 
   if (verbose) {
-    message(sprintf("Total parameters: %d", length(init_params)))
-    message(sprintf("Free parameters: %d", param_constraints$n_free))
+    message(sprintf("Total parameters: %d", n_params_total))
+    message(sprintf("Free parameters: %d", n_params_free))
     if (any(param_constraints$param_fixed)) {
       fixed_names <- param_metadata$names[param_constraints$param_fixed]
       message(sprintf("Fixed parameters (%d): %s",
@@ -1020,81 +1071,61 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
 
   # Define objective function (operates on free parameters only)
   objective_fn <- function(params_free) {
-    # Reconstruct full parameter vector
-    params_full <- init_params
-    params_full[param_constraints$free_idx] <- params_free
-
-    # Apply equality constraints: derived params = primary params
-    params_full <- apply_equality_constraints(params_full)
+    # C++ expects only FREE params (it has fixed values stored internally)
+    # params_free is already the free params from the optimizer
+    # We just need to pass it directly to C++
 
     if (!is.null(cl)) {
       # Parallel evaluation: aggregate across workers
-      parallel::clusterExport(cl, "params_full", envir = environment())
+      parallel::clusterExport(cl, "params_free", envir = environment())
       loglik_parts <- parallel::clusterEvalQ(cl, {
-        evaluate_loglik_only_cpp(.fm_ptr, params_full)
+        evaluate_loglik_only_cpp(.fm_ptr, params_free)
       })
       loglik <- sum(unlist(loglik_parts))
     } else {
       # Single worker
-      loglik <- evaluate_loglik_only_cpp(fm_ptrs[[1]], params_full)
+      loglik <- evaluate_loglik_only_cpp(fm_ptrs[[1]], params_free)
     }
     return(-loglik)  # Negative for minimization
   }
 
   # Define gradient function (returns gradient for free parameters only)
   gradient_fn <- function(params_free) {
-    # Reconstruct full parameter vector
-    params_full <- init_params
-    params_full[param_constraints$free_idx] <- params_free
-
-    # Apply equality constraints: derived params = primary params
-    params_full <- apply_equality_constraints(params_full)
+    # C++ expects only FREE params (it has fixed values stored internally)
+    # C++ returns gradient for free params only
 
     if (!is.null(cl)) {
       # Parallel evaluation: aggregate gradients
-      parallel::clusterExport(cl, "params_full", envir = environment())
+      parallel::clusterExport(cl, "params_free", envir = environment())
       grad_parts <- parallel::clusterEvalQ(cl, {
-        result <- evaluate_likelihood_cpp(.fm_ptr, params_full,
+        result <- evaluate_likelihood_cpp(.fm_ptr, params_free,
                                          compute_gradient = TRUE,
                                          compute_hessian = FALSE)
         result$gradient
       })
-      grad_full <- Reduce(`+`, grad_parts)
+      grad_free <- Reduce(`+`, grad_parts)
     } else {
-      result <- evaluate_likelihood_cpp(fm_ptrs[[1]], params_full,
+      result <- evaluate_likelihood_cpp(fm_ptrs[[1]], params_free,
                                        compute_gradient = TRUE,
                                        compute_hessian = FALSE)
-      grad_full <- result$gradient
+      grad_free <- result$gradient
     }
 
-    # Aggregate gradients for equality constraints:
-    # grad[primary] += grad[derived] (chain rule for constrained optimization)
-    if (length(param_constraints$equality_mapping) > 0) {
-      for (derived_idx_str in names(param_constraints$equality_mapping)) {
-        derived_idx <- as.integer(derived_idx_str)
-        primary_idx <- param_constraints$equality_mapping[[derived_idx_str]]
-        grad_full[primary_idx] <- grad_full[primary_idx] + grad_full[derived_idx]
-      }
-    }
-
-    # Return gradient for free parameters only
-    return(-grad_full[param_constraints$free_idx])  # Negative for minimization
+    # C++ returns gradient for free parameters only, already extracted
+    # Return negative for minimization
+    return(-grad_free)
   }
 
   # Define Hessian function (returns Hessian for free parameters only)
   hessian_fn <- function(params_free) {
-    # Reconstruct full parameter vector
-    params_full <- init_params
-    params_full[param_constraints$free_idx] <- params_free
-
-    # Apply equality constraints: derived params = primary params
-    params_full <- apply_equality_constraints(params_full)
+    # C++ expects only FREE params (it has fixed values stored internally)
+    # C++ returns Hessian for free params only
 
     if (!is.null(cl)) {
       # Parallel evaluation: aggregate Hessians
-      parallel::clusterExport(cl, "params_full", envir = environment())
+      parallel::clusterExport(cl, "params_free", envir = environment())
       hess_parts <- parallel::clusterEvalQ(cl, {
-        result <- evaluate_likelihood_cpp(.fm_ptr, params_full,
+        result <- evaluate_likelihood_cpp(.fm_ptr, params_free,
                                          compute_gradient = FALSE,
                                          compute_hessian = TRUE)
         result$hessian
@@ -1102,67 +1133,39 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       # Aggregate Hessian matrices (they're upper triangles, addition is correct)
       hess <- Reduce(`+`, hess_parts)
     } else {
-      result <- evaluate_likelihood_cpp(fm_ptrs[[1]], params_full,
+      result <- evaluate_likelihood_cpp(fm_ptrs[[1]], params_free,
                                        compute_gradient = FALSE,
                                        compute_hessian = TRUE)
       hess <- result$hessian
     }
 
-    # Convert upper triangle vector to full symmetric matrix
-    n_params_full <- length(params_full)
+    # C++ returns Hessian as upper triangle vector for FREE params
+    # Convert to full symmetric matrix
+    n_params_free <- length(params_free)
     hess_vec_len <- length(hess)
-    expected_len <- n_params_full * (n_params_full + 1) / 2
+    expected_len <- n_params_free * (n_params_free + 1) / 2
 
     if (verbose && hess_vec_len != expected_len) {
       message(sprintf("WARNING: Hessian vector length mismatch!"))
-      message(sprintf("  Expected: %d (for %d params)", expected_len, n_params_full))
+      message(sprintf("  Expected: %d (for %d free params)", expected_len, n_params_free))
       message(sprintf("  Actual: %d", hess_vec_len))
-      message(sprintf("  Difference: %d", expected_len - hess_vec_len))
     }
 
-    hess_mat_full <- matrix(0, n_params_full, n_params_full)
+    hess_mat_free <- matrix(0, n_params_free, n_params_free)
     idx <- 1
-    for (i in 1:n_params_full) {
-      for (j in i:n_params_full) {
+    for (i in 1:n_params_free) {
+      for (j in i:n_params_free) {
         if (idx > hess_vec_len) {
           if (verbose) {
             message(sprintf("ERROR: Trying to access hess[%d] but length is only %d", idx, hess_vec_len))
-            message(sprintf("  At position i=%d, j=%d", i, j))
           }
           stop("Hessian vector length insufficient for reconstruction")
         }
-        hess_mat_full[i, j] <- hess[idx]
-        hess_mat_full[j, i] <- hess[idx]  # Symmetrize
+        hess_mat_free[i, j] <- hess[idx]
+        hess_mat_free[j, i] <- hess[idx]  # Symmetrize
         idx <- idx + 1
       }
     }
-
-    # Aggregate Hessian for equality constraints
-    # For constraint θ_d = θ_p, the chain rule gives:
-    # H_new[p,p] = H[p,p] + 2*H[p,d] + H[d,d]
-    # H_new[p,q] = H[p,q] + H[d,q] for any other parameter q
-    if (length(param_constraints$equality_mapping) > 0) {
-      for (derived_idx_str in names(param_constraints$equality_mapping)) {
-        derived_idx <- as.integer(derived_idx_str)
-        primary_idx <- param_constraints$equality_mapping[[derived_idx_str]]
-
-        # Add H[d,d] and 2*H[p,d] to H[p,p]
-        hess_mat_full[primary_idx, primary_idx] <- hess_mat_full[primary_idx, primary_idx] +
-                                                   2 * hess_mat_full[primary_idx, derived_idx] +
-                                                   hess_mat_full[derived_idx, derived_idx]
-
-        # Add H[d,q] to H[p,q] for all other parameters q != p, d
-        for (q in seq_len(n_params_full)) {
-          if (q != primary_idx && q != derived_idx) {
-            hess_mat_full[primary_idx, q] <- hess_mat_full[primary_idx, q] + hess_mat_full[derived_idx, q]
-            hess_mat_full[q, primary_idx] <- hess_mat_full[primary_idx, q]  # Keep symmetric
-          }
-        }
-      }
-    }
-
-    # Extract submatrix for free parameters only
-    hess_mat_free <- hess_mat_full[param_constraints$free_idx, param_constraints$free_idx, drop = FALSE]
 
     # Debug: Check for NA/NaN values
     if (any(is.na(hess_mat_free)) || any(is.infinite(hess_mat_free))) {
@@ -1170,8 +1173,6 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
         message("WARNING: Hessian contains NA/NaN/Inf values!")
         message(sprintf("  NA count: %d", sum(is.na(hess_mat_free))))
         message(sprintf("  Inf count: %d", sum(is.infinite(hess_mat_free))))
-        message(sprintf("  params_full: %s", paste(head(params_full, 5), collapse=", ")))
-        message(sprintf("  hess vector (first 10): %s", paste(head(hess, 10), collapse=", ")))
       }
     }
 
@@ -1182,7 +1183,8 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   if (verbose) message(sprintf("Running optimization using %s...", optimizer))
 
   # Track current starting point for restarts
-  current_start <- init_params[param_constraints$free_idx]
+  # Use full_init_params since free_idx indexes into the full parameter vector
+  current_start <- full_init_params[param_constraints$free_idx]
   n_restarts_used <- 0
 
   # Track optimization timing
@@ -1352,19 +1354,21 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   }
 
   # Reconstruct full parameter vector
-  estimates <- init_params
+  # Use full_init_params (not init_params) because free_idx indexes into the FULL parameter vector
+  estimates <- full_init_params
   estimates[param_constraints$free_idx] <- estimates_free
 
   # Apply equality constraints to final estimates
   estimates <- apply_equality_constraints(estimates)
 
   # Compute Hessian for standard errors
+  # C++ expects FREE params only
   if (verbose) message("Computing Hessian for standard errors...")
 
   if (!is.null(cl)) {
-    parallel::clusterExport(cl, "estimates", envir = environment())
+    parallel::clusterExport(cl, "estimates_free", envir = environment())
     hess_parts <- parallel::clusterEvalQ(cl, {
-      result <- evaluate_likelihood_cpp(.fm_ptr, estimates,
+      result <- evaluate_likelihood_cpp(.fm_ptr, estimates_free,
                                        compute_gradient = TRUE,
                                        compute_hessian = TRUE)
       result$hessian
@@ -1372,7 +1376,7 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     # Aggregate Hessian matrices (they're upper triangles, addition is correct)
     hessian <- Reduce(`+`, hess_parts)
   } else {
-    result <- evaluate_likelihood_cpp(fm_ptrs[[1]], estimates,
+    result <- evaluate_likelihood_cpp(fm_ptrs[[1]], estimates_free,
                                      compute_gradient = TRUE,
                                      compute_hessian = TRUE)
     hessian <- result$hessian
@@ -1384,22 +1388,23 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   hessian <- -hessian
 
   # Compute standard errors from Hessian
-  # The Hessian is the matrix of second derivatives of the negative log-likelihood
-  # Standard errors are sqrt(diag(inv(Hessian)))
+  # The Hessian is for FREE params only; fixed params get SE = 0
+  # Initialize full vector for all params
   std_errors <- rep(NA, length(estimates))
 
   tryCatch({
-    # Convert upper triangle to full symmetric matrix
-    n_params <- length(estimates)
-    hess_matrix <- matrix(0, n_params, n_params)
+    # C++ returns Hessian for FREE params only as upper triangle vector
+    # Convert to full symmetric matrix
+    n_free <- length(estimates_free)
+    hess_free <- matrix(0, n_free, n_free)
 
     # Fill in the upper triangle
     idx <- 1
-    for (i in 1:n_params) {
-      for (j in i:n_params) {
-        hess_matrix[i, j] <- hessian[idx]
+    for (i in 1:n_free) {
+      for (j in i:n_free) {
+        hess_free[i, j] <- hessian[idx]
         if (i != j) {
-          hess_matrix[j, i] <- hessian[idx]  # Symmetric
+          hess_free[j, i] <- hessian[idx]  # Symmetric
         }
         idx <- idx + 1
       }
@@ -1407,20 +1412,17 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
 
     # Verify the matrix is symmetric
     if (verbose) {
-      max_asym <- max(abs(hess_matrix - t(hess_matrix)))
+      max_asym <- max(abs(hess_free - t(hess_free)))
       if (max_asym > 1e-10) {
         warning(sprintf("Hessian matrix is not symmetric (max diff: %.2e)", max_asym))
       }
     }
 
-    # Use parameter constraints to identify fixed vs free parameters
+    # Identify fixed vs free parameters for result indexing
     fixed_params <- which(param_constraints$param_fixed)
     free_params <- param_constraints$free_idx
 
-    if (length(free_params) > 0) {
-      # Extract Hessian for free parameters only
-      hess_free <- hess_matrix[free_params, free_params, drop = FALSE]
-
+    if (n_free > 0) {
       # Check condition number of Hessian
       if (verbose) {
         eig_vals <- eigen(hess_free, only.values = TRUE)$values
@@ -1434,7 +1436,7 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
         # Show Hessian diagonal elements
         message("\n  Hessian diagonal elements (2nd derivatives of -loglik):")
         hess_diag <- diag(hess_free)
-        for (i in seq_along(free_params)) {
+        for (i in seq_len(n_free)) {
           param_idx <- free_params[i]
           message(sprintf("    [%2d] %.4e", param_idx, hess_diag[i]))
         }

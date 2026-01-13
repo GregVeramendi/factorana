@@ -677,10 +677,19 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
   # Assign names to parameter vector
   names(init_params) <- param_names
 
+  # Compute param_fixed using setup_parameter_constraints
+  # This is needed for gradient/Hessian checking in tests
+  param_metadata <- build_parameter_metadata(model_system)
+  param_constraints <- setup_parameter_constraints(
+    model_system, init_params, param_metadata,
+    factor_variance_fixed_status, verbose = FALSE
+  )
+
   list(
     init_params = init_params,
     param_names = param_names,
-    factor_variance_fixed = factor_variance_fixed_status
+    factor_variance_fixed = factor_variance_fixed_status,
+    param_fixed = param_constraints$param_fixed
   )
 }
 

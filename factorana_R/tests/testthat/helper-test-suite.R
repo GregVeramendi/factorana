@@ -16,17 +16,71 @@ evaluate_likelihood_rcpp <- function(model_system, data, params,
   # Convert data to matrix
   data_mat <- as.matrix(data)
 
-  # Initialize C++ model
-  fm_ptr <- initialize_factor_model_cpp(model_system, data_mat, n_quad)
+  # Initialize C++ model with params as init_params
+  # This sets up parameter constraints correctly
+  fm_ptr <- initialize_factor_model_cpp(model_system, data_mat, n_quad, params)
 
-  # Evaluate
-  result <- evaluate_likelihood_cpp(fm_ptr, params,
+  # Extract free parameters (C++ expects only free params)
+  params_free <- extract_free_params_cpp(fm_ptr, params)
+  n_free <- length(params_free)
+
+  # Evaluate with free params
+  result <- evaluate_likelihood_cpp(fm_ptr, params_free,
                                    compute_gradient = compute_gradient,
                                    compute_hessian = compute_hessian)
 
   # Standardize field names (C++ returns 'logLikelihood', we want 'loglik')
   if (!is.null(result$logLikelihood)) {
     result$loglik <- result$logLikelihood
+  }
+
+  # Map free gradient/Hessian back to full parameter space
+  # Fixed parameters get gradient = 0 and corresponding Hessian rows/cols = 0
+  if (compute_gradient && !is.null(result$gradient)) {
+    grad_free <- result$gradient
+    n_full <- length(params)
+    grad_full <- rep(0, n_full)
+
+    # Determine which parameters are free by comparing params to params_free
+    # C++ extracts free params by skipping fixed ones, so we need to figure out the mapping
+    # Simple approach: build parameter constraints the same way R does
+    init <- factorana::initialize_parameters(model_system, data)
+    param_metadata <- factorana:::build_parameter_metadata(model_system)
+    param_constraints <- factorana:::setup_parameter_constraints(model_system, params, param_metadata, init$factor_variance_fixed, verbose = FALSE)
+    free_idx <- param_constraints$free_idx
+
+    # Map free gradient back
+    grad_full[free_idx] <- grad_free
+    result$gradient <- grad_full
+
+    # Map free Hessian back to full parameter space
+    if (compute_hessian && !is.null(result$hessian)) {
+      n_free <- length(free_idx)
+      # C++ returns packed upper triangular: n_free * (n_free + 1) / 2 elements
+      hess_free_vec <- result$hessian
+
+      # Build full Hessian vector: n_full * (n_full + 1) / 2 elements
+      hess_full_vec <- rep(0, n_full * (n_full + 1) / 2)
+
+      # Map free Hessian elements to full Hessian elements
+      # For each (i, j) in free params, find corresponding position in full params
+      free_idx_1 <- 1  # 1-indexed position in free Hessian vector
+      for (fi in seq_len(n_free)) {
+        for (fj in fi:n_free) {
+          # Get full parameter indices
+          full_i <- free_idx[fi]
+          full_j <- free_idx[fj]
+
+          # Compute position in full Hessian vector (upper triangular, 1-indexed)
+          full_idx <- (full_i - 1) * n_full - (full_i - 1) * full_i / 2 + full_j
+
+          # Copy the value
+          hess_full_vec[full_idx] <- hess_free_vec[free_idx_1]
+          free_idx_1 <- free_idx_1 + 1
+        }
+      }
+      result$hessian <- hess_full_vec
+    }
   }
 
   return(result)

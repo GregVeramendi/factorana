@@ -86,8 +86,12 @@ test_that("Fixed coefficients work in linear model", {
   # nparam_model should be reduced by 1 in the fixed component
   expect_equal(mc_fixed$nparam_model, mc$nparam_model - 1)
 
-  # Result estimates should have one fewer free parameter
-  expect_equal(length(result$estimates), n_params_before - 1)
+  # Result estimates includes ALL parameters (including fixed ones)
+  # Fixed params appear at their fixed values
+  expect_equal(length(result$estimates), n_params_before)
+
+  # Check the fixed param (Y_x1) is at its fixed value
+  expect_equal(result$estimates["Y_x1"], c(Y_x1 = 0), tolerance = 1e-10)
 })
 
 test_that("Fixed coefficients work in probit model", {
@@ -132,8 +136,11 @@ test_that("Fixed coefficients work in probit model", {
 
   expect_true(!is.null(result))
 
-  # Verify parameter count reflects fixed coefficient
-  expect_equal(length(result$estimates), n_params_before - 1)
+  # Verify parameter count includes all params (fixed ones at their fixed values)
+  expect_equal(length(result$estimates), n_params_before)
+
+  # Check the fixed param is at its fixed value
+  expect_equal(result$estimates["Y_x1"], c(Y_x1 = 0), tolerance = 1e-10)
 })
 
 test_that("Multiple fixed coefficients work", {
@@ -180,8 +187,12 @@ test_that("Multiple fixed coefficients work", {
 
   expect_true(!is.null(result))
 
-  # Verify parameter count reflects two fixed coefficients
-  expect_equal(length(result$estimates), n_params_before - 2)
+  # Verify parameter count includes all params (fixed ones at their fixed values)
+  expect_equal(length(result$estimates), n_params_before)
+
+  # Check the fixed params are at their fixed values
+  expect_equal(result$estimates["Y_x1"], c(Y_x1 = 0), tolerance = 1e-10)
+  expect_equal(result$estimates["Y_x2"], c(Y_x2 = 0), tolerance = 1e-10)
 })
 
 test_that("Fixed coefficients with choice for multinomial logit", {
@@ -239,8 +250,11 @@ test_that("Fixed coefficients with choice for multinomial logit", {
 
   expect_true(!is.null(result))
 
-  # Verify parameter count reflects one fixed coefficient
-  expect_equal(length(result$estimates), n_params_before - 1)
+  # Verify parameter count includes all params (fixed ones at their fixed values)
+  expect_equal(length(result$estimates), n_params_before)
+
+  # Check the fixed param is at its fixed value
+  expect_equal(result$estimates["Y_c1_x1"], c(Y_c1_x1 = 0), tolerance = 1e-10)
 })
 
 test_that("Fixed coefficient value is used correctly", {
@@ -282,7 +296,9 @@ test_that("Fixed coefficient value is used correctly", {
   # Should have converged successfully
   expect_equal(result$convergence, 0)
 
+  # The fixed intercept should be exactly at its fixed value
+  expect_equal(result$estimates["Y_intercept"], c(Y_intercept = 2.5), tolerance = 1e-10)
+
   # Estimated x1 coefficient should be close to 1.0
-  # Params order: fac_var, x1, loading, sigma (intercept is fixed)
-  expect_true(abs(result$estimates[2] - 1.0) < 0.3)
+  expect_true(abs(result$estimates["Y_x1"] - 1.0) < 0.3)
 })

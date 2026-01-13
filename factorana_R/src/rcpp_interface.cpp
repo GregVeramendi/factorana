@@ -137,6 +137,10 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
 
     fm->SetQuadrature(nodes, weights);
 
+    // Track which factors are identified via fixed non-zero loadings
+    // A factor is identified if at least one component has loading_normalization != NA and != 0
+    std::vector<bool> factor_identified(n_fac, false);
+
     // Add model components
     List components = model_system["components"];
     for (int i = 0; i < components.size(); i++) {
@@ -253,6 +257,11 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
                         facnorm.push_back(-9999.0);  // Free parameter
                     } else {
                         facnorm.push_back(norm_vec[j]);  // Fixed value
+                        // Track factor identification: if loading is fixed AND non-zero,
+                        // the factor variance is identified (can be estimated)
+                        if (std::abs(norm_vec[j]) > 1e-6 && j < n_fac) {
+                            factor_identified[j] = true;
+                        }
                     }
                 }
             }
@@ -360,12 +369,35 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
     std::vector<bool> param_fixed_vec(total_params, false);
 
     // Track parameter position as we go through components
-    // Start after factor variance parameters (and correlation/type params)
-    int param_offset = n_fac;  // Factor variances
+    // Start after factor variance parameters (and correlation/SE/type params)
+    int param_offset = 0;
 
-    // Add correlation parameter offset if present
-    if (correlation && n_fac == 2) {
-        param_offset += 1;  // One correlation parameter for 2-factor model
+    // Handle factor structure-specific parameter counts
+    if (fac_struct == FactorStructure::SE_LINEAR) {
+        // SE_linear: (n_fac - 1) input factor variances + intercept + (n_fac-1) linear + residual var
+        int n_input_factors = n_fac - 1;
+        param_offset = n_input_factors;  // Input factor variances
+        param_offset += 1;  // SE intercept
+        param_offset += n_input_factors;  // SE linear coefficients
+        param_offset += 1;  // SE residual variance
+    } else if (fac_struct == FactorStructure::SE_QUADRATIC) {
+        // SE_quadratic: (n_fac - 1) input factor variances + intercept + (n_fac-1) linear + (n_fac-1) quadratic + residual var
+        int n_input_factors = n_fac - 1;
+        param_offset = n_input_factors;  // Input factor variances
+        param_offset += 1;  // SE intercept
+        param_offset += n_input_factors;  // SE linear coefficients
+        param_offset += n_input_factors;  // SE quadratic coefficients
+        param_offset += 1;  // SE residual variance
+    } else if (fac_struct == FactorStructure::CORRELATION && n_fac == 2) {
+        // Correlated 2-factor: 2 variances + 1 correlation
+        param_offset = n_fac + 1;
+    } else {
+        // Independent factors or backward compatibility
+        param_offset = n_fac;  // Factor variances
+        // Add correlation parameter offset if present (backward compatibility)
+        if (correlation && n_fac == 2) {
+            param_offset += 1;
+        }
     }
 
     // Add type model parameters offset if n_types > 1
@@ -373,7 +405,17 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         param_offset += (n_types - 1) * n_fac;  // Type loadings
     }
 
-    // Process each component's fixed coefficients
+    // Check if previous_stage_info exists - if so, fix all factor-level parameters
+    // (factor variances, correlations, SE params, type params)
+    if (model_system.containsElementNamed("previous_stage_info") &&
+        !Rf_isNull(model_system["previous_stage_info"])) {
+        // Mark all factor-level parameters as fixed
+        for (int j = 0; j < param_offset; j++) {
+            param_fixed_vec[j] = true;
+        }
+    }
+
+    // Process each component's fixed coefficients and all_params_fixed
     for (int i = 0; i < components.size(); i++) {
         List comp = components[i];
 
@@ -402,52 +444,20 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             n_free_loadings = n_fac;
         }
 
-        // Check for fixed_coefficients in this component
-        if (comp.containsElementNamed("fixed_coefficients") &&
-            !Rf_isNull(comp["fixed_coefficients"])) {
-            List fixed_coefs = comp["fixed_coefficients"];
-
-            for (int fc_idx = 0; fc_idx < fixed_coefs.size(); fc_idx++) {
-                List fc = fixed_coefs[fc_idx];
-                std::string cov_name = as<std::string>(fc["covariate"]);
-
-                // Find covariate position
-                int cov_pos = -1;
-                for (int k = 0; k < covariate_names.size(); k++) {
-                    if (covariate_names[k] == cov_name) {
-                        cov_pos = k;
-                        break;
-                    }
-                }
-
-                if (cov_pos >= 0) {
-                    // Determine parameter index based on model type and choice
-                    int param_idx;
-
-                    if (model_type_str == "logit" && n_choice > 2) {
-                        // Multinomial logit: check if choice is specified
-                        int choice = 1;  // Default to first non-reference choice
-                        if (fc.containsElementNamed("choice") && !Rf_isNull(fc["choice"])) {
-                            choice = as<int>(fc["choice"]);
-                        }
-                        // Each choice has: covariates + loadings
-                        int params_per_choice = covariate_names.size() + n_free_loadings;
-                        param_idx = param_offset + (choice - 1) * params_per_choice + cov_pos;
-                    } else {
-                        // Binary/linear/probit/oprobit: coefficients come first
-                        param_idx = param_offset + cov_pos;
-                    }
-
-                    // Mark as fixed
-                    if (param_idx < total_params) {
-                        param_fixed_vec[param_idx] = true;
-                    }
-                }
+        // Count quadratic and interaction loadings
+        int n_quad = 0, n_inter = 0;
+        if (comp.containsElementNamed("factor_spec")) {
+            std::string fs = as<std::string>(comp["factor_spec"]);
+            if (fs == "quadratic" || fs == "full") {
+                n_quad = n_free_loadings;  // One quadratic term per free linear loading
+            }
+            if (fs == "interactions" || fs == "full") {
+                // Number of interaction terms = n_fac choose 2
+                n_inter = n_fac * (n_fac - 1) / 2;
             }
         }
 
-        // Advance param_offset for next component
-        // Calculate n_params for this component (same logic as above)
+        // Calculate n_params for this component (needed for both all_params_fixed and offset)
         int n_params_comp;
         ModelType mtype;
         if (model_type_str == "linear") mtype = ModelType::LINEAR;
@@ -456,17 +466,284 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         else mtype = ModelType::OPROBIT;
 
         if (mtype == ModelType::LOGIT && n_choice > 2) {
-            n_params_comp = (n_choice - 1) * (covariate_names.size() + n_free_loadings);
+            n_params_comp = (n_choice - 1) * (covariate_names.size() + n_free_loadings + n_quad + n_inter);
             if (n_types > 1) n_params_comp += (n_choice - 1) * (n_types - 1);
         } else if (mtype == ModelType::OPROBIT) {
-            n_params_comp = covariate_names.size() + n_free_loadings + (n_choice - 1);
+            n_params_comp = covariate_names.size() + n_free_loadings + n_quad + n_inter + (n_choice - 1);
             if (n_types > 1) n_params_comp += (n_types - 1);
         } else {
-            n_params_comp = covariate_names.size() + n_free_loadings;
+            n_params_comp = covariate_names.size() + n_free_loadings + n_quad + n_inter;
             if (mtype == ModelType::LINEAR) n_params_comp += 1;
             if (n_types > 1) n_params_comp += (n_types - 1);
         }
+
+        // Check if all parameters are fixed for this component (multi-stage estimation)
+        bool all_params_fixed = false;
+        if (comp.containsElementNamed("all_params_fixed")) {
+            all_params_fixed = as<bool>(comp["all_params_fixed"]);
+        }
+
+        if (all_params_fixed) {
+            // Mark ALL parameters for this component as fixed
+            for (int j = 0; j < n_params_comp; j++) {
+                int param_idx = param_offset + j;
+                if (param_idx < total_params) {
+                    param_fixed_vec[param_idx] = true;
+                }
+            }
+        } else {
+            // For oprobit models, fix the intercept (absorbed into thresholds)
+            if (model_type_str == "oprobit") {
+                // Find if 'intercept' is in covariates
+                for (int k = 0; k < covariate_names.size(); k++) {
+                    if (covariate_names[k] == "intercept") {
+                        int param_idx = param_offset + k;
+                        if (param_idx < total_params) {
+                            param_fixed_vec[param_idx] = true;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Check for individual fixed_coefficients in this component
+            if (comp.containsElementNamed("fixed_coefficients") &&
+                !Rf_isNull(comp["fixed_coefficients"])) {
+                List fixed_coefs = comp["fixed_coefficients"];
+
+                for (int fc_idx = 0; fc_idx < fixed_coefs.size(); fc_idx++) {
+                    List fc = fixed_coefs[fc_idx];
+                    std::string cov_name = as<std::string>(fc["covariate"]);
+
+                    // Find covariate position
+                    int cov_pos = -1;
+                    for (int k = 0; k < covariate_names.size(); k++) {
+                        if (covariate_names[k] == cov_name) {
+                            cov_pos = k;
+                            break;
+                        }
+                    }
+
+                    if (cov_pos >= 0) {
+                        // Determine parameter index based on model type and choice
+                        int param_idx;
+
+                        if (model_type_str == "logit" && n_choice > 2) {
+                            // Multinomial logit: check if choice is specified
+                            int choice = 1;  // Default to first non-reference choice
+                            if (fc.containsElementNamed("choice") && !Rf_isNull(fc["choice"])) {
+                                choice = as<int>(fc["choice"]);
+                            }
+                            // Each choice has: covariates + loadings + quad + inter
+                            int params_per_choice = covariate_names.size() + n_free_loadings + n_quad + n_inter;
+                            param_idx = param_offset + (choice - 1) * params_per_choice + cov_pos;
+                        } else {
+                            // Binary/linear/probit/oprobit: coefficients come first
+                            param_idx = param_offset + cov_pos;
+                        }
+
+                        // Mark as fixed
+                        if (param_idx < total_params) {
+                            param_fixed_vec[param_idx] = true;
+                        }
+                    }
+                }
+            }
+
+            // Handle fixed_type_intercepts
+            if (comp.containsElementNamed("fixed_type_intercepts") &&
+                !Rf_isNull(comp["fixed_type_intercepts"])) {
+                List fixed_type_ints = comp["fixed_type_intercepts"];
+
+                // Calculate base parameters (everything except type intercepts)
+                // Type intercepts are at the end of the component's parameter block
+                int n_type_intercepts = (n_types > 1) ? (n_types - 1) : 0;
+                int base_params = n_params_comp - n_type_intercepts;
+
+                for (int fti_idx = 0; fti_idx < fixed_type_ints.size(); fti_idx++) {
+                    List fti = fixed_type_ints[fti_idx];
+                    int type_num = as<int>(fti["type"]);  // 2-indexed (type 2, 3, ...)
+
+                    // Type intercept index within component: base_params + (type_num - 2)
+                    // type_num is 2..n_types, so offset is 0..(n_types-2)
+                    int type_intercept_offset = type_num - 2;  // 0-indexed
+                    int param_idx = param_offset + base_params + type_intercept_offset;
+
+                    // Mark as fixed
+                    if (param_idx >= 0 && param_idx < total_params) {
+                        param_fixed_vec[param_idx] = true;
+                    }
+                }
+            }
+        }
+
+        // Advance param_offset for next component
         param_offset += n_params_comp;
+    }
+
+    // Mark unidentified factor variances as fixed
+    // Factor variances are the first n_fac parameters (for independent/correlation structures)
+    // or first (n_fac - 1) for SE structures
+    if (fac_struct == FactorStructure::INDEPENDENT || fac_struct == FactorStructure::CORRELATION) {
+        for (int k = 0; k < n_fac; k++) {
+            if (!factor_identified[k]) {
+                param_fixed_vec[k] = true;  // Fix this factor's variance
+            }
+        }
+    } else if (fac_struct == FactorStructure::SE_LINEAR || fac_struct == FactorStructure::SE_QUADRATIC) {
+        // For SE models, only input factors (first n_fac - 1) have variance parameters
+        for (int k = 0; k < n_fac - 1; k++) {
+            if (!factor_identified[k]) {
+                param_fixed_vec[k] = true;
+            }
+        }
+    }
+
+    // Handle equality constraints - mark tied parameters as fixed
+    // Equality constraints tie parameters so that tied params = primary param during optimization
+    // The R side handles gradient aggregation, C++ just needs to mark them as fixed
+    if (model_system.containsElementNamed("equality_constraints") &&
+        !Rf_isNull(model_system["equality_constraints"])) {
+        List eq_constraints = model_system["equality_constraints"];
+
+        // Build parameter name to index mapping
+        std::map<std::string, int> param_name_to_idx;
+
+        // Factor-level parameters
+        int idx = 0;
+        if (fac_struct == FactorStructure::SE_LINEAR || fac_struct == FactorStructure::SE_QUADRATIC) {
+            // SE models: factor_var_1...(n_fac-1), se_intercept, se_linear_1..., [se_quadratic_1...], se_residual_var
+            for (int k = 0; k < n_fac - 1; k++) {
+                param_name_to_idx["factor_var_" + std::to_string(k + 1)] = idx++;
+            }
+            param_name_to_idx["se_intercept"] = idx++;
+            for (int k = 0; k < n_fac - 1; k++) {
+                param_name_to_idx["se_linear_" + std::to_string(k + 1)] = idx++;
+            }
+            if (fac_struct == FactorStructure::SE_QUADRATIC) {
+                for (int k = 0; k < n_fac - 1; k++) {
+                    param_name_to_idx["se_quadratic_" + std::to_string(k + 1)] = idx++;
+                }
+            }
+            param_name_to_idx["se_residual_var"] = idx++;
+        } else if (fac_struct == FactorStructure::CORRELATION) {
+            // Correlation: factor variances then correlation parameters
+            for (int k = 0; k < n_fac; k++) {
+                param_name_to_idx["factor_var_" + std::to_string(k + 1)] = idx++;
+            }
+            // Add correlation parameters
+            for (int j = 0; j < n_fac - 1; j++) {
+                for (int k = j + 1; k < n_fac; k++) {
+                    param_name_to_idx["factor_corr_" + std::to_string(j + 1) + "_" + std::to_string(k + 1)] = idx++;
+                }
+            }
+        } else {
+            // Independent: just factor variances
+            for (int k = 0; k < n_fac; k++) {
+                param_name_to_idx["factor_var_" + std::to_string(k + 1)] = idx++;
+            }
+        }
+
+        // Type-specific parameters (if any)
+        if (n_types > 1) {
+            for (int t = 2; t <= n_types; t++) {
+                param_name_to_idx["type_" + std::to_string(t) + "_intercept"] = idx++;
+            }
+        }
+
+        // Component-level parameters (must iterate through components in order)
+        for (int i = 0; i < components.size(); i++) {
+            List comp = components[i];
+            std::string comp_name = as<std::string>(comp["name"]);
+            std::string model_type_str = as<std::string>(comp["model_type"]);
+
+            CharacterVector covariate_names;
+            if (comp.containsElementNamed("covariates") && !Rf_isNull(comp["covariates"])) {
+                covariate_names = comp["covariates"];
+            }
+
+            // Get number of free loadings
+            int n_free_loadings = 0;
+            std::vector<int> free_loading_indices;
+            if (comp.containsElementNamed("loading_normalization") && !Rf_isNull(comp["loading_normalization"])) {
+                NumericVector norm_vec = comp["loading_normalization"];
+                for (int j = 0; j < norm_vec.size(); j++) {
+                    if (NumericVector::is_na(norm_vec[j])) {
+                        n_free_loadings++;
+                        free_loading_indices.push_back(j + 1);
+                    }
+                }
+            }
+
+            int num_choices = 2;  // default for binary
+            if (comp.containsElementNamed("num_choices") && !Rf_isNull(comp["num_choices"])) {
+                num_choices = as<int>(comp["num_choices"]);
+            }
+
+            // Handle different model types
+            if (model_type_str == "logit" && num_choices > 2) {
+                // Multinomial logit - params per choice
+                for (int c = 1; c < num_choices; c++) {
+                    std::string choice_suffix = "_c" + std::to_string(c);
+                    for (int j = 0; j < covariate_names.size(); j++) {
+                        param_name_to_idx[comp_name + choice_suffix + "_" + as<std::string>(covariate_names[j])] = idx++;
+                    }
+                    for (int j = 0; j < free_loading_indices.size(); j++) {
+                        param_name_to_idx[comp_name + choice_suffix + "_loading_" + std::to_string(free_loading_indices[j])] = idx++;
+                    }
+                    // Type intercepts for this choice
+                    if (n_types > 1) {
+                        for (int t = 2; t <= n_types; t++) {
+                            param_name_to_idx[comp_name + choice_suffix + "_type_" + std::to_string(t) + "_intercept"] = idx++;
+                        }
+                    }
+                }
+            } else {
+                // Standard component (linear, probit, oprobit, binary logit)
+                for (int j = 0; j < covariate_names.size(); j++) {
+                    param_name_to_idx[comp_name + "_" + as<std::string>(covariate_names[j])] = idx++;
+                }
+                for (int j = 0; j < free_loading_indices.size(); j++) {
+                    param_name_to_idx[comp_name + "_loading_" + std::to_string(free_loading_indices[j])] = idx++;
+                }
+
+                // Linear model has sigma
+                if (model_type_str == "linear") {
+                    param_name_to_idx[comp_name + "_sigma"] = idx++;
+                }
+
+                // Ordered probit has thresholds
+                if (model_type_str == "oprobit" && comp.containsElementNamed("n_categories")) {
+                    int n_cat = as<int>(comp["n_categories"]);
+                    for (int j = 1; j < n_cat; j++) {
+                        param_name_to_idx[comp_name + "_thresh_" + std::to_string(j)] = idx++;
+                    }
+                }
+
+                // Type intercepts
+                if (n_types > 1) {
+                    for (int t = 2; t <= n_types; t++) {
+                        param_name_to_idx[comp_name + "_type_" + std::to_string(t) + "_intercept"] = idx++;
+                    }
+                }
+            }
+        }
+
+        // Process each equality constraint - mark tied params as fixed
+        for (int i = 0; i < eq_constraints.size(); i++) {
+            CharacterVector constraint = eq_constraints[i];
+            if (constraint.size() >= 2) {
+                // First param is primary (free), rest are tied (fixed)
+                std::string primary_name = as<std::string>(constraint[0]);
+                for (int j = 1; j < constraint.size(); j++) {
+                    std::string tied_name = as<std::string>(constraint[j]);
+                    auto it = param_name_to_idx.find(tied_name);
+                    if (it != param_name_to_idx.end()) {
+                        param_fixed_vec[it->second] = true;
+                    }
+                }
+            }
+        }
     }
 
     // Set parameter constraints with optional initial values
