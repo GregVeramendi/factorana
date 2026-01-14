@@ -703,6 +703,11 @@ void Model::EvalProbit(double expres, double obsSign, const std::vector<double>&
 
                 // Cross-derivative d(theta_k)/d(lambda_quad_k) = 2 * f_k
                 hess[k*npar + index] += 2.0 * fac[k] * lambda_val * obsSign;
+
+                // Second derivative term for factor-factor diagonal: d²(xb)/df_k² = 2*λ_q_k
+                // This comes from: d²L/df² = hess_factor * (dxb/df)² + λ_mills * obsSign * d²(xb)/df²
+                // The first term is in the HESSIAN CORRECTION block; this is the second term.
+                hess[k*npar + k] += 2.0 * lambda_quad_k * lambda_val * obsSign;
             }
         }
     }
@@ -735,6 +740,11 @@ void Model::EvalProbit(double expres, double obsSign, const std::vector<double>&
                     // Cross-derivatives d(theta)/d(lambda_inter)
                     hess[j*npar + index] += fac[k] * lambda_val * obsSign;
                     hess[k*npar + index] += fac[j] * lambda_val * obsSign;
+
+                    // Second derivative term for factor-factor cross: d²(xb)/df_j df_k = λ_inter
+                    // This comes from: d²L/df_j df_k = hess_factor * (dxb/df_j)*(dxb/df_k) + λ_mills * obsSign * d²(xb)/df_j df_k
+                    // The first term is in the HESSIAN CORRECTION block; this is the second term.
+                    hess[j*npar + k] += lambda_inter * lambda_val * obsSign;
                 }
                 inter_idx++;
             }
@@ -2022,6 +2032,30 @@ void Model::EvalOprobit(double expres, int outcome_value,
                             tmphess[ij*npar + index] += -fac[ik];  // d(theta_j)/d(lambda_inter_jk)
                             tmphess[ik*npar + index] += -fac[ij];  // d(theta_k)/d(lambda_inter_jk)
                             inter_idx++;
+                        }
+                    }
+                }
+
+                // Add second derivative term d²Z/df_k² = -2*λ_q_k for factor-factor diagonal
+                // Note: Z = threshold - xb, so d²Z/df² = -d²xb/df² = -2*λ_q_k (negative sign!)
+                // This comes from: d²L/df² = hess_factor * (dZ/df)² + (PDF/CDF) * obsSign * d²Z/df²
+                // The first term is in the HESSIAN CORRECTION block; this is the second term.
+                if (n_quadratic_loadings > 0) {
+                    for (int k = 0; k < numfac; k++) {
+                        double lambda_quad_k = param[firstpar + nregressors + ifreefac + k];
+                        tmphess[k*npar + k] += -2.0 * lambda_quad_k;  // Negative because d²Z/df² = -d²xb/df²
+                    }
+                }
+
+                // Add second derivative term d²Z/df_j df_k = -λ_inter for factor-factor cross
+                // Note: Z = threshold - xb, so d²Z/df_j df_k = -d²xb/df_j df_k = -λ_inter
+                if (n_interaction_loadings > 0) {
+                    int inter_idx2 = 0;
+                    for (int ij = 0; ij < numfac - 1; ij++) {
+                        for (int ik = ij + 1; ik < numfac; ik++) {
+                            double lambda_inter = param[firstpar + nregressors + ifreefac + n_quadratic_loadings + inter_idx2];
+                            tmphess[ij*npar + ik] += -lambda_inter;  // Negative because d²Z/df = -d²xb/df
+                            inter_idx2++;
                         }
                     }
                 }

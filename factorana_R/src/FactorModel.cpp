@@ -278,6 +278,9 @@ void FactorModel::SetParameterConstraints(const std::vector<bool>& fixed)
         }
     }
 
+    // Initialize gradparlist to freeparlist (will be updated if equality constraints are set)
+    gradparlist = freeparlist;
+
     // Initialize parameter vector with default values
     param.resize(nparam, 0.0);
 
@@ -308,10 +311,45 @@ void FactorModel::SetParameterConstraints(const std::vector<bool>& fixed,
         }
     }
 
+    // Initialize gradparlist to freeparlist (will be updated if equality constraints are set)
+    gradparlist = freeparlist;
+
     // Initialize parameter vector with provided values
     // For free parameters, these are defaults (will be overwritten by optimizer)
     // For fixed parameters, these values are used permanently
     param = fixed_values;
+}
+
+void FactorModel::SetEqualityConstraints(const std::vector<int>& equality_map)
+{
+    if (equality_map.size() != nparam) {
+        throw std::runtime_error("Equality mapping size mismatch: expected " +
+                                 std::to_string(nparam) + " but got " +
+                                 std::to_string(equality_map.size()));
+    }
+    equality_mapping = equality_map;
+
+    // Build gradparlist: params that need gradient computation (free + tied)
+    // Tied params need gradients so they can be aggregated to their primaries
+    gradparlist.clear();
+    std::set<int> grad_params_set;
+
+    // First add all free params
+    for (int i = 0; i < nparam; i++) {
+        if (!param_fixed[i]) {
+            grad_params_set.insert(i);
+        }
+    }
+
+    // Then add all tied params (they're fixed but need gradients)
+    for (int i = 0; i < nparam; i++) {
+        if (equality_mapping[i] >= 0) {
+            grad_params_set.insert(i);
+        }
+    }
+
+    // Convert to sorted vector
+    gradparlist.assign(grad_params_set.begin(), grad_params_set.end());
 }
 
 void FactorModel::MapFreeToFull(const std::vector<double>& free_params)
@@ -327,16 +365,39 @@ void FactorModel::MapFreeToFull(const std::vector<double>& free_params)
         }
         // Fixed parameters keep their current values in param vector
     }
+
+    // For equality constraints, set tied parameter values to their primary's value
+    if (!equality_mapping.empty()) {
+        for (int i = 0; i < nparam; i++) {
+            if (equality_mapping[i] >= 0) {
+                param[i] = param[equality_mapping[i]];
+            }
+        }
+    }
 }
 
 void FactorModel::ExtractFreeGradient(const std::vector<double>& full_grad,
                                       std::vector<double>& free_grad)
 {
+    // If equality constraints exist, first aggregate tied gradients to primaries
+    std::vector<double> aggregated_grad = full_grad;
+
+    if (!equality_mapping.empty()) {
+        for (int i = 0; i < nparam; i++) {
+            if (equality_mapping[i] >= 0) {
+                // Parameter i is tied to primary parameter equality_mapping[i]
+                // Add its gradient to the primary's gradient
+                aggregated_grad[equality_mapping[i]] += full_grad[i];
+            }
+        }
+    }
+
+    // Now extract only free parameters
     free_grad.resize(nparam_free);
     int ifree = 0;
     for (int i = 0; i < nparam; i++) {
         if (!param_fixed[i]) {
-            free_grad[ifree++] = full_grad[i];
+            free_grad[ifree++] = aggregated_grad[i];
         }
     }
 }
@@ -345,9 +406,39 @@ void FactorModel::ExtractFreeHessian(const std::vector<double>& full_hess,
                                      std::vector<double>& free_hess)
 {
     // Extract submatrix corresponding to free parameters
-    // Input: full_hess is upper triangle of nparam x nparam matrix
+    // Input: full_hess is stored as nparam x nparam matrix (row-major, full matrix)
     // Output: free_hess is upper triangle of nparam_free x nparam_free matrix
 
+    // If equality constraints exist, first aggregate tied Hessian elements
+    // For tied param i -> primary p and tied param j -> primary q:
+    //   H[p,q] += H[i,j]
+    std::vector<double> aggregated_hess = full_hess;
+
+    if (!equality_mapping.empty()) {
+        // Create mapping from full param index to effective index (considering ties)
+        std::vector<int> effective_idx(nparam);
+        for (int i = 0; i < nparam; i++) {
+            effective_idx[i] = (equality_mapping[i] >= 0) ? equality_mapping[i] : i;
+        }
+
+        // Aggregate Hessian elements to their effective (primary) positions
+        // Need a clean aggregation matrix first
+        std::vector<double> temp_hess(nparam * nparam, 0.0);
+
+        for (int i = 0; i < nparam; i++) {
+            int eff_i = effective_idx[i];
+            for (int j = 0; j < nparam; j++) {
+                int eff_j = effective_idx[j];
+                // Original Hessian value at (i,j)
+                double h_ij = full_hess[i * nparam + j];
+                // Add to effective position
+                temp_hess[eff_i * nparam + eff_j] += h_ij;
+            }
+        }
+        aggregated_hess = temp_hess;
+    }
+
+    // Now extract only free parameters
     free_hess.clear();
     free_hess.reserve(nparam_free * (nparam_free + 1) / 2);
 
@@ -361,7 +452,7 @@ void FactorModel::ExtractFreeHessian(const std::vector<double>& full_hess,
             int full_i = free_indices[i];
             int full_j = free_indices[j];
             int full_idx = full_i * nparam + full_j;
-            free_hess.push_back(full_hess[full_idx]);
+            free_hess.push_back(aggregated_hess[full_idx]);
         }
     }
 }
@@ -608,10 +699,10 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         int iobs_offset = iobs * nvar;
 
         double totalprob = 0.0;
-        // OPTIMIZATION: Only zero free parameter entries (not all nparam)
+        // Zero gradient entries for params that need gradients (free + tied)
         if (iflag >= 2) {
-            for (int fi = 0; fi < nparam_free; fi++) {
-                totalgrad[freeparlist[fi]] = 0.0;
+            for (size_t gi = 0; gi < gradparlist.size(); gi++) {
+                totalgrad[gradparlist[gi]] = 0.0;
             }
         }
         // OPTIMIZATION: Only zero free parameter entries (like legacy code)
@@ -1569,9 +1660,10 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
                 if (iflag >= 2) {
                     // grad_this_type = d(log L)/dθ, so raw gradient = L * grad = prob_this_type * grad_this_type
+                    // Accumulate for all params that need gradients (free + tied)
                     double combined_weight = quad_weight * prob_this_type;
-                    for (int fi = 0; fi < nparam_free; fi++) {
-                        int ipar = freeparlist[fi];
+                    for (size_t gi = 0; gi < gradparlist.size(); gi++) {
+                        int ipar = gradparlist[gi];
                         totalgrad[ipar] += combined_weight * grad_this_type[ipar];
                     }
                 }
@@ -1595,8 +1687,9 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 totalprob += quad_weight * type_weighted_prob;
 
                 if (iflag >= 2) {
-                    for (int fi = 0; fi < nparam_free; fi++) {
-                        int ipar = freeparlist[fi];
+                    // Accumulate for all params that need gradients (free + tied)
+                    for (size_t gi = 0; gi < gradparlist.size(); gi++) {
+                        int ipar = gradparlist[gi];
                         totalgrad[ipar] += quad_weight * type_weighted_grad[ipar];
                     }
                 }
@@ -1631,10 +1724,10 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             logLkhd += obs_weight * std::log(totalprob);
 
             // Gradient: d(log L)/dθ = (1/L) * dL/dθ (weighted by observation)
-            // OPTIMIZATION: Only accumulate for free parameters
+            // Accumulate for all params that need gradients (free + tied)
             if (iflag >= 2) {
-                for (int fi = 0; fi < nparam_free; fi++) {
-                    int ipar = freeparlist[fi];
+                for (size_t gi = 0; gi < gradparlist.size(); gi++) {
+                    int ipar = gradparlist[gi];
                     full_gradL[ipar] += obs_weight * totalgrad[ipar] / totalprob;
                 }
             }

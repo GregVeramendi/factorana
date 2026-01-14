@@ -30,6 +30,7 @@ private:
     std::vector<double> param;         // Full parameter vector
     std::vector<bool> param_fixed;     // Which parameters are fixed
     std::vector<int> freeparlist;      // Indices of free parameters (for Hessian optimization)
+    std::vector<int> gradparlist;      // Indices of params needing gradients (free + tied)
     int nparam;                        // Total number of parameters
     int nparam_free;                   // Number of free parameters
 
@@ -76,6 +77,10 @@ private:
     std::vector<int> param_model_start;  // Starting index for each model's parameters
     std::vector<int> param_model_count;  // Number of parameters per model
 
+    // Equality constraints: maps tied param index -> primary (free) param index
+    // Value of -1 means parameter is not tied to any other
+    std::vector<int> equality_mapping;
+
 public:
     // Constructor (legacy, for backward compatibility)
     FactorModel(int n_obs, int n_var, int n_fac, int n_typ = 0,
@@ -120,6 +125,11 @@ public:
     // Set which parameters are fixed and their values
     void SetParameterConstraints(const std::vector<bool>& fixed,
                                  const std::vector<double>& fixed_values);
+
+    // Set equality constraints: tied parameters are mapped to their primary (free) parameter
+    // equality_map[i] = j means parameter i is tied to parameter j (j is the primary)
+    // equality_map[i] = -1 means parameter i is not tied to any other
+    void SetEqualityConstraints(const std::vector<int>& equality_map);
 
     // Main likelihood calculation
     // Computes likelihood, gradient, and Hessian for current parameter values

@@ -599,9 +599,9 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         }
     }
 
-    // Handle equality constraints - mark tied parameters as fixed
+    // Handle equality constraints - mark tied parameters as fixed and build equality mapping
     // Equality constraints tie parameters so that tied params = primary param during optimization
-    // The R side handles gradient aggregation, C++ just needs to mark them as fixed
+    // C++ handles gradient/Hessian aggregation via equality_mapping in ExtractFreeGradient/Hessian
     if (model_system.containsElementNamed("equality_constraints") &&
         !Rf_isNull(model_system["equality_constraints"])) {
         List eq_constraints = model_system["equality_constraints"];
@@ -729,30 +729,55 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             }
         }
 
-        // Process each equality constraint - mark tied params as fixed
+        // Process each equality constraint - mark tied params as fixed and build mapping
+        // equality_mapping[i] = j means param i is tied to param j (j is primary)
+        // equality_mapping[i] = -1 means param i is not tied
+        std::vector<int> equality_map(total_params, -1);
+
         for (int i = 0; i < eq_constraints.size(); i++) {
             CharacterVector constraint = eq_constraints[i];
             if (constraint.size() >= 2) {
                 // First param is primary (free), rest are tied (fixed)
                 std::string primary_name = as<std::string>(constraint[0]);
+                auto primary_it = param_name_to_idx.find(primary_name);
+                int primary_idx = -1;
+                if (primary_it != param_name_to_idx.end()) {
+                    primary_idx = primary_it->second;
+                }
+
                 for (int j = 1; j < constraint.size(); j++) {
                     std::string tied_name = as<std::string>(constraint[j]);
                     auto it = param_name_to_idx.find(tied_name);
                     if (it != param_name_to_idx.end()) {
                         param_fixed_vec[it->second] = true;
+                        if (primary_idx >= 0) {
+                            equality_map[it->second] = primary_idx;
+                        }
                     }
                 }
             }
         }
-    }
 
-    // Set parameter constraints with optional initial values
-    if (init_params.isNotNull()) {
-        NumericVector ip(init_params);
-        std::vector<double> init_params_vec = as<std::vector<double>>(ip);
-        fm->SetParameterConstraints(param_fixed_vec, init_params_vec);
+        // Set parameter constraints with optional initial values
+        if (init_params.isNotNull()) {
+            NumericVector ip(init_params);
+            std::vector<double> init_params_vec = as<std::vector<double>>(ip);
+            fm->SetParameterConstraints(param_fixed_vec, init_params_vec);
+        } else {
+            fm->SetParameterConstraints(param_fixed_vec);
+        }
+
+        // Set equality constraints mapping
+        fm->SetEqualityConstraints(equality_map);
     } else {
-        fm->SetParameterConstraints(param_fixed_vec);
+        // No equality constraints - just set parameter constraints
+        if (init_params.isNotNull()) {
+            NumericVector ip(init_params);
+            std::vector<double> init_params_vec = as<std::vector<double>>(ip);
+            fm->SetParameterConstraints(param_fixed_vec, init_params_vec);
+        } else {
+            fm->SetParameterConstraints(param_fixed_vec);
+        }
     }
 
     return fm;

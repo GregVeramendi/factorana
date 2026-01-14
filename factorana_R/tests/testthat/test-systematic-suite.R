@@ -1182,12 +1182,19 @@ test_that("Model I: SE_quadratic with equality constraints (measurement invarian
   # Check primary parameters only (not derived ones)
   primary_indices <- c(1:14, 16, 19)
   max_rel_err <- 0
+  worst_idx <- 0
+  cat("\n=== DEBUG: Gradient comparison ===\n")
   for (i in primary_indices) {
     ana <- aggregated_analytical[i]
     fd <- fd_grad[i]
     rel_err <- if (abs(fd) > 1e-6) abs(ana - fd) / abs(fd) else abs(ana - fd)
-    if (!is.na(rel_err)) max_rel_err <- max(max_rel_err, rel_err)
+    cat(sprintf("  param %2d: ana=%.6f, fd=%.6f, rel_err=%.2e\n", i, ana, fd, rel_err))
+    if (!is.na(rel_err) && rel_err > max_rel_err) {
+      max_rel_err <- rel_err
+      worst_idx <- i
+    }
   }
+  cat(sprintf("Worst param: %d, max_rel_err: %.2e\n", worst_idx, max_rel_err))
 
   expect_lt(max_rel_err, 1e-4, label = sprintf("Gradient max error: %.2e", max_rel_err))
 
