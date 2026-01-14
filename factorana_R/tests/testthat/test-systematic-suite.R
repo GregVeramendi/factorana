@@ -1209,3 +1209,267 @@ test_that("Model I: SE_quadratic with equality constraints (measurement invarian
                 true_loading_2, result$estimates["Y1_2_loading_1"]))
   }
 })
+
+# =====================================================================
+# Test J: Two-stage model with multiple outcome types and fixed coefficients
+# - Stage 1: Linear measurement system for factor 1
+# - Stage 2: Various outcome models (linear, probit, oprobit, mlogit, exploded logit)
+#            with at least one fixed coefficient in each
+# =====================================================================
+test_that("Test J: Two-stage with multiple outcome types and fixed coefficients", {
+  skip_on_cran()
+
+  set.seed(54321)
+  n <- 400
+
+  # Generate factor
+  f1 <- rnorm(n)
+
+  # Stage 1: Linear measurement equations for factor 1
+  Y_m1 <- 1.0 * f1 + rnorm(n, 0, 0.5)  # loading fixed to 1
+  Y_m2 <- 0.8 * f1 + rnorm(n, 0, 0.6)  # loading = 0.8
+
+  # Covariates for stage 2
+  x1 <- rnorm(n)
+  x2 <- rnorm(n)
+
+  # True parameters for stage 2 models
+  true_beta_linear <- c(0.5, 0.3)    # intercept, x1 coefficient
+  true_loading_linear <- 0.7
+  true_sigma_linear <- 0.8
+
+  true_beta_probit <- c(-0.2, 0.4)   # intercept, x1 coefficient
+  true_loading_probit <- 0.6
+
+  true_beta_oprobit <- c(0.0, 0.5)   # intercept=0 (fixed), x1 coefficient
+  true_loading_oprobit <- 0.5
+  true_thresholds <- c(-0.5, 0.5)    # 3 categories -> 2 thresholds
+
+  true_beta_mlogit <- matrix(c(
+    0.3, 0.2,   # Choice 1: intercept, x1
+    0.0, 0.4    # Choice 2: intercept=0 (fixed), x1
+  ), nrow = 2, byrow = TRUE)
+  true_loading_mlogit <- c(0.4, 0.5)  # loadings for choices 1, 2
+
+  true_beta_explogit <- matrix(c(
+    0.2, 0.0,   # Choice 1: intercept, x1=0 (fixed)
+    0.1, 0.3    # Choice 2: intercept, x1
+  ), nrow = 2, byrow = TRUE)
+  true_loading_explogit <- c(0.3, 0.4)
+
+  # Generate outcomes
+  # Linear outcome
+  Y_linear <- true_beta_linear[1] + true_beta_linear[2] * x1 +
+              true_loading_linear * f1 + rnorm(n, 0, true_sigma_linear)
+
+  # Probit outcome
+  latent_probit <- true_beta_probit[1] + true_beta_probit[2] * x1 +
+                   true_loading_probit * f1 + rnorm(n, 0, 1)
+  Y_probit <- as.integer(latent_probit > 0)
+
+  # Ordered probit outcome (3 categories) - store as numeric integers for matrix conversion
+  latent_oprobit <- true_beta_oprobit[1] + true_beta_oprobit[2] * x1 +
+                    true_loading_oprobit * f1 + rnorm(n, 0, 1)
+  Y_oprobit <- as.integer(cut(latent_oprobit, breaks = c(-Inf, true_thresholds, Inf),
+                               labels = FALSE))
+
+  # Multinomial logit outcome (3 choices, choice 0 is reference)
+  u0 <- 0  # Reference
+  u1 <- true_beta_mlogit[1,1] + true_beta_mlogit[1,2] * x1 +
+        true_loading_mlogit[1] * f1 + rlogis(n, 0, 1)
+  u2 <- true_beta_mlogit[2,1] + true_beta_mlogit[2,2] * x1 +
+        true_loading_mlogit[2] * f1 + rlogis(n, 0, 1)
+  Y_mlogit <- apply(cbind(u0, u1, u2), 1, which.max)
+
+  # Exploded logit outcome (rank 2 alternatives from 3 choices)
+  # Compute utilities for all 3 choices
+  v0 <- 0  # Reference
+  v1 <- true_beta_explogit[1,1] + true_beta_explogit[1,2] * x1 +
+        true_loading_explogit[1] * f1 + rlogis(n, 0, 1)
+  v2 <- true_beta_explogit[2,1] + true_beta_explogit[2,2] * x1 +
+        true_loading_explogit[2] * f1 + rlogis(n, 0, 1)
+  utils <- cbind(v0, v1, v2)
+  # Generate rankings (top 2 ranks)
+  rankings <- t(apply(utils, 1, function(u) order(u, decreasing = TRUE)[1:2]))
+  Y_rank1 <- rankings[, 1]
+  Y_rank2 <- rankings[, 2]
+
+  # Create data frame
+  dat <- data.frame(
+    Y_m1 = Y_m1, Y_m2 = Y_m2,
+    Y_linear = Y_linear,
+    Y_probit = Y_probit,
+    Y_oprobit = Y_oprobit,
+    Y_mlogit = Y_mlogit,
+    Y_rank1 = Y_rank1, Y_rank2 = Y_rank2,
+    x1 = x1, x2 = x2,
+    intercept = 1, eval = 1
+  )
+
+  # Define factor model (single factor)
+  fm <- define_factor_model(n_factors = 1)
+
+  # Stage 1: Measurement equations
+  mc_m1 <- define_model_component(name = "m1", data = dat, outcome = "Y_m1", factor = fm,
+                                   covariates = "intercept", model_type = "linear",
+                                   loading_normalization = 1, evaluation_indicator = "eval")
+  mc_m2 <- define_model_component(name = "m2", data = dat, outcome = "Y_m2", factor = fm,
+                                   covariates = "intercept", model_type = "linear",
+                                   loading_normalization = NA_real_, evaluation_indicator = "eval")
+
+  # Stage 2: Outcome models with fixed coefficients
+
+  # Linear with x2 coefficient fixed to 0
+  mc_linear <- define_model_component(name = "linear", data = dat, outcome = "Y_linear", factor = fm,
+                                       covariates = c("intercept", "x1", "x2"), model_type = "linear",
+                                       loading_normalization = NA_real_, evaluation_indicator = "eval")
+  mc_linear <- fix_coefficient(mc_linear, "x2", 0)
+
+  # Probit with x2 coefficient fixed to 0
+  mc_probit <- define_model_component(name = "probit", data = dat, outcome = "Y_probit", factor = fm,
+                                       covariates = c("intercept", "x1", "x2"), model_type = "probit",
+                                       loading_normalization = NA_real_, evaluation_indicator = "eval")
+  mc_probit <- fix_coefficient(mc_probit, "x2", 0)
+
+  # Ordered probit with intercept fixed to 0 (3 categories)
+  mc_oprobit <- define_model_component(name = "oprobit", data = dat, outcome = "Y_oprobit", factor = fm,
+                                        covariates = c("intercept", "x1"), model_type = "oprobit",
+                                        num_choices = 3, loading_normalization = NA_real_,
+                                        evaluation_indicator = "eval")
+  mc_oprobit <- fix_coefficient(mc_oprobit, "intercept", 0)
+
+  # Multinomial logit with choice 2 intercept fixed to 0
+  mc_mlogit <- define_model_component(name = "mlogit", data = dat, outcome = "Y_mlogit", factor = fm,
+                                       covariates = c("intercept", "x1"), model_type = "logit",
+                                       num_choices = 3, loading_normalization = NA_real_,
+                                       evaluation_indicator = "eval")
+  mc_mlogit <- fix_coefficient(mc_mlogit, "intercept", 0, choice = 2)
+
+  # Exploded logit with choice 1 x1 coefficient fixed to 0
+  mc_explogit <- define_model_component(name = "explogit", data = dat, outcome = c("Y_rank1", "Y_rank2"),
+                                         factor = fm, covariates = c("intercept", "x1"), model_type = "logit",
+                                         num_choices = 3, loading_normalization = NA_real_,
+                                         evaluation_indicator = "eval")
+  mc_explogit <- fix_coefficient(mc_explogit, "x1", 0, choice = 1)
+
+  # Define model system
+  ms <- define_model_system(
+    components = list(mc_m1, mc_m2, mc_linear, mc_probit, mc_oprobit, mc_mlogit, mc_explogit),
+    factor = fm
+  )
+
+  # Initialize and estimate
+  control <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+  result <- estimate_model_rcpp(model_system = ms, data = dat, control = control,
+                                 optimizer = "nlminb", verbose = FALSE)
+
+  # Test 1: Check that fixed coefficients are exactly at their fixed values
+  expect_equal(unname(result$estimates["linear_x2"]), 0, tolerance = 1e-10)
+  expect_equal(unname(result$estimates["probit_x2"]), 0, tolerance = 1e-10)
+  expect_equal(unname(result$estimates["oprobit_intercept"]), 0, tolerance = 1e-10)
+  expect_equal(unname(result$estimates["mlogit_c2_intercept"]), 0, tolerance = 1e-10)
+  expect_equal(unname(result$estimates["explogit_c1_x1"]), 0, tolerance = 1e-10)
+
+  # Test 2: FD gradient check
+  data_mat <- as.matrix(dat)
+  init_result <- initialize_parameters(ms, dat, verbose = FALSE)
+  params <- init_result$init_params
+
+  fm_ptr <- initialize_factor_model_cpp(ms, data_mat, 8, params)
+  params_free <- extract_free_params_cpp(fm_ptr, params)
+  cpp_result <- evaluate_likelihood_cpp(fm_ptr, params_free, compute_gradient = TRUE, compute_hessian = FALSE)
+
+  # Compute FD gradient
+  eps <- 1e-5
+  fd_grad <- numeric(length(params_free))
+  for (i in seq_along(params_free)) {
+    params_plus <- params_free
+    params_minus <- params_free
+    params_plus[i] <- params_free[i] + eps
+    params_minus[i] <- params_free[i] - eps
+    ll_plus <- evaluate_loglik_only_cpp(fm_ptr, params_plus)
+    ll_minus <- evaluate_loglik_only_cpp(fm_ptr, params_minus)
+    fd_grad[i] <- (ll_plus - ll_minus) / (2 * eps)
+  }
+
+  # Check gradient accuracy
+  max_rel_err <- 0
+  for (i in seq_along(params_free)) {
+    ana <- cpp_result$gradient[i]
+    fd <- fd_grad[i]
+    rel_err <- if (abs(fd) > 1e-6) abs(ana - fd) / abs(fd) else abs(ana - fd)
+    if (!is.na(rel_err) && rel_err > max_rel_err) max_rel_err <- rel_err
+  }
+  expect_lt(max_rel_err, 1e-4, label = sprintf("Gradient max error: %.2e", max_rel_err))
+
+  # Test 3: FD Hessian check (spot check - just diagonal elements)
+  cpp_hess_result <- evaluate_likelihood_cpp(fm_ptr, params_free, compute_gradient = FALSE, compute_hessian = TRUE)
+  hess_vec <- cpp_hess_result$hessian
+
+  # Expand upper triangular to full matrix
+  n_free <- length(params_free)
+  hess_mat <- matrix(0, n_free, n_free)
+  idx <- 1
+  for (i in 1:n_free) {
+    for (j in i:n_free) {
+      hess_mat[i, j] <- hess_vec[idx]
+      hess_mat[j, i] <- hess_vec[idx]
+      idx <- idx + 1
+    }
+  }
+
+  # FD Hessian for diagonal elements
+  fd_hess_diag <- numeric(n_free)
+  for (i in seq_len(n_free)) {
+    params_plus <- params_free
+    params_minus <- params_free
+    params_plus[i] <- params_free[i] + eps
+    params_minus[i] <- params_free[i] - eps
+
+    grad_plus <- evaluate_likelihood_cpp(fm_ptr, params_plus, compute_gradient = TRUE, compute_hessian = FALSE)$gradient
+    grad_minus <- evaluate_likelihood_cpp(fm_ptr, params_minus, compute_gradient = TRUE, compute_hessian = FALSE)$gradient
+
+    fd_hess_diag[i] <- (grad_plus[i] - grad_minus[i]) / (2 * eps)
+  }
+
+  # Check Hessian diagonal accuracy
+  max_hess_err <- 0
+  for (i in seq_len(n_free)) {
+    ana <- hess_mat[i, i]
+    fd <- fd_hess_diag[i]
+    rel_err <- if (abs(fd) > 1e-6) abs(ana - fd) / abs(fd) else abs(ana - fd)
+    if (!is.na(rel_err) && rel_err > max_hess_err) max_hess_err <- rel_err
+  }
+  expect_lt(max_hess_err, 1e-3, label = sprintf("Hessian diagonal max error: %.2e", max_hess_err))
+
+  # Test 4: Parameter recovery (with relaxed tolerance due to finite sample)
+  tolerance <- 0.3
+
+  # Factor variance (should be close to 1)
+  expect_lt(abs(result$estimates["factor_var_1"] - 1.0), tolerance)
+
+  # Measurement loading for m2 (should be close to 0.8)
+  expect_lt(abs(result$estimates["m2_loading_1"] - 0.8), tolerance)
+
+  # Linear model parameters
+  expect_lt(abs(result$estimates["linear_intercept"] - true_beta_linear[1]), tolerance)
+  expect_lt(abs(result$estimates["linear_x1"] - true_beta_linear[2]), tolerance)
+  expect_lt(abs(result$estimates["linear_loading_1"] - true_loading_linear), tolerance)
+
+  # Probit model parameters
+  expect_lt(abs(result$estimates["probit_intercept"] - true_beta_probit[1]), tolerance)
+  expect_lt(abs(result$estimates["probit_x1"] - true_beta_probit[2]), tolerance)
+
+  if (VERBOSE) {
+    cat("\nTest J: Two-stage with multiple outcome types and fixed coefficients\n")
+    cat("  Stage 1: 2 linear measurement equations\n")
+    cat("  Stage 2: linear, probit, oprobit, mlogit, exploded logit\n")
+    cat("  Fixed coefficients: 5 (one per stage 2 model)\n")
+    cat(sprintf("  Gradient max rel error: %.2e\n", max_rel_err))
+    cat(sprintf("  Hessian diag max rel error: %.2e\n", max_hess_err))
+    cat(sprintf("  Linear loading recovery: true=%.3f, est=%.3f\n",
+                true_loading_linear, result$estimates["linear_loading_1"]))
+    cat(sprintf("  m2 loading recovery: true=%.3f, est=%.3f\n",
+                0.8, result$estimates["m2_loading_1"]))
+  }
+})

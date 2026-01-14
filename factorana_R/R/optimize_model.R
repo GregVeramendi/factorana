@@ -1002,19 +1002,20 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   }
 
   # Benchmark likelihood/gradient/Hessian computation before optimization
+  # NOTE: C++ functions expect FREE params only (not full params)
   if (verbose) {
     message("\nBenchmarking computation times (single evaluation)...")
 
     # Benchmark log-likelihood only
     t_loglik <- system.time({
       if (!is.null(cl)) {
-        parallel::clusterExport(cl, "full_init_params", envir = environment())
+        parallel::clusterExport(cl, "init_params", envir = environment())
         loglik_parts <- parallel::clusterEvalQ(cl, {
-          evaluate_loglik_only_cpp(.fm_ptr, full_init_params)
+          evaluate_loglik_only_cpp(.fm_ptr, init_params)
         })
         loglik_test <- sum(unlist(loglik_parts))
       } else {
-        loglik_test <- evaluate_loglik_only_cpp(fm_ptrs[[1]], full_init_params)
+        loglik_test <- evaluate_loglik_only_cpp(fm_ptrs[[1]], init_params)
       }
     })[3]
 
@@ -1022,13 +1023,13 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     t_grad <- system.time({
       if (!is.null(cl)) {
         grad_parts <- parallel::clusterEvalQ(cl, {
-          result <- evaluate_likelihood_cpp(.fm_ptr, full_init_params,
+          result <- evaluate_likelihood_cpp(.fm_ptr, init_params,
                                            compute_gradient = TRUE,
                                            compute_hessian = FALSE)
           result$gradient
         })
       } else {
-        result <- evaluate_likelihood_cpp(fm_ptrs[[1]], full_init_params,
+        result <- evaluate_likelihood_cpp(fm_ptrs[[1]], init_params,
                                          compute_gradient = TRUE,
                                          compute_hessian = FALSE)
       }
@@ -1038,13 +1039,13 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     t_hess <- system.time({
       if (!is.null(cl)) {
         hess_parts <- parallel::clusterEvalQ(cl, {
-          result <- evaluate_likelihood_cpp(.fm_ptr, full_init_params,
+          result <- evaluate_likelihood_cpp(.fm_ptr, init_params,
                                            compute_gradient = FALSE,
                                            compute_hessian = TRUE)
           result$hessian
         })
       } else {
-        result <- evaluate_likelihood_cpp(fm_ptrs[[1]], full_init_params,
+        result <- evaluate_likelihood_cpp(fm_ptrs[[1]], init_params,
                                          compute_gradient = FALSE,
                                          compute_hessian = TRUE)
       }
