@@ -1402,7 +1402,7 @@ test_that("Test J: Two-stage with multiple outcome types and fixed coefficients"
   }
   expect_lt(max_rel_err, 1e-4, label = sprintf("Gradient max error: %.2e", max_rel_err))
 
-  # Test 3: FD Hessian check (spot check - just diagonal elements)
+  # Test 3: FD Hessian check (all elements)
   cpp_hess_result <- evaluate_likelihood_cpp(fm_ptr, params_free, compute_gradient = FALSE, compute_hessian = TRUE)
   hess_vec <- cpp_hess_result$hessian
 
@@ -1418,29 +1418,39 @@ test_that("Test J: Two-stage with multiple outcome types and fixed coefficients"
     }
   }
 
-  # FD Hessian for diagonal elements
-  fd_hess_diag <- numeric(n_free)
+  # Compute FD Hessian by differentiating gradient (all elements)
+  fd_hess <- matrix(0, n_free, n_free)
+  grad_base <- evaluate_likelihood_cpp(fm_ptr, params_free, compute_gradient = TRUE, compute_hessian = FALSE)$gradient
   for (i in seq_len(n_free)) {
     params_plus <- params_free
-    params_minus <- params_free
-    params_plus[i] <- params_free[i] + eps
-    params_minus[i] <- params_free[i] - eps
+    h <- eps * (abs(params_free[i]) + 1.0)
+    params_plus[i] <- params_free[i] + h
 
     grad_plus <- evaluate_likelihood_cpp(fm_ptr, params_plus, compute_gradient = TRUE, compute_hessian = FALSE)$gradient
-    grad_minus <- evaluate_likelihood_cpp(fm_ptr, params_minus, compute_gradient = TRUE, compute_hessian = FALSE)$gradient
 
-    fd_hess_diag[i] <- (grad_plus[i] - grad_minus[i]) / (2 * eps)
+    fd_hess[i, ] <- (grad_plus - grad_base) / h
   }
+  # Symmetrize FD Hessian
+  fd_hess <- (fd_hess + t(fd_hess)) / 2
 
-  # Check Hessian diagonal accuracy
+  # Check all Hessian elements (upper triangle)
   max_hess_err <- 0
   for (i in seq_len(n_free)) {
-    ana <- hess_mat[i, i]
-    fd <- fd_hess_diag[i]
-    rel_err <- if (abs(fd) > 1e-6) abs(ana - fd) / abs(fd) else abs(ana - fd)
-    if (!is.na(rel_err) && rel_err > max_hess_err) max_hess_err <- rel_err
+    for (j in i:n_free) {
+      ana <- hess_mat[i, j]
+      fd <- fd_hess[i, j]
+      abs_err <- abs(ana - fd)
+      # For near-zero elements, use absolute error; otherwise use relative error
+      if (abs(ana) < 1e-6 && abs(fd) < 1e-6) {
+        rel_err <- abs_err
+      } else {
+        rel_err <- abs_err / max(abs(ana), abs(fd))
+      }
+      if (!is.na(rel_err) && rel_err > max_hess_err) max_hess_err <- rel_err
+    }
   }
-  expect_lt(max_hess_err, 1e-3, label = sprintf("Hessian diagonal max error: %.2e", max_hess_err))
+  # Tolerance of 1e-2 for full Hessian check (cross-derivatives have higher FD error)
+  expect_lt(max_hess_err, 1e-2, label = sprintf("Hessian max error: %.2e", max_hess_err))
 
   # Test 4: Parameter recovery (with relaxed tolerance due to finite sample)
   tolerance <- 0.3
@@ -1466,7 +1476,7 @@ test_that("Test J: Two-stage with multiple outcome types and fixed coefficients"
     cat("  Stage 2: linear, probit, oprobit, mlogit, exploded logit\n")
     cat("  Fixed coefficients: 5 (one per stage 2 model)\n")
     cat(sprintf("  Gradient max rel error: %.2e\n", max_rel_err))
-    cat(sprintf("  Hessian diag max rel error: %.2e\n", max_hess_err))
+    cat(sprintf("  Hessian max rel error: %.2e\n", max_hess_err))
     cat(sprintf("  Linear loading recovery: true=%.3f, est=%.3f\n",
                 true_loading_linear, result$estimates["linear_loading_1"]))
     cat(sprintf("  m2 loading recovery: true=%.3f, est=%.3f\n",

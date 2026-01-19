@@ -281,6 +281,23 @@ void FactorModel::SetParameterConstraints(const std::vector<bool>& fixed)
     // Initialize gradparlist to freeparlist (will be updated if equality constraints are set)
     gradparlist = freeparlist;
 
+    // Compute model-local free parameter indices for Hessian optimization
+    // This allows Model::Eval() to skip Hessian computation for fixed parameters
+    model_free_indices.clear();
+    model_free_indices.resize(models.size());
+    for (size_t imod = 0; imod < models.size(); imod++) {
+        int start = param_model_start[imod];
+        int count = param_model_count[imod];
+        model_free_indices[imod].clear();
+        model_free_indices[imod].reserve(count);
+        for (int j = 0; j < count; j++) {
+            int global_idx = start + j;
+            if (!fixed[global_idx]) {
+                model_free_indices[imod].push_back(j);  // Store model-local index
+            }
+        }
+    }
+
     // Initialize parameter vector with default values
     param.resize(nparam, 0.0);
 
@@ -313,6 +330,23 @@ void FactorModel::SetParameterConstraints(const std::vector<bool>& fixed,
 
     // Initialize gradparlist to freeparlist (will be updated if equality constraints are set)
     gradparlist = freeparlist;
+
+    // Compute model-local free parameter indices for Hessian optimization
+    // This allows Model::Eval() to skip Hessian computation for fixed parameters
+    model_free_indices.clear();
+    model_free_indices.resize(models.size());
+    for (size_t imod = 0; imod < models.size(); imod++) {
+        int start = param_model_start[imod];
+        int count = param_model_count[imod];
+        model_free_indices[imod].clear();
+        model_free_indices[imod].reserve(count);
+        for (int j = 0; j < count; j++) {
+            int global_idx = start + j;
+            if (!fixed[global_idx]) {
+                model_free_indices[imod].push_back(j);  // Store model-local index
+            }
+        }
+    }
 
     // Initialize parameter vector with provided values
     // For free parameters, these are defaults (will be overwritten by optimizer)
@@ -922,8 +956,15 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     // If all parameters are fixed for this model, only compute likelihood (flag=1)
                     int model_flag = models[imod]->GetAllParamsFixed() ? 1 : iflag;
 
+                    // Pass model-local free indices for Hessian optimization
+                    // If model_free_indices is properly populated, use it; otherwise nullptr (backward compat)
+                    const std::vector<int>* free_indices_ptr = nullptr;
+                    if (model_flag == 3 && imod < model_free_indices.size() && !model_free_indices[imod].empty()) {
+                        free_indices_ptr = &model_free_indices[imod];
+                    }
+
                     models[imod]->Eval(iobs_offset, data, param, firstpar, fac_val,
-                                      modEval, modHess, model_flag, type_intercept);
+                                      modEval, modHess, model_flag, type_intercept, free_indices_ptr);
 
                     // Multiply likelihood for this type
                     prob_this_type *= modEval[0];
@@ -1851,8 +1892,9 @@ void FactorModel::CalcLkhdSingleObs(int iobs,
 
         // For factor score estimation, we only need derivatives w.r.t. factor values
         // Pass iflag to get gradients/Hessians w.r.t. factors
+        // No free indices needed here since we only use factor-factor part of Hessian
         models[imod]->Eval(iobs_offset, data, param, firstpar, factor_values,
-                          modEval, modHess, iflag);
+                          modEval, modHess, iflag, 0.0, nullptr);
 
         // Get model likelihood
         double Lm = modEval[0];

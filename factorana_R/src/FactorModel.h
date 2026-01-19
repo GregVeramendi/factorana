@@ -77,6 +77,11 @@ private:
     std::vector<int> param_model_start;  // Starting index for each model's parameters
     std::vector<int> param_model_count;  // Number of parameters per model
 
+    // Model-local free parameter indices (for Hessian optimization)
+    // model_free_indices[imod] contains indices (0-indexed, model-local) of free params for model imod
+    // This allows Model::Eval() to skip Hessian computation for fixed parameters
+    std::vector<std::vector<int>> model_free_indices;
+
     // Equality constraints: maps tied param index -> primary (free) param index
     // Value of -1 means parameter is not tied to any other
     std::vector<int> equality_mapping;

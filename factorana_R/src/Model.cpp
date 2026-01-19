@@ -54,7 +54,8 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
                  std::vector<double>& modEval,
                  std::vector<double>& hess,
                  int flag,
-                 double type_intercept)
+                 double type_intercept,
+                 const std::vector<int>* model_free_indices)
 {
     // Count free factor loadings FIRST (needed for gradient vector sizing)
     int ifreefac = 0;
@@ -199,28 +200,32 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
         double Z = -expres[0];  // Initialize assuming outcome = 0
         if (outcome_idx > -1) Z = data[iobs_offset + outcome_idx] - expres[0];
         double sigma = std::fabs(param[firstpar + nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings]);
-        EvalLinear(Z, sigma, fac, param, firstpar, modEval, hess, flag, data, iobs_offset);
+        EvalLinear(Z, sigma, fac, param, firstpar, modEval, hess, flag, data, iobs_offset, model_free_indices);
     }
     else if (modtype == ModelType::PROBIT) {
         double obsSign = 1.0;
         if (int(data[iobs_offset + outcome_idx]) == 0) obsSign = -1.0;
-        EvalProbit(expres[0], obsSign, fac, param, firstpar, modEval, hess, flag, data, iobs_offset);
+        EvalProbit(expres[0], obsSign, fac, param, firstpar, modEval, hess, flag, data, iobs_offset, model_free_indices);
     }
     else if (modtype == ModelType::LOGIT) {
         double outcome_val = data[iobs_offset + outcome_idx];
-        EvalLogit(expres, outcome_val, fac, param, firstpar, modEval, hess, flag, data, iobs_offset);
+        EvalLogit(expres, outcome_val, fac, param, firstpar, modEval, hess, flag, data, iobs_offset, model_free_indices);
     }
     else if (modtype == ModelType::OPROBIT) {
         int outcome_val = int(data[iobs_offset + outcome_idx]);
-        EvalOprobit(expres[0], outcome_val, fac, param, firstpar, modEval, hess, flag, data, iobs_offset);
+        EvalOprobit(expres[0], outcome_val, fac, param, firstpar, modEval, hess, flag, data, iobs_offset, model_free_indices);
     }
 }
 
 void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
                        const std::vector<double>& param, int firstpar,
                        std::vector<double>& modEval, std::vector<double>& hess,
-                       int flag, const std::vector<double>& data, int iobs_offset)
+                       int flag, const std::vector<double>& data, int iobs_offset,
+                       const std::vector<int>* model_free_indices)
 {
+    // Note: model_free_indices is accepted for API consistency but not currently used
+    // for optimization in EvalLinear. The main performance benefit comes from EvalLogit.
+    (void)model_free_indices;  // Suppress unused warning
     // Compute likelihood
     modEval[0] = normal_pdf(Z, 0.0, sigma);
 
@@ -554,8 +559,13 @@ void Model::EvalLinear(double Z, double sigma, const std::vector<double>& fac,
 void Model::EvalProbit(double expres, double obsSign, const std::vector<double>& fac,
                        const std::vector<double>& param, int firstpar,
                        std::vector<double>& modEval, std::vector<double>& hess,
-                       int flag, const std::vector<double>& data, int iobs_offset)
+                       int flag, const std::vector<double>& data, int iobs_offset,
+                       const std::vector<int>* model_free_indices)
 {
+    // Note: model_free_indices is accepted for API consistency but not currently used
+    // for optimization in EvalProbit. The main performance benefit comes from EvalLogit.
+    (void)model_free_indices;  // Suppress unused warning
+
     // Compute likelihood
     modEval[0] = normal_cdf(obsSign * expres);
 
@@ -876,13 +886,18 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                       const std::vector<double>& fac,
                       const std::vector<double>& param, int firstpar,
                       std::vector<double>& modEval, std::vector<double>& hess,
-                      int flag, const std::vector<double>& data, int iobs_offset)
+                      int flag, const std::vector<double>& data, int iobs_offset,
+                      const std::vector<int>* model_free_indices)
 {
     // Multinomial logit with K choices (numchoice)
     // Choice 0 is reference category with Z_0 = 0
     // For choices 1 to K-1, we have separate parameters
     //
     // For exploded logit (numrank > 1), we have multiple ranked choices per observation.
+    //
+    // OPTIMIZATION: If model_free_indices is provided, only compute Hessian entries
+    // for free model parameters. This significantly speeds up computation when many
+    // coefficients are fixed (e.g., via fix_coefficient()).
     // The likelihood is the product of per-rank likelihoods.
     // Gradients are the sum of per-rank log-likelihood gradients.
 
@@ -907,6 +922,13 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
 
     // Intermediate gradient storage for Hessian (allocated once, reset per rank)
     std::vector<double> logitgrad;
+
+    // OPTIMIZATION: Build boolean vector marking which Hessian indices are free
+    // Factor indices (0..numfac-1) are always needed; model params checked against free list
+    // This allows skipping Hessian computation for fixed parameters
+    std::vector<bool> hess_idx_free;
+    bool use_free_opt = (model_free_indices != nullptr && flag == 3);
+
     if (flag == 3) {
         logitgrad.resize(numchoice * npar, 0.0);
 
@@ -916,6 +938,22 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
             hess.resize(hess_size);
         }
         std::memset(hess.data(), 0, hess_size * sizeof(double));
+
+        // Build free index lookup for optimization
+        if (use_free_opt) {
+            hess_idx_free.resize(npar, false);
+            // Factor indices are always free
+            for (int i = 0; i < numfac; i++) {
+                hess_idx_free[i] = true;
+            }
+            // Model parameters: check against free list
+            for (int fi : *model_free_indices) {
+                int hess_idx = numfac + fi;
+                if (hess_idx < npar) {
+                    hess_idx_free[hess_idx] = true;
+                }
+            }
+        }
     }
 
     // Loop over ranks for exploded logit
@@ -1461,6 +1499,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         }
 
         // Loop over row categories for remaining Hessian terms
+        // OPTIMIZATION: use_free_opt allows skipping Hessian entries for fixed parameters
         for (int icat = 1; icat < numchoice; icat++) {
             int ibase_idx = numfac + (icat - 1) * nparamchoice;
 
@@ -1469,11 +1508,13 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
 
                 // dbeta dbeta
                 for (int ireg = 0; ireg < nregressors; ireg++) {
+                    int index1 = ibase_idx + ireg;
+                    if (use_free_opt && !hess_idx_free[index1]) continue;  // Skip fixed row
                     double xval_i = getRegValue(ireg, data, iobs_offset);
                     for (int jreg = 0; jreg < nregressors; jreg++) {
                         if ((jcat > icat) || (jreg >= ireg)) {
-                            int index1 = ibase_idx + ireg;
                             int index2 = jbase_idx + jreg;
+                            if (use_free_opt && !hess_idx_free[index2]) continue;  // Skip fixed col
                             hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * xval_i;
                         }
                     }
@@ -1481,13 +1522,16 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
 
                 // dbeta dalpha
                 for (int ireg = 0; ireg < nregressors; ireg++) {
+                    int index1 = ibase_idx + ireg;
+                    if (use_free_opt && !hess_idx_free[index1]) continue;  // Skip fixed row
                     double xval_i = getRegValue(ireg, data, iobs_offset);
                     int jfree = 0;
                     for (int jfac = 0; jfac < fac_loop_bound; jfac++) {
                         if (facnorm.size() == 0 || facnorm[jfac] <= -9998) {
-                            int index1 = ibase_idx + ireg;
                             int index2 = jbase_idx + nregressors + jfree;
-                            hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * xval_i;
+                            if (!use_free_opt || hess_idx_free[index2]) {  // Skip fixed col
+                                hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * xval_i;
+                            }
                             jfree++;
                         }
                     }
@@ -1498,9 +1542,11 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                     int ifree = 0;
                     for (int ifac = 0; ifac < fac_loop_bound; ifac++) {
                         if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
+                            int index1 = ibase_idx + nregressors + ifree;
+                            if (use_free_opt && !hess_idx_free[index1]) { ifree++; continue; }  // Skip fixed row
                             for (int jreg = 0; jreg < nregressors; jreg++) {
-                                int index1 = ibase_idx + nregressors + ifree;
                                 int index2 = jbase_idx + jreg;
+                                if (use_free_opt && !hess_idx_free[index2]) continue;  // Skip fixed col
                                 hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fac[ifac];
                             }
                             ifree++;
@@ -1512,13 +1558,16 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                 int ifree = 0;
                 for (int ifac = 0; ifac < fac_loop_bound; ifac++) {
                     if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
+                        int index1 = ibase_idx + nregressors + ifree;
+                        if (use_free_opt && !hess_idx_free[index1]) { ifree++; continue; }  // Skip fixed row
                         int jfree = 0;
                         for (int jfac = 0; jfac < fac_loop_bound; jfac++) {
                             if (facnorm.size() == 0 || facnorm[jfac] <= -9998) {
                                 if ((jcat > icat) || (jfac >= ifac)) {
-                                    int index1 = ibase_idx + nregressors + ifree;
                                     int index2 = jbase_idx + nregressors + jfree;
-                                    hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fac[ifac];
+                                    if (!use_free_opt || hess_idx_free[index2]) {  // Skip fixed col
+                                        hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fac[ifac];
+                                    }
                                 }
                                 jfree++;
                             }
@@ -1530,10 +1579,12 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                 // dbeta dquad
                 if (n_quadratic_loadings > 0) {
                     for (int ireg = 0; ireg < nregressors; ireg++) {
+                        int index1 = ibase_idx + ireg;
+                        if (use_free_opt && !hess_idx_free[index1]) continue;  // Skip fixed row
                         double xval_i = getRegValue(ireg, data, iobs_offset);
                         for (int k = 0; k < numfac; k++) {
-                            int index1 = ibase_idx + ireg;
                             int index2 = jbase_idx + nregressors + ifreefac + k;
+                            if (use_free_opt && !hess_idx_free[index2]) continue;  // Skip fixed col
                             hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * xval_i;
                         }
                     }
@@ -1542,10 +1593,12 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                 // dbeta dinter
                 if (n_interaction_loadings > 0) {
                     for (int ireg = 0; ireg < nregressors; ireg++) {
+                        int index1 = ibase_idx + ireg;
+                        if (use_free_opt && !hess_idx_free[index1]) continue;  // Skip fixed row
                         double xval_i = getRegValue(ireg, data, iobs_offset);
                         for (int inter_idx = 0; inter_idx < n_interaction_loadings; inter_idx++) {
-                            int index1 = ibase_idx + ireg;
                             int index2 = jbase_idx + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                            if (use_free_opt && !hess_idx_free[index2]) continue;  // Skip fixed col
                             hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * xval_i;
                         }
                     }
@@ -1556,9 +1609,11 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                     ifree = 0;
                     for (int ifac = 0; ifac < fac_loop_bound; ifac++) {
                         if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
+                            int index1 = ibase_idx + nregressors + ifree;
+                            if (use_free_opt && !hess_idx_free[index1]) { ifree++; continue; }  // Skip fixed row
                             for (int k = 0; k < numfac; k++) {
-                                int index1 = ibase_idx + nregressors + ifree;
                                 int index2 = jbase_idx + nregressors + ifreefac + k;
+                                if (use_free_opt && !hess_idx_free[index2]) continue;  // Skip fixed col
                                 hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fac[ifac];
                             }
                             ifree++;
@@ -1571,9 +1626,11 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                     ifree = 0;
                     for (int ifac = 0; ifac < fac_loop_bound; ifac++) {
                         if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
+                            int index1 = ibase_idx + nregressors + ifree;
+                            if (use_free_opt && !hess_idx_free[index1]) { ifree++; continue; }  // Skip fixed row
                             for (int inter_idx = 0; inter_idx < n_interaction_loadings; inter_idx++) {
-                                int index1 = ibase_idx + nregressors + ifree;
                                 int index2 = jbase_idx + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                                if (use_free_opt && !hess_idx_free[index2]) continue;  // Skip fixed col
                                 hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fac[ifac];
                             }
                             ifree++;
@@ -1584,13 +1641,15 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                 // dquad dbeta (for jcat > icat), dquad dalpha, dquad dquad, dquad dinter
                 if (n_quadratic_loadings > 0) {
                     for (int ik = 0; ik < numfac; ik++) {
-                        double fk_sq_i = fac[ik] * fac[ik];
                         int index1 = ibase_idx + nregressors + ifreefac + ik;
+                        if (use_free_opt && !hess_idx_free[index1]) continue;  // Skip fixed row
+                        double fk_sq_i = fac[ik] * fac[ik];
 
                         // dquad dbeta (for jcat > icat)
                         if (jcat > icat) {
                             for (int jreg = 0; jreg < nregressors; jreg++) {
                                 int index2 = jbase_idx + jreg;
+                                if (use_free_opt && !hess_idx_free[index2]) continue;  // Skip fixed col
                                 hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fk_sq_i;
                             }
                         }
@@ -1601,7 +1660,9 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                             for (int jfac = 0; jfac < fac_loop_bound; jfac++) {
                                 if (facnorm.size() == 0 || facnorm[jfac] <= -9998) {
                                     int index2 = jbase_idx + nregressors + jfree;
-                                    hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fk_sq_i;
+                                    if (!use_free_opt || hess_idx_free[index2]) {  // Skip fixed col
+                                        hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fk_sq_i;
+                                    }
                                     jfree++;
                                 }
                             }
@@ -1611,6 +1672,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                         for (int jk = 0; jk < numfac; jk++) {
                             if ((jcat > icat) || (jk >= ik)) {
                                 int index2 = jbase_idx + nregressors + ifreefac + jk;
+                                if (use_free_opt && !hess_idx_free[index2]) continue;  // Skip fixed col
                                 hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fk_sq_i;
                             }
                         }
@@ -1619,6 +1681,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                         if (n_interaction_loadings > 0) {
                             for (int inter_idx = 0; inter_idx < n_interaction_loadings; inter_idx++) {
                                 int index2 = jbase_idx + nregressors + ifreefac + n_quadratic_loadings + inter_idx;
+                                if (use_free_opt && !hess_idx_free[index2]) continue;  // Skip fixed col
                                 hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fk_sq_i;
                             }
                         }
@@ -1630,13 +1693,15 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                     int i_inter_idx = 0;
                     for (int ij = 0; ij < numfac - 1; ij++) {
                         for (int ik = ij + 1; ik < numfac; ik++) {
-                            double fj_fk_i = fac[ij] * fac[ik];
                             int index1 = ibase_idx + nregressors + ifreefac + n_quadratic_loadings + i_inter_idx;
+                            if (use_free_opt && !hess_idx_free[index1]) { i_inter_idx++; continue; }  // Skip fixed row
+                            double fj_fk_i = fac[ij] * fac[ik];
 
                             // dinter dbeta (for jcat > icat)
                             if (jcat > icat) {
                                 for (int jreg = 0; jreg < nregressors; jreg++) {
                                     int index2 = jbase_idx + jreg;
+                                    if (use_free_opt && !hess_idx_free[index2]) continue;  // Skip fixed col
                                     hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fj_fk_i;
                                 }
                             }
@@ -1647,7 +1712,9 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                                 for (int jfac = 0; jfac < fac_loop_bound; jfac++) {
                                     if (facnorm.size() == 0 || facnorm[jfac] <= -9998) {
                                         int index2 = jbase_idx + nregressors + jfree;
-                                        hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fj_fk_i;
+                                        if (!use_free_opt || hess_idx_free[index2]) {  // Skip fixed col
+                                            hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fj_fk_i;
+                                        }
                                         jfree++;
                                     }
                                 }
@@ -1657,6 +1724,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                             if (jcat > icat && n_quadratic_loadings > 0) {
                                 for (int jk = 0; jk < numfac; jk++) {
                                     int index2 = jbase_idx + nregressors + ifreefac + jk;
+                                    if (use_free_opt && !hess_idx_free[index2]) continue;  // Skip fixed col
                                     hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fj_fk_i;
                                 }
                             }
@@ -1667,7 +1735,9 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                                 for (int jk = jj + 1; jk < numfac; jk++) {
                                     if ((jcat > icat) || (j_inter_idx >= i_inter_idx)) {
                                         int index2 = jbase_idx + nregressors + ifreefac + n_quadratic_loadings + j_inter_idx;
-                                        hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fj_fk_i;
+                                        if (!use_free_opt || hess_idx_free[index2]) {  // Skip fixed col
+                                            hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fj_fk_i;
+                                        }
                                     }
                                     j_inter_idx++;
                                 }
@@ -1695,8 +1765,13 @@ void Model::EvalOprobit(double expres, int outcome_value,
                         const std::vector<double>& fac,
                         const std::vector<double>& param, int firstpar,
                         std::vector<double>& modEval, std::vector<double>& hess,
-                        int flag, const std::vector<double>& data, int iobs_offset)
+                        int flag, const std::vector<double>& data, int iobs_offset,
+                        const std::vector<int>* model_free_indices)
 {
+    // Note: model_free_indices is accepted for API consistency but not currently used
+    // for optimization in EvalOprobit. The main performance benefit comes from EvalLogit.
+    (void)model_free_indices;  // Suppress unused warning
+
     // Count free factor loadings
     int ifreefac = 0;
     for (size_t i = 0; i < facnorm.size(); i++) {

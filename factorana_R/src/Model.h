@@ -68,13 +68,19 @@ public:
     //   hess - Output: Hessian matrix (upper triangle)
     //   flag - 1=likelihood only, 2=+gradient, 3=+Hessian
     //   type_intercept - Type-specific intercept to add to linear predictor (default 0)
+    //   model_free_indices - Optional pointer to vector of free model parameter indices
+    //                        (0-indexed, relative to model params not including factors).
+    //                        If nullptr, compute full Hessian (backward compatible).
+    //                        If provided, only compute Hessian entries for free params.
+    //                        Factor indices (0..numfac-1) are always included.
     void Eval(int iobs_offset, const std::vector<double>& data,
               const std::vector<double>& param, int firstpar,
               const std::vector<double>& fac,
               std::vector<double>& modEval,
               std::vector<double>& hess,
               int flag,
-              double type_intercept = 0.0);
+              double type_intercept = 0.0,
+              const std::vector<int>* model_free_indices = nullptr);
 
     // Accessors
     ModelType GetType() const { return modtype; }
@@ -99,28 +105,49 @@ private:
         return (regressors[ireg] == -3) ? 1.0 : data[iobs_offset + regressors[ireg]];
     }
 
+    // Helper to check if a model parameter index (0-indexed, relative to model params) is free
+    // Returns true if model_free_indices is nullptr (backward compat) or if idx is in the list
+    inline bool isModelParamFree(int model_param_idx, const std::vector<int>* model_free_indices) const {
+        if (model_free_indices == nullptr) return true;  // Backward compatible: all free
+        for (int fi : *model_free_indices) {
+            if (fi == model_param_idx) return true;
+        }
+        return false;
+    }
+
+    // Helper to check if a Hessian index (0-indexed in full npar space) needs to be computed
+    // Factor indices (0..numfac-1) are always included; model params checked against free list
+    inline bool isHessIndexFree(int hess_idx, const std::vector<int>* model_free_indices) const {
+        if (hess_idx < numfac) return true;  // Factor indices always included
+        return isModelParamFree(hess_idx - numfac, model_free_indices);
+    }
+
     // Helper functions for each model type
     void EvalLinear(double Z, double sigma, const std::vector<double>& fac,
                     const std::vector<double>& param, int firstpar,
                     std::vector<double>& modEval, std::vector<double>& hess,
-                    int flag, const std::vector<double>& data, int iobs_offset);
+                    int flag, const std::vector<double>& data, int iobs_offset,
+                    const std::vector<int>* model_free_indices);
 
     void EvalProbit(double expres, double obsSign, const std::vector<double>& fac,
                     const std::vector<double>& param, int firstpar,
                     std::vector<double>& modEval, std::vector<double>& hess,
-                    int flag, const std::vector<double>& data, int iobs_offset);
+                    int flag, const std::vector<double>& data, int iobs_offset,
+                    const std::vector<int>* model_free_indices);
 
     void EvalLogit(const std::vector<double>& expres, double outcome,
                    const std::vector<double>& fac,
                    const std::vector<double>& param, int firstpar,
                    std::vector<double>& modEval, std::vector<double>& hess,
-                   int flag, const std::vector<double>& data, int iobs_offset);
+                   int flag, const std::vector<double>& data, int iobs_offset,
+                   const std::vector<int>* model_free_indices);
 
     void EvalOprobit(double expres, int outcome_value,
                      const std::vector<double>& fac,
                      const std::vector<double>& param, int firstpar,
                      std::vector<double>& modEval, std::vector<double>& hess,
-                     int flag, const std::vector<double>& data, int iobs_offset);
+                     int flag, const std::vector<double>& data, int iobs_offset,
+                     const std::vector<int>* model_free_indices);
 };
 
 #endif // MODEL_H

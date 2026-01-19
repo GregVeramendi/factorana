@@ -263,7 +263,7 @@ check_gradient_accuracy <- function(model_system, data, params, param_fixed = NU
   ))
 }
 
-#' Check Hessian accuracy against finite differences (diagonal elements only)
+#' Check Hessian accuracy against finite differences (all elements)
 #'
 #' @param model_system Model system object
 #' @param data Data frame
