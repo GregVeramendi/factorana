@@ -734,6 +734,12 @@ find_saddle_escape_direction <- function(params, hessian_fn, objective_fn,
 #' @param verbose Whether to print progress (default TRUE)
 #' @param max_restarts Maximum number of eigenvector-based restarts for escaping
 #'   saddle points (default 5). Set to 0 to disable.
+#' @param factor_scores Matrix (n_obs x n_factors) of factor score estimates from
+#'   a previous stage. Used for adaptive quadrature. (default NULL)
+#' @param factor_ses Matrix (n_obs x n_factors) of factor score standard errors
+#'   from a previous stage. Used for adaptive quadrature. (default NULL)
+#' @param factor_vars Named numeric vector of factor variances from a previous
+#'   stage. Used for adaptive quadrature. (default NULL)
 #'
 #' @details
 #' For maximum efficiency, use \code{optimizer = "nlminb"} or \code{optimizer = "trust"}
@@ -749,7 +755,9 @@ find_saddle_escape_direction <- function(params, hessian_fn, objective_fn,
 estimate_model_rcpp <- function(model_system, data, init_params = NULL,
                                 control = NULL, optimizer = "nlminb",
                                 parallel = TRUE, verbose = TRUE,
-                                max_restarts = 5) {
+                                max_restarts = 5,
+                                factor_scores = NULL, factor_ses = NULL,
+                                factor_vars = NULL) {
 
   # WORKAROUND: Deep copy model_system to avoid C++ reuse bug
   # Use serialize/unserialize for true deep copy
@@ -925,6 +933,29 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
                        weights_var, min(weights_vec), max(weights_vec)))
       }
     }
+
+    # Set up adaptive quadrature if factor_scores provided
+    if (!is.null(factor_scores) && !is.null(factor_ses) && !is.null(factor_vars)) {
+      adapt_thresh <- control$adapt_int_thresh
+      adapt_max_quad <- n_quad
+      # Export adaptive quadrature settings to workers
+      parallel::clusterExport(cl, c("factor_scores", "factor_ses", "factor_vars",
+                                    "adapt_thresh", "adapt_max_quad"),
+                             envir = environment())
+      # Each worker sets up adaptive quadrature for its data subset
+      parallel::clusterEvalQ(cl, {
+        worker_id <- .self_id
+        idx <- data_splits[[worker_id]]
+        scores_subset <- factor_scores[idx, , drop = FALSE]
+        ses_subset <- factor_ses[idx, , drop = FALSE]
+        set_adaptive_quadrature_cpp(.fm_ptr, scores_subset, ses_subset, factor_vars,
+                                    adapt_thresh, adapt_max_quad, verbose = FALSE)
+      })
+      if (verbose) {
+        message(sprintf("Adaptive quadrature enabled (threshold: %.2f, max_quad: %d)",
+                       adapt_thresh, adapt_max_quad))
+      }
+    }
   } else {
     # Single worker initialization
     fm_ptrs <- list(initialize_factor_model_cpp(model_system, data_mat, n_quad, full_init_params))
@@ -938,6 +969,14 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
         message(sprintf("Using observation weights from '%s' (range: %.3f to %.3f)",
                        weights_var, min(weights_vec), max(weights_vec)))
       }
+    }
+
+    # Set up adaptive quadrature if factor_scores provided
+    if (!is.null(factor_scores) && !is.null(factor_ses) && !is.null(factor_vars)) {
+      adapt_thresh <- control$adapt_int_thresh
+      adapt_max_quad <- n_quad
+      set_adaptive_quadrature_cpp(fm_ptrs[[1]], factor_scores, factor_ses, factor_vars,
+                                  adapt_thresh, adapt_max_quad, verbose = verbose)
     }
   }
 

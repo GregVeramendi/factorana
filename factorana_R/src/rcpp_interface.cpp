@@ -923,7 +923,7 @@ void set_observation_weights_cpp(SEXP fm_ptr, NumericVector weights) {
 //' @param factor_scores Matrix (n_obs x n_factors) of factor score estimates
 //' @param factor_ses Matrix (n_obs x n_factors) of standard errors
 //' @param factor_vars Vector (n_factors) of factor variances from previous stage
-//' @param threshold Threshold for determining quadrature points (default 0.3)
+//' @param threshold Threshold for determining quadrature points (default 0.5, matching legacy)
 //' @param max_quad Maximum quadrature points per factor (default 16)
 //' @param verbose Whether to print summary of adaptive quadrature setup (default TRUE)
 //' @export
@@ -932,7 +932,7 @@ void set_adaptive_quadrature_cpp(SEXP fm_ptr,
                                  NumericMatrix factor_scores,
                                  NumericMatrix factor_ses,
                                  NumericVector factor_vars,
-                                 double threshold = 0.3,
+                                 double threshold = 0.5,
                                  int max_quad = 16,
                                  bool verbose = true) {
     Rcpp::XPtr<FactorModel> fm(fm_ptr);

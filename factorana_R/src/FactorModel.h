@@ -68,6 +68,7 @@ private:
     bool use_adaptive;                 // Whether adaptive integration is enabled
     std::vector<std::vector<int>> obs_nquad;     // Per-obs, per-factor quadrature point counts
     std::vector<std::vector<double>> obs_fac_center;  // Per-obs factor score centers [iobs][ifac]
+    std::vector<std::vector<double>> obs_fac_se;      // Per-obs factor score SEs [iobs][ifac]
     std::vector<double> adapt_factor_var;       // Factor variances for adaptive mode
     double adapt_threshold;                     // Threshold for determining n_quad per obs
     std::map<int, std::vector<double>> adapt_nodes;   // GH nodes for different nquad values

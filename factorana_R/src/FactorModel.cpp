@@ -175,6 +175,7 @@ void FactorModel::SetAdaptiveQuadrature(const std::vector<std::vector<double>>& 
     // Resize storage
     obs_nquad.resize(nobs);
     obs_fac_center.resize(nobs);
+    obs_fac_se.resize(nobs);
     obs_weights.resize(nobs, 1.0);
 
     // Collect all unique nquad values needed
@@ -189,14 +190,17 @@ void FactorModel::SetAdaptiveQuadrature(const std::vector<std::vector<double>>& 
 
         obs_nquad[iobs].resize(nfac);
         obs_fac_center[iobs].resize(nfac);
+        obs_fac_se[iobs].resize(nfac);
 
         for (int ifac = 0; ifac < nfac; ifac++) {
             double f_score = factor_scores[iobs][ifac];
             double f_se = factor_ses[iobs][ifac];
             double f_var = factor_vars[ifac];
+            double f_sd = std::sqrt(f_var);
 
-            // Store factor score center
+            // Store factor score center and SE
             obs_fac_center[iobs][ifac] = f_score;
+            obs_fac_se[iobs][ifac] = f_se;
 
             // Determine number of quadrature points based on SE
             // Formula from legacy code: nquad = 1 + 2 * floor(se / var / threshold)
@@ -210,10 +214,11 @@ void FactorModel::SetAdaptiveQuadrature(const std::vector<std::vector<double>>& 
             if (nq > max_quad) nq = max_quad;
 
             // If SE is very large (> sqrt(factor_var)), use default quadrature centered at 0
-            // This handles cases where factor score estimation failed
-            if (f_se > std::sqrt(f_var)) {
+            // and use full SD as the spread (essentially standard quadrature)
+            if (f_se > f_sd) {
                 nq = max_quad;
                 obs_fac_center[iobs][ifac] = 0.0;  // Center at prior mean
+                obs_fac_se[iobs][ifac] = f_sd;     // Use full SD as spread
             }
 
             obs_nquad[iobs][ifac] = nq;
@@ -256,6 +261,7 @@ void FactorModel::DisableAdaptiveQuadrature()
     use_weights = false;  // Also reset weights since they may have been set by adaptive mode
     obs_nquad.clear();
     obs_fac_center.clear();
+    obs_fac_se.clear();
     obs_weights.clear();
     adapt_factor_var.clear();
     adapt_nodes.clear();
@@ -632,6 +638,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     // nobs vector allocations per call to CalcLkhd
     std::vector<int> obs_nq(nfac);           // Number of quad points per factor
     std::vector<double> fac_center(nfac);    // Center for factor integration
+    std::vector<double> fac_spread(nfac);    // Spread for factor integration (SE in adaptive mode, SD otherwise)
     std::vector<int> facint(nfac);           // Integration point indices (odometer)
     std::vector<double> type_probs(ntyp);    // Type probabilities (avoid allocation in ComputeTypeProbabilities)
 
@@ -757,10 +764,12 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
         if (use_adaptive) {
             // Adaptive mode: use per-observation quadrature settings
+            // Uses factor score SE as the spread (from importance sampling perspective)
             nint_points = 1;
             for (int ifac = 0; ifac < nfac; ifac++) {
                 obs_nq[ifac] = obs_nquad[iobs][ifac];
                 fac_center[ifac] = obs_fac_center[iobs][ifac];
+                fac_spread[ifac] = obs_fac_se[iobs][ifac];  // SE for importance sampling
                 nint_points *= obs_nq[ifac];
             }
         } else {
@@ -769,6 +778,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             for (int ifac = 0; ifac < nfac; ifac++) {
                 obs_nq[ifac] = nquad_points;
                 fac_center[ifac] = factor_mean[ifac];
+                fac_spread[ifac] = sigma_fac[ifac];  // Full SD for standard integration
             }
         }
 
@@ -862,18 +872,30 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     probilk *= adapt_weights.at(nq)[facint[ifac]];
                 }
 
-                // Compute factor values (independent factors in adaptive mode)
+                // Compute factor values (using SE as spread in importance sampling)
+                // f = fac_center + fac_spread * x_node
+                // where fac_spread = SE (from Stage 1) and fac_center = factor score
                 for (int ifac = 0; ifac < nfac; ifac++) {
-                    fac_val[ifac] = sigma_fac[ifac] * x_node_fac[ifac] + fac_center[ifac];
+                    fac_val[ifac] = fac_spread[ifac] * x_node_fac[ifac] + fac_center[ifac];
                 }
 
                 // Apply importance sampling correction
+                // Uses adapt_factor_var (prior variance from Stage 1) for the IS weight
+                // The IS weight includes:
+                // 1. exp(z²/2) to undo the GH weight's exp(-z²/2)
+                // 2. exp(-f²/(2σ²)) to apply the prior N(0, σ²)
+                // 3. SE/σ Jacobian factor for the change of variables f = h + SE*z
                 for (int ifac = 0; ifac < nfac; ifac++) {
                     int nq = obs_nq[ifac];
                     double x_node = adapt_nodes.at(nq)[facint[ifac]];
                     double f = fac_val[ifac];
-                    double var = factor_var[ifac];
-                    double is_correction = std::exp(x_node * x_node / 2.0 - f * f / (2.0 * var));
+                    double var = adapt_factor_var[ifac];  // Prior variance from Stage 1
+                    double sd = std::sqrt(var);
+                    double se = fac_spread[ifac];  // SE from Stage 1 (or full SD if SE was large)
+
+                    // IS correction = (SE/σ) × exp(z²/2 - f²/(2σ²))
+                    double jacobian = se / sd;
+                    double is_correction = jacobian * std::exp(x_node * x_node / 2.0 - f * f / (2.0 * var));
                     probilk *= is_correction;
                 }
 

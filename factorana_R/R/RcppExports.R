@@ -96,11 +96,11 @@ set_observation_weights_cpp <- function(fm_ptr, weights) {
 #' @param factor_scores Matrix (n_obs x n_factors) of factor score estimates
 #' @param factor_ses Matrix (n_obs x n_factors) of standard errors
 #' @param factor_vars Vector (n_factors) of factor variances from previous stage
-#' @param threshold Threshold for determining quadrature points (default 0.3)
+#' @param threshold Threshold for determining quadrature points (default 0.5, matching legacy)
 #' @param max_quad Maximum quadrature points per factor (default 16)
 #' @param verbose Whether to print summary of adaptive quadrature setup (default TRUE)
 #' @export
-set_adaptive_quadrature_cpp <- function(fm_ptr, factor_scores, factor_ses, factor_vars, threshold = 0.3, max_quad = 16L, verbose = TRUE) {
+set_adaptive_quadrature_cpp <- function(fm_ptr, factor_scores, factor_ses, factor_vars, threshold = 0.5, max_quad = 16L, verbose = TRUE) {
     invisible(.Call(`_factorana_set_adaptive_quadrature_cpp`, fm_ptr, factor_scores, factor_ses, factor_vars, threshold, max_quad, verbose))
 }
 
