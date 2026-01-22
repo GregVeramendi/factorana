@@ -530,6 +530,69 @@ result <- estimate_model_rcpp(ms, data, control = ctrl, verbose = TRUE)
 
 ---
 
+## Checkpointing (Long-Running Estimations)
+
+For estimations that may take hours or days, the `checkpoint_file` parameter saves parameters periodically so you can restart from the last checkpoint if needed.
+
+<details>
+<summary><b>Click to expand checkpointing example</b></summary>
+
+```r
+library(factorana)
+
+# Run estimation with checkpointing enabled
+result <- estimate_model_rcpp(
+  model_system = ms,
+  data = dat,
+  control = control,
+  checkpoint_file = "my_checkpoint.txt"  # Parameters saved here
+)
+```
+
+**How it works:**
+- Parameters are saved each time the Hessian is evaluated at a point with improved likelihood
+- This "smart" approach only saves when the likelihood actually improves, not every iteration
+- The checkpoint file contains a header with metadata plus parameter names/values in CSV format
+
+**Example checkpoint file:**
+```
+# Checkpoint saved: 2026-01-22 16:18:33
+# Log-likelihood: -502.64076359
+# Iteration: 8
+
+"parameter","value"
+"factor_var_1",0.718778794640373
+"m1_intercept",-0.00617248432231106
+"m1_sigma",0.607418329076786
+...
+```
+
+**Restarting from a checkpoint:**
+
+```r
+# Read checkpoint file (comment.char skips the header lines)
+checkpoint <- read.csv("my_checkpoint.txt", comment.char = "#")
+init_params <- setNames(checkpoint$value, checkpoint$parameter)
+
+# Resume estimation from checkpoint
+result <- estimate_model_rcpp(
+  model_system = ms,
+  data = dat,
+  init_params = init_params,  # Start from checkpoint parameters
+  control = control,
+  checkpoint_file = "my_checkpoint.txt"  # Continue saving checkpoints
+)
+```
+
+</details>
+
+**Key points:**
+- The checkpoint file is overwritten each time a better point is found
+- If estimation is interrupted, the file contains the last best parameters
+- Use `comment.char = "#"` when reading to skip metadata header lines
+
+---
+
 ## Concepts
 
 ### Latent factors & normalization
@@ -680,7 +743,7 @@ More detailed explanations within functions.
   - Smaller values → more integration points
   - Formula: `n_quad_obs = 1 + 2 × floor(factor_se / factor_var / threshold)`
 
-### estimate_model_rcpp(model_system, data, init_params = NULL, control = NULL, optimizer = "nlminb", parallel = TRUE, verbose = TRUE)
+### estimate_model_rcpp(model_system, data, init_params = NULL, control = NULL, optimizer = "nlminb", parallel = TRUE, verbose = TRUE, checkpoint_file = NULL)
 - Main estimation function using C++ backend with R-level parallelization
 - **Parameters**:
   - `model_system`: Output from `define_model_system()`
@@ -694,6 +757,10 @@ More detailed explanations within functions.
     - `"trust"`: Trust region (experimental)
   - `parallel`: Enable parallelization when `num_cores > 1` (default: TRUE)
   - `verbose`: Print progress messages (default: TRUE)
+  - `checkpoint_file`: Path to save checkpoint parameters during optimization (default: NULL)
+    - Saves parameters each time Hessian is evaluated at improved likelihood
+    - Useful for restarting long-running estimations
+    - See "Checkpointing" section for usage
 - **Returns**: List with
   - `estimates`: Parameter estimates
   - `std_errors`: Standard errors (from Hessian)
