@@ -203,9 +203,14 @@ build_parameter_metadata <- function(model_system) {
     if (comp$model_type == "logit" && !is.null(comp$num_choices) && comp$num_choices > 2) {
       n_alternatives <- comp$num_choices - 1  # Exclude reference category
 
+      # Check if intercept is already in covariates (as "intercept" or "constant")
+      has_intercept_in_covariates <- !is.null(comp$covariates) &&
+        any(comp$covariates %in% c("intercept", "constant"))
+
       for (alt in seq_len(n_alternatives)) {
-        # Intercept for this alternative
-        if (comp$intercept) {
+        # Intercept for this alternative - only add if not already in covariates
+        # C++ counts all covariates including "intercept"/"constant" as regressors
+        if (comp$intercept && !has_intercept_in_covariates) {
           param_names <- c(param_names, sprintf("%s_intercept_alt%d", comp_name, alt))
           param_types <- c(param_types, "intercept")
           component_id <- c(component_id, i)
@@ -213,13 +218,12 @@ build_parameter_metadata <- function(model_system) {
 
         # Covariate coefficients for this alternative
         # Include ALL covariates (even fixed ones) to match init_params vector
+        # Note: "intercept" and "constant" are counted as regular betas to match C++
         if (!is.null(comp$covariates) && length(comp$covariates) > 0) {
           for (cov in comp$covariates) {
-            if (cov != "intercept") {
-              param_names <- c(param_names, sprintf("%s_beta_%s_alt%d", comp_name, cov, alt))
-              param_types <- c(param_types, "beta")
-              component_id <- c(component_id, i)
-            }
+            param_names <- c(param_names, sprintf("%s_beta_%s_alt%d", comp_name, cov, alt))
+            param_types <- c(param_types, "beta")
+            component_id <- c(component_id, i)
           }
         }
 
@@ -269,7 +273,8 @@ build_parameter_metadata <- function(model_system) {
         for (cov in comp$covariates) {
           param_names <- c(param_names, sprintf("%s_%s", comp_name, cov))
           # Mark intercept type separately for constraint handling
-          if (cov == "intercept") {
+          # Both "intercept" and "constant" are treated as intercept
+          if (cov %in% c("intercept", "constant")) {
             param_types <- c(param_types, "intercept")
           } else {
             param_types <- c(param_types, "beta")
