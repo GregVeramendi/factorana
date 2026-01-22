@@ -908,6 +908,21 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
     }
     if (facnorm.size() == 0) ifreefac = numfac + numtyp*(outcome_idx != -2);
 
+    // OPTIMIZATION: Precompute cumulative count of free loadings for each factor index
+    // free_loading_cumcount[ifac] = number of free loadings with index < ifac
+    // This avoids O(numfac) count_if calls inside O(numchoice) loops
+    std::vector<int> free_loading_cumcount(numfac + 1, 0);
+    if (facnorm.size() > 0) {
+        for (int i = 0; i < numfac; i++) {
+            free_loading_cumcount[i + 1] = free_loading_cumcount[i] + (facnorm[i] <= -9998 ? 1 : 0);
+        }
+    } else {
+        // All loadings are free
+        for (int i = 0; i <= numfac; i++) {
+            free_loading_cumcount[i] = i;
+        }
+    }
+
     // Number of parameters per choice
     int nparamchoice = nregressors + ifreefac + n_quadratic_loadings + n_interaction_loadings;
 
@@ -956,6 +971,10 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         }
     }
 
+    // OPTIMIZATION: Pre-allocate vectors outside the rank loop to avoid repeated allocations
+    std::vector<double> rankedChoiceCorr(numchoice - 1, 0.0);
+    std::vector<double> pdf(numchoice, 0.0);
+
     // Loop over ranks for exploded logit
     for (int irank = 0; irank < numrank; irank++) {
         // Get outcome for this rank
@@ -985,7 +1004,8 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
 
         // Load rank-share corrections for this rank (if ranksharevar is provided)
         // Layout: ranksharevar_idx + (numchoice-1)*irank + icat for icat=0..numchoice-2
-        std::vector<double> rankedChoiceCorr(numchoice - 1, 0.0);
+        // Reset rankedChoiceCorr to 0 for this rank
+        std::fill(rankedChoiceCorr.begin(), rankedChoiceCorr.end(), 0.0);
         if (ranksharevar_idx >= 0) {
             for (int icat = 0; icat < numchoice - 1; icat++) {
                 int idx = ranksharevar_idx + (numchoice - 1) * irank + icat;
@@ -1011,7 +1031,8 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         }
 
         // Compute conditional probabilities for available choices
-        std::vector<double> pdf(numchoice, 0.0);
+        // Reset pdf to 0 for this rank (vector pre-allocated outside loop)
+        std::fill(pdf.begin(), pdf.end(), 0.0);
         for (int icat = 0; icat < numchoice; icat++) {
             if (!exclude_chosen || !chosen[icat]) {
                 if (icat == 0) {
@@ -1059,9 +1080,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         if (obsCat > 0) {
             if (is_free_loading) {
                 int param_idx = firstpar + (obsCat - 1) * nparamchoice + nregressors;
-                int loading_idx = param_idx + (facnorm.size() > 0 ?
-                    std::count_if(facnorm.begin(), facnorm.begin() + ifac,
-                                  [](double x) { return x <= -9998; }) : ifac);
+                int loading_idx = param_idx + free_loading_cumcount[ifac];
                 modEval[1 + ifac] += param[loading_idx];
             } else {
                 // Fixed loading - use fixed value for gradient
@@ -1074,11 +1093,10 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         // so it must be computed outside the obsCat check
         if (flag == 3) {
             if (is_free_loading) {
+                int free_idx_for_ifac = free_loading_cumcount[ifac];
                 for (int jcat = 1; jcat < numchoice; jcat++) {
                     int jparam_idx = firstpar + (jcat - 1) * nparamchoice + nregressors;
-                    int jloading_idx = jparam_idx + (facnorm.size() > 0 ?
-                        std::count_if(facnorm.begin(), facnorm.begin() + ifac,
-                                      [](double x) { return x <= -9998; }) : ifac);
+                    int jloading_idx = jparam_idx + free_idx_for_ifac;
                     logitgrad[jcat * npar + ifac] += param[jloading_idx];
                 }
             } else {
@@ -1089,12 +1107,12 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         }
 
         // Sum over all non-reference choices
+        // Precompute free loading index offset for this ifac (constant across icat)
+        int free_idx_offset = free_loading_cumcount[ifac];
         for (int icat = 1; icat < numchoice; icat++) {
             if (is_free_loading) {
                 int param_idx = firstpar + (icat - 1) * nparamchoice + nregressors;
-                int loading_idx = param_idx + (facnorm.size() > 0 ?
-                    std::count_if(facnorm.begin(), facnorm.begin() + ifac,
-                                  [](double x) { return x <= -9998; }) : ifac);
+                int loading_idx = param_idx + free_idx_offset;
                 modEval[1 + ifac] += -pdf[icat] * param[loading_idx];
 
                 if (flag == 3) {
@@ -1404,20 +1422,23 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         // First-order derivative Hessian terms
         // dtheta d...
         for (int ifac = 0; ifac < numfac; ifac++) {
+            // Precompute whether this factor has a free loading and its index offset
+            bool ifac_is_free = (facnorm.size() == 0 || facnorm[ifac] <= -9998);
+            int ifac_free_offset = free_loading_cumcount[ifac];
+            double ifac_fixed_loading = ifac_is_free ? 0.0 : facnorm[ifac];
+
             for (int icat = 1; icat < numchoice; icat++) {
                 int param_idx = firstpar + (icat - 1) * nparamchoice + nregressors;
                 // Compute FULL derivative dZ_icat/df_ifac (not just linear loading)
                 double loading_val = 0.0;
 
-                if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
+                if (ifac_is_free) {
                     // Free loading - get from parameter vector
-                    int loading_idx = param_idx + (facnorm.size() > 0 ?
-                        std::count_if(facnorm.begin(), facnorm.begin() + ifac,
-                                      [](double x) { return x <= -9998; }) : ifac);
+                    int loading_idx = param_idx + ifac_free_offset;
                     loading_val = param[loading_idx];
                 } else {
                     // Fixed loading - use the fixed value from facnorm
-                    loading_val = facnorm[ifac];
+                    loading_val = ifac_fixed_loading;
                 }
 
                 // Add quadratic contribution: dZ/df_ifac includes 2*lambda_quad_ifac*f_ifac

@@ -979,9 +979,11 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     int model_flag = models[imod]->GetAllParamsFixed() ? 1 : iflag;
 
                     // Pass model-local free indices for Hessian optimization
-                    // If model_free_indices is properly populated, use it; otherwise nullptr (backward compat)
+                    // Only pass when SOME (not all) parameters are fixed - avoids overhead when all are free
                     const std::vector<int>* free_indices_ptr = nullptr;
-                    if (model_flag == 3 && imod < model_free_indices.size() && !model_free_indices[imod].empty()) {
+                    if (model_flag == 3 && imod < model_free_indices.size() &&
+                        !model_free_indices[imod].empty() &&
+                        model_free_indices[imod].size() < static_cast<size_t>(param_model_count[imod])) {
                         free_indices_ptr = &model_free_indices[imod];
                     }
 
