@@ -160,7 +160,7 @@ The allocation overhead affects ALL evaluation levels (LL, Grad, Hess) proportio
 - [x] Add validation to warn on param_metadata/C++ count mismatch
 - [x] Optimize EvalLogit memory allocation with thread_local vectors
 - [x] Fix "Free parameter size mismatch" error in optimization (v0.2.40)
-- [ ] Fix param_metadata to match C++ structure exactly
+- [x] Fix param_metadata to match C++ structure exactly (v0.2.41)
 - [ ] Add debug output to verify fast path is being taken
 - [ ] Re-run benchmarks with v0.2.40 to measure improvement
 
@@ -178,6 +178,24 @@ But `param_constraints$free_idx` comes from `param_metadata` which may have diff
 **Fix:** Use `init_params` directly instead of re-extracting from R metadata:
 ```r
 current_start <- init_params  # CORRECT - uses C++ extracted free params
+```
+
+## Bug Fix: Parameter Count Discrepancy (v0.2.41)
+
+**Issue:** R metadata had 14 more parameters than C++ (1280 vs 1266).
+
+**Root Cause:** In `build_parameter_metadata()`, for multinomial logit models:
+- R added an intercept parameter when `comp$intercept == TRUE`
+- But covariates already included `"constant"` which serves as the intercept
+- C++ counted all covariates (including "constant") as regressors
+- Result: R had 1 extra parameter per alternative (14 alternatives = 14 extra params)
+
+**Fix:** Only add intercept parameter if neither "intercept" nor "constant" is in covariates:
+```r
+has_intercept_in_covariates <- any(comp$covariates %in% c("intercept", "constant"))
+if (comp$intercept && !has_intercept_in_covariates) {
+  # Add intercept parameter
+}
 ```
 
 ## Files
