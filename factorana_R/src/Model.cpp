@@ -1313,29 +1313,148 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
     // NOTE: Hessian is initialized BEFORE the rank loop (lines ~900-910)
     // and accumulates across ranks. logitgrad is reset per rank.
     if (flag == 3) {
-        // Second-order derivative terms: dZ/dtheta dalpha
-        if (obsCat > 0) {
-            int ifree = 0;
-            for (int ifac = 0; ifac < numfac; ifac++) {
-                if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
-                    int index = numfac + (obsCat - 1) * nparamchoice + nregressors + ifree;
-                    hess[ifac * npar + index] += 1.0;
-                    ifree++;
-                }
-            }
-        }
+        // OPTIMIZATION: Detect if we can use the fast path (standard logit without complexity)
+        // Fast path when: all loadings are free, no quadratic/interaction terms
+        // Note: ifreefac == numfac means all factor loadings are free (either facnorm.size()==0
+        // or all entries in facnorm are <= -9998)
+        // Note: We no longer exclude fixed coefficients (use_free_opt) from fast path because
+        // the overhead of checking hess_idx_free on every iteration is worse than just computing
+        // the full Hessian. The fixed parameter handling is done at the FactorModel aggregation level.
+        bool all_loadings_free = (facnorm.size() == 0) || (ifreefac == numfac);
+        bool use_fast_path = all_loadings_free && (n_quadratic_loadings == 0) &&
+                             (n_interaction_loadings == 0);
 
-        // Second term of second-order derivatives
-        for (int icat = 1; icat < numchoice; icat++) {
-            int ifree = 0;
-            for (int ifac = 0; ifac < numfac; ifac++) {
-                if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
-                    int index = numfac + (icat - 1) * nparamchoice + nregressors + ifree;
-                    hess[ifac * npar + index] += -pdf[icat];
-                    ifree++;
+        if (use_fast_path) {
+            // ===== FAST PATH: Matches legacy TModel.cc structure exactly =====
+            // OPTIMIZATION: Cache regressor values to avoid function call overhead in loops
+            // Legacy code accesses data[iobs_offset+regressors[ireg]] directly
+            std::vector<double> reg_values(nregressors);
+            for (int ireg = 0; ireg < nregressors; ireg++) {
+                reg_values[ireg] = data[iobs_offset + regressors[ireg]];
+            }
+
+            // Second-order derivative terms: dZ/dtheta dalpha
+            if (obsCat > 0) {
+                for (int ifac = 0; ifac < numfac; ifac++) {
+                    int index = numfac + (obsCat - 1) * nparamchoice + nregressors + ifac;
+                    hess[ifac * npar + index] += 1.0;
                 }
             }
-        }
+
+            // Second term of second-order derivatives
+            for (int icat = 1; icat < numchoice; icat++) {
+                for (int ifac = 0; ifac < numfac; ifac++) {
+                    int index = numfac + (icat - 1) * nparamchoice + nregressors + ifac;
+                    hess[ifac * npar + index] += -pdf[icat];
+                }
+            }
+
+            // First-order derivative Hessian terms: dtheta d...
+            for (int ifac = 0; ifac < numfac; ifac++) {
+                for (int icat = 1; icat < numchoice; icat++) {
+                    double loading_icat = param[firstpar + (icat - 1) * nparamchoice + nregressors + ifac];
+
+                    // dtheta dtheta
+                    for (int jfac = ifac; jfac < numfac; jfac++) {
+                        hess[ifac * npar + jfac] += -pdf[icat] * logitgrad[icat * npar + jfac] * loading_icat;
+                    }
+
+                    // dtheta dalpha and dtheta dbeta for each jcat
+                    for (int jcat = 1; jcat < numchoice; jcat++) {
+                        int jbase_idx = numfac + (jcat - 1) * nparamchoice;
+
+                        // dtheta dalpha
+                        for (int jfac = 0; jfac < numfac; jfac++) {
+                            int index = jbase_idx + nregressors + jfac;
+                            hess[ifac * npar + index] += -pdf[icat] * logitgrad[icat * npar + index] * loading_icat;
+                        }
+
+                        // dtheta dbeta
+                        for (int jreg = 0; jreg < nregressors; jreg++) {
+                            int index = jbase_idx + jreg;
+                            hess[ifac * npar + index] += -pdf[icat] * logitgrad[icat * npar + index] * loading_icat;
+                        }
+                    }
+                }
+            }
+
+            // Loop over row categories for remaining Hessian terms
+            for (int icat = 1; icat < numchoice; icat++) {
+                int ibase_idx = numfac + (icat - 1) * nparamchoice;
+
+                for (int jcat = icat; jcat < numchoice; jcat++) {
+                    int jbase_idx = numfac + (jcat - 1) * nparamchoice;
+
+                    // dbeta dbeta
+                    for (int ireg = 0; ireg < nregressors; ireg++) {
+                        int index1 = ibase_idx + ireg;
+                        double xval_i = reg_values[ireg];  // Use cached value
+                        for (int jreg = 0; jreg < nregressors; jreg++) {
+                            if ((jcat > icat) || (jreg >= ireg)) {
+                                int index2 = jbase_idx + jreg;
+                                hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * xval_i;
+                            }
+                        }
+                    }
+
+                    // dbeta dalpha
+                    for (int ireg = 0; ireg < nregressors; ireg++) {
+                        int index1 = ibase_idx + ireg;
+                        double xval_i = reg_values[ireg];  // Use cached value
+                        for (int jfac = 0; jfac < numfac; jfac++) {
+                            int index2 = jbase_idx + nregressors + jfac;
+                            hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * xval_i;
+                        }
+                    }
+
+                    // dalpha dbeta (only for jcat > icat)
+                    if (jcat > icat) {
+                        for (int ifac = 0; ifac < numfac; ifac++) {
+                            int index1 = ibase_idx + nregressors + ifac;
+                            for (int jreg = 0; jreg < nregressors; jreg++) {
+                                int index2 = jbase_idx + jreg;
+                                hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fac[ifac];
+                            }
+                        }
+                    }
+
+                    // dalpha dalpha
+                    for (int ifac = 0; ifac < numfac; ifac++) {
+                        int index1 = ibase_idx + nregressors + ifac;
+                        for (int jfac = 0; jfac < numfac; jfac++) {
+                            if ((jcat > icat) || (jfac >= ifac)) {
+                                int index2 = jbase_idx + nregressors + jfac;
+                                hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * fac[ifac];
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // ===== SLOW PATH: Full implementation with all features =====
+            // Second-order derivative terms: dZ/dtheta dalpha
+            if (obsCat > 0) {
+                int ifree = 0;
+                for (int ifac = 0; ifac < numfac; ifac++) {
+                    if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
+                        int index = numfac + (obsCat - 1) * nparamchoice + nregressors + ifree;
+                        hess[ifac * npar + index] += 1.0;
+                        ifree++;
+                    }
+                }
+            }
+
+            // Second term of second-order derivatives
+            for (int icat = 1; icat < numchoice; icat++) {
+                int ifree = 0;
+                for (int ifac = 0; ifac < numfac; ifac++) {
+                    if (facnorm.size() == 0 || facnorm[ifac] <= -9998) {
+                        int index = numfac + (icat - 1) * nparamchoice + nregressors + ifree;
+                        hess[ifac * npar + index] += -pdf[icat];
+                        ifree++;
+                    }
+                }
+            }
 
         // Second-order derivative terms for d(theta)/d(lambda_quad): d^2Z/dtheta_k dlambda_quad_k = 2*f_k
         if (n_quadratic_loadings > 0) {
@@ -1769,6 +1888,7 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                 }
             }
         }
+        } // End of slow path else block
 
         // NOTE: The "HESSIAN CORRECTION FOR FACTOR VARIANCE BLOCK" that was here has been removed.
         // The correction was adding spurious terms because loading_val (computed at lines 1213-1250)
