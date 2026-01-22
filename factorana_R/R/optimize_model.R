@@ -740,6 +740,11 @@ find_saddle_escape_direction <- function(params, hessian_fn, objective_fn,
 #'   from a previous stage. Used for adaptive quadrature. (default NULL)
 #' @param factor_vars Named numeric vector of factor variances from a previous
 #'   stage. Used for adaptive quadrature. (default NULL)
+#' @param checkpoint_file Path to file for saving checkpoint parameters during
+#'   optimization. When specified, parameters are saved each time the Hessian is
+#'   evaluated at a point with improved likelihood. Useful for long-running
+#'   estimations that may need to be restarted. The file contains parameter names
+#'   and values as CSV with metadata headers. (default NULL = no checkpointing)
 #'
 #' @details
 #' For maximum efficiency, use \code{optimizer = "nlminb"} or \code{optimizer = "trust"}
@@ -757,7 +762,8 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
                                 parallel = TRUE, verbose = TRUE,
                                 max_restarts = 5,
                                 factor_scores = NULL, factor_ses = NULL,
-                                factor_vars = NULL) {
+                                factor_vars = NULL,
+                                checkpoint_file = NULL) {
 
   # WORKAROUND: Deep copy model_system to avoid C++ reuse bug
   # Use serialize/unserialize for true deep copy
@@ -1020,6 +1026,7 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
 
   # Build parameter metadata (names, types, etc.)
   param_metadata <- build_parameter_metadata(model_system)
+  param_names <- param_metadata$names  # For checkpointing
 
   # Setup constraints and identify fixed/free parameters
   # Use full_init_params (not init_params) because param_metadata covers ALL parameters
@@ -1109,6 +1116,13 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     return(params_full)
   }
 
+  # Checkpointing: track best likelihood for smart checkpoint saving
+  # Use an environment so closures can modify these values
+  checkpoint_env <- new.env(parent = emptyenv())
+  checkpoint_env$best_loglik <- -Inf
+  checkpoint_env$best_params_free <- NULL
+  checkpoint_env$n_checkpoints <- 0
+
   # Define objective function (operates on free parameters only)
   objective_fn <- function(params_free) {
     # C++ expects only FREE params (it has fixed values stored internally)
@@ -1126,6 +1140,13 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       # Single worker
       loglik <- evaluate_loglik_only_cpp(fm_ptrs[[1]], params_free)
     }
+
+    # Track best likelihood for checkpointing
+    if (loglik > checkpoint_env$best_loglik) {
+      checkpoint_env$best_loglik <- loglik
+      checkpoint_env$best_params_free <- params_free
+    }
+
     return(-loglik)  # Negative for minimization
   }
 
@@ -1213,6 +1234,51 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
         message("WARNING: Hessian contains NA/NaN/Inf values!")
         message(sprintf("  NA count: %d", sum(is.na(hess_mat_free))))
         message(sprintf("  Inf count: %d", sum(is.infinite(hess_mat_free))))
+      }
+    }
+
+    # Checkpointing: save parameters when Hessian is evaluated at best point
+    if (!is.null(checkpoint_file) && !is.null(checkpoint_env$best_params_free)) {
+      # Check if current params are at or near the best
+      params_match <- isTRUE(all.equal(params_free, checkpoint_env$best_params_free,
+                                        tolerance = 1e-10))
+      if (params_match) {
+        # Reconstruct full parameter vector from free parameters
+        params_full_checkpoint <- full_init_params  # Start with initial full params
+        params_full_checkpoint[param_constraints$free_idx] <- params_free
+        params_full_checkpoint <- apply_equality_constraints(params_full_checkpoint)
+
+        # Save checkpoint with parameter names
+        checkpoint_data <- data.frame(
+          parameter = param_names,
+          value = params_full_checkpoint,
+          stringsAsFactors = FALSE
+        )
+
+        # Add metadata
+        checkpoint_header <- sprintf(
+          "# Checkpoint saved: %s\n# Log-likelihood: %.8f\n# Iteration: %d\n",
+          format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+          checkpoint_env$best_loglik,
+          checkpoint_env$n_checkpoints + 1
+        )
+
+        # Write to file
+        tryCatch({
+          con <- file(checkpoint_file, "w")
+          writeLines(checkpoint_header, con)
+          utils::write.csv(checkpoint_data, con, row.names = FALSE)
+          close(con)
+          checkpoint_env$n_checkpoints <- checkpoint_env$n_checkpoints + 1
+          if (verbose) {
+            message(sprintf("  [Checkpoint %d saved: LL=%.4f]",
+                           checkpoint_env$n_checkpoints, checkpoint_env$best_loglik))
+          }
+        }, error = function(e) {
+          if (verbose) {
+            message(sprintf("  [Warning: Failed to save checkpoint: %s]", e$message))
+          }
+        })
       }
     }
 
