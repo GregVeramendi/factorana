@@ -1306,8 +1306,9 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   if (verbose) message(sprintf("Running optimization using %s...", optimizer))
 
   # Track current starting point for restarts
-  # Use full_init_params since free_idx indexes into the full parameter vector
-  current_start <- full_init_params[param_constraints$free_idx]
+  # IMPORTANT: Use init_params (extracted via C++) not param_constraints$free_idx
+  # because param_metadata may have different parameter count than C++
+  current_start <- init_params
   n_restarts_used <- 0
 
   # Track optimization timing
