@@ -1028,6 +1028,23 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   param_metadata <- build_parameter_metadata(model_system)
   param_names <- param_metadata$names  # For checkpointing
 
+  # Validate parameter counts match between R metadata and C++
+  if (param_metadata$n_params != n_params_total) {
+    warning(sprintf(
+      paste0("Parameter count mismatch: R metadata has %d params but C++ has %d. ",
+             "This may cause parameter names to be misaligned. ",
+             "Check build_parameter_metadata() for multinomial logit components."),
+      param_metadata$n_params, n_params_total
+    ))
+    # Also warn about which component might be causing the issue
+    if (verbose) {
+      message("Debugging parameter count mismatch:")
+      message(sprintf("  param_metadata$n_params = %d", param_metadata$n_params))
+      message(sprintf("  n_params_total (from C++) = %d", n_params_total))
+      message(sprintf("  length(full_init_params) = %d", length(full_init_params)))
+    }
+  }
+
   # Setup constraints and identify fixed/free parameters
   # Use full_init_params (not init_params) because param_metadata covers ALL parameters
   param_constraints <- setup_parameter_constraints(model_system, full_init_params, param_metadata, factor_variance_fixed, verbose)

@@ -911,8 +911,13 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
     // OPTIMIZATION: Precompute cumulative count of free loadings for each factor index
     // free_loading_cumcount[ifac] = number of free loadings with index < ifac
     // This avoids O(numfac) count_if calls inside O(numchoice) loops
-    std::vector<int> free_loading_cumcount(numfac + 1, 0);
+    // PERFORMANCE: Use thread_local to avoid repeated allocation across calls
+    static thread_local std::vector<int> free_loading_cumcount;
+    if (free_loading_cumcount.size() < static_cast<size_t>(numfac + 1)) {
+        free_loading_cumcount.resize(numfac + 1);
+    }
     if (facnorm.size() > 0) {
+        free_loading_cumcount[0] = 0;
         for (int i = 0; i < numfac; i++) {
             free_loading_cumcount[i + 1] = free_loading_cumcount[i] + (facnorm[i] <= -9998 ? 1 : 0);
         }
@@ -933,19 +938,30 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
     int npar = numfac + (numchoice - 1) * nparamchoice;
 
     // For exploded logit: track which choices have been made (excluded from later ranks)
-    std::vector<bool> chosen(numchoice, false);
+    // PERFORMANCE: Use thread_local to avoid repeated allocation across calls
+    static thread_local std::vector<bool> chosen;
+    if (chosen.size() < static_cast<size_t>(numchoice)) {
+        chosen.resize(numchoice);
+    }
+    std::fill(chosen.begin(), chosen.begin() + numchoice, false);
 
     // Intermediate gradient storage for Hessian (allocated once, reset per rank)
-    std::vector<double> logitgrad;
+    // PERFORMANCE: Use thread_local to avoid repeated allocation across calls
+    static thread_local std::vector<double> logitgrad;
 
     // OPTIMIZATION: Build boolean vector marking which Hessian indices are free
     // Factor indices (0..numfac-1) are always needed; model params checked against free list
     // This allows skipping Hessian computation for fixed parameters
-    std::vector<bool> hess_idx_free;
+    // PERFORMANCE: Use thread_local to avoid repeated allocation across calls
+    static thread_local std::vector<bool> hess_idx_free;
     bool use_free_opt = (model_free_indices != nullptr && flag == 3);
 
     if (flag == 3) {
-        logitgrad.resize(numchoice * npar, 0.0);
+        size_t logitgrad_size = static_cast<size_t>(numchoice * npar);
+        if (logitgrad.size() < logitgrad_size) {
+            logitgrad.resize(logitgrad_size);
+        }
+        std::fill(logitgrad.begin(), logitgrad.begin() + logitgrad_size, 0.0);
 
         // Initialize Hessian BEFORE the rank loop so it accumulates across ranks
         size_t hess_size = static_cast<size_t>(npar * npar);
@@ -956,7 +972,10 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
 
         // Build free index lookup for optimization
         if (use_free_opt) {
-            hess_idx_free.resize(npar, false);
+            if (hess_idx_free.size() < static_cast<size_t>(npar)) {
+                hess_idx_free.resize(npar);
+            }
+            std::fill(hess_idx_free.begin(), hess_idx_free.begin() + npar, false);
             // Factor indices are always free
             for (int i = 0; i < numfac; i++) {
                 hess_idx_free[i] = true;
@@ -972,8 +991,15 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
     }
 
     // OPTIMIZATION: Pre-allocate vectors outside the rank loop to avoid repeated allocations
-    std::vector<double> rankedChoiceCorr(numchoice - 1, 0.0);
-    std::vector<double> pdf(numchoice, 0.0);
+    // PERFORMANCE: Use thread_local to avoid repeated allocation across calls to EvalLogit
+    static thread_local std::vector<double> rankedChoiceCorr;
+    static thread_local std::vector<double> pdf;
+    if (rankedChoiceCorr.size() < static_cast<size_t>(numchoice - 1)) {
+        rankedChoiceCorr.resize(numchoice - 1);
+    }
+    if (pdf.size() < static_cast<size_t>(numchoice)) {
+        pdf.resize(numchoice);
+    }
 
     // Loop over ranks for exploded logit
     for (int irank = 0; irank < numrank; irank++) {
@@ -1328,7 +1354,11 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
             // ===== FAST PATH: Matches legacy TModel.cc structure exactly =====
             // OPTIMIZATION: Cache regressor values to avoid function call overhead in loops
             // Legacy code accesses data[iobs_offset+regressors[ireg]] directly
-            std::vector<double> reg_values(nregressors);
+            // PERFORMANCE: Use thread_local to avoid repeated allocation across calls
+            static thread_local std::vector<double> reg_values;
+            if (reg_values.size() < static_cast<size_t>(nregressors)) {
+                reg_values.resize(nregressors);
+            }
             for (int ireg = 0; ireg < nregressors; ireg++) {
                 reg_values[ireg] = data[iobs_offset + regressors[ireg]];
             }
