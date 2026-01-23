@@ -1350,6 +1350,22 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         bool use_fast_path = all_loadings_free && (n_quadratic_loadings == 0) &&
                              (n_interaction_loadings == 0);
 
+        // DEBUG: Print fast path decision (once per model configuration)
+        static thread_local int debug_print_count = 0;
+        if (debug_print_count < 5) {
+            Rcpp::Rcout << "[EvalLogit Hess]"
+                        << " nchoice=" << numchoice
+                        << " nrank=" << numrank
+                        << " facnorm.size=" << facnorm.size()
+                        << " ifreefac=" << ifreefac
+                        << " numfac=" << numfac
+                        << " n_quad=" << n_quadratic_loadings
+                        << " n_inter=" << n_interaction_loadings
+                        << " all_free=" << all_loadings_free
+                        << " FAST=" << use_fast_path << "\n";
+            debug_print_count++;
+        }
+
         if (use_fast_path) {
             // ===== FAST PATH: Matches legacy TModel.cc structure exactly =====
             // OPTIMIZATION: Cache regressor values to avoid function call overhead in loops

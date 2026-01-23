@@ -161,8 +161,26 @@ The allocation overhead affects ALL evaluation levels (LL, Grad, Hess) proportio
 - [x] Optimize EvalLogit memory allocation with thread_local vectors
 - [x] Fix "Free parameter size mismatch" error in optimization (v0.2.40)
 - [x] Fix param_metadata to match C++ structure exactly (v0.2.41)
-- [ ] Add debug output to verify fast path is being taken
-- [ ] Re-run benchmarks with v0.2.40 to measure improvement
+- [x] Add debug output to verify fast path is being taken (v0.2.42)
+- [ ] Re-run benchmarks with v0.2.42 to measure improvement
+- [ ] Compare loop structure with legacy code if fast path is confirmed
+
+## Debug Output Added (v0.2.42)
+
+Added debug print to Model.cpp at line 1356-1365 inside EvalLogit Hessian computation.
+Prints once per thread (first 5 calls) showing:
+- `nchoice`, `nrank` - identifies model (switching: 12/1, application: 13/13)
+- `facnorm.size`, `ifreefac`, `numfac` - loading configuration
+- `n_quad`, `n_inter` - quadratic/interaction terms
+- `all_free` - whether all loadings are free
+- `FAST` - whether fast path is being used
+
+**Expected output for switching model:**
+```
+[EvalLogit Hess] nchoice=12 nrank=1 facnorm.size=3 ifreefac=3 numfac=3 n_quad=0 n_inter=0 all_free=1 FAST=1
+```
+
+If FAST=0 for switching but FAST=1 for application, we found the problem.
 
 ## Bug Fix: Free Parameter Size Mismatch (v0.2.40)
 
