@@ -4,6 +4,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <algorithm>
+#include <set>
 #include <R_ext/Print.h>  // For Rprintf, R_FlushConsole
 
 Model::Model(ModelType type, int outcome, int missing,
@@ -1351,14 +1352,15 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         bool use_fast_path = all_loadings_free && (n_quadratic_loadings == 0) &&
                              (n_interaction_loadings == 0);
 
-        // DEBUG: Print fast path decision (once per model configuration)
-        static thread_local int debug_print_count = 0;
-        if (debug_print_count < 5) {
+        // DEBUG: Print fast path decision (once per unique model config)
+        static thread_local std::set<std::pair<int,int>> debug_printed;
+        auto key = std::make_pair(numchoice, numrank);
+        if (debug_printed.find(key) == debug_printed.end()) {
             REprintf("[EvalLogit Hess] nchoice=%d nrank=%d facnorm.size=%d ifreefac=%d numfac=%d n_quad=%d n_inter=%d all_free=%d FAST=%d\n",
                     numchoice, numrank, (int)facnorm.size(), ifreefac, numfac,
                     n_quadratic_loadings, n_interaction_loadings,
                     (int)all_loadings_free, (int)use_fast_path);
-            debug_print_count++;
+            debug_printed.insert(key);
         }
 
         if (use_fast_path) {

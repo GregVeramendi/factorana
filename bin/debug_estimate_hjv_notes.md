@@ -165,22 +165,26 @@ The allocation overhead affects ALL evaluation levels (LL, Grad, Hess) proportio
 - [ ] Re-run benchmarks with v0.2.42 to measure improvement
 - [ ] Compare loop structure with legacy code if fast path is confirmed
 
-## Debug Output Added (v0.2.42)
+## Fast Path Investigation (v0.2.42-v0.2.47) - NOT THE CAUSE
 
-Added debug print to Model.cpp at line 1356-1365 inside EvalLogit Hessian computation.
-Prints once per thread (first 5 calls) showing:
-- `nchoice`, `nrank` - identifies model (switching: 12/1, application: 13/13)
-- `facnorm.size`, `ifreefac`, `numfac` - loading configuration
-- `n_quad`, `n_inter` - quadratic/interaction terms
-- `all_free` - whether all loadings are free
-- `FAST` - whether fast path is being used
+Added debug print to verify fast path usage. Results:
 
-**Expected output for switching model:**
-```
-[EvalLogit Hess] nchoice=12 nrank=1 facnorm.size=3 ifreefac=3 numfac=3 n_quad=0 n_inter=0 all_free=1 FAST=1
-```
+| Model | nchoice | nrank | FAST |
+|-------|---------|-------|------|
+| HS_Track | 4 | 1 | 1 ✓ |
+| Application | 13 | 13 | 1 ✓ |
+| Switching | 12 | 1 | (expected 1) |
 
-If FAST=0 for switching but FAST=1 for application, we found the problem.
+**Conclusion:** All logit models use the fast path. This is NOT the cause of the 2x slowdown.
+
+## Remaining Investigation Areas
+
+1. **Loop iteration counts** - Are there differences in how many times EvalLogit is called?
+2. **Parameter count per model** - Different npar values could affect Hessian size
+3. **Quadrature points** - Same n_quad_points in both implementations?
+4. **Memory layout** - Cache efficiency differences between R/C++ and legacy
+5. **Compiler optimizations** - Legacy may have different optimization flags
+6. **Aggregation overhead** - FactorModel::CalcLkhd aggregation logic
 
 ## Bug Fix: Free Parameter Size Mismatch (v0.2.40)
 
