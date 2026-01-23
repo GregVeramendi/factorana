@@ -1356,10 +1356,8 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         static thread_local std::set<std::pair<int,int>> debug_printed;
         auto key = std::make_pair(numchoice, numrank);
         if (debug_printed.find(key) == debug_printed.end()) {
-            REprintf("[EvalLogit Hess] nchoice=%d nrank=%d facnorm.size=%d ifreefac=%d numfac=%d n_quad=%d n_inter=%d all_free=%d FAST=%d\n",
-                    numchoice, numrank, (int)facnorm.size(), ifreefac, numfac,
-                    n_quadratic_loadings, n_interaction_loadings,
-                    (int)all_loadings_free, (int)use_fast_path);
+            REprintf("[EvalLogit Hess] nchoice=%d nrank=%d nregs=%d npar=%d ifreefac=%d FAST=%d\n",
+                    numchoice, numrank, nregressors, npar, ifreefac, (int)use_fast_path);
             debug_printed.insert(key);
         }
 

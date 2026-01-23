@@ -15,13 +15,27 @@ The R package (factorana) Hessian computation is ~2x slower than the legacy C++ 
 
 ### Model Configuration Tests
 
-| Configuration | R vs Legacy Speed |
-|---------------|-------------------|
-| Full model without switching component | **Same speed** |
-| First 4 components (adveng, advmath, HS_Track, application) | **Same speed** |
-| Full model with switching component | ~2x slower |
+**With application model (adveng, advmath, HS_Track, application):**
+| Metric | R (v0.2.35) | Legacy | Ratio |
+|--------|-------------|--------|-------|
+| LL | 0.582s | 0.260s | 2.2x |
+| Grad | 1.734s | 1.230s | 1.4x |
+| Hess | 2548.2s | 2386.8s | **1.07x** |
 
-**Key observation:** The exploded logit (application model with 13 ranks × 13 choices) runs at legacy speed. Only the regular multinomial logit (switching model with 1 rank × 12 choices) causes the slowdown. This is counterintuitive since the application model has ~15x more work per observation.
+**With switching model (adveng, advmath, HS_Track, switching):**
+| Metric | R (v0.2.35) | Legacy | Ratio |
+|--------|-------------|--------|-------|
+| LL | 0.457s | 0.200s | 2.3x |
+| Grad | 0.893s | 0.630s | 1.4x |
+| Hess | 1220.2s | 600.4s | **2.03x** |
+
+**Key observation:**
+- Application Hessian: ~same speed (1.07x)
+- Switching Hessian: **2x slower**
+- LL and Gradient ratios are similar (~2x, ~1.4x) for both configs
+- Both models use fast path (FAST=1)
+
+The absolute Hessian time for application (2386s) is 4x the switching (600s), yet R matches legacy for application but not for switching. This suggests an overhead that matters more for smaller workloads.
 
 ## Parameter Count Discrepancy
 
@@ -173,15 +187,19 @@ Added debug print to verify fast path usage. Results:
 |-------|---------|-------|------|
 | HS_Track | 4 | 1 | 1 ✓ |
 | Application | 13 | 13 | 1 ✓ |
-| Switching | 12 | 1 | (expected 1) |
+| Switching | 12 | 1 | 1 ✓ |
 
 **Conclusion:** All logit models use the fast path. This is NOT the cause of the 2x slowdown.
 
-## Remaining Investigation Areas
+## Remaining Investigation Areas (2026-01-23)
 
-1. **Loop iteration counts** - Are there differences in how many times EvalLogit is called?
-2. **Parameter count per model** - Different npar values could affect Hessian size
-3. **Quadrature points** - Same n_quad_points in both implementations?
+Since fast path is confirmed for all models, the slowdown must be elsewhere:
+
+1. **Hessian accumulation in CalcLkhd** - O(nDimModHess²) loop at lines 1365-1389
+2. **Parameter count differences** - Switching model has ~800 params → ~640K Hessian elements
+3. **Memory access patterns** - Cache efficiency in Hessian accumulation
+4. **Compiler optimization** - Legacy code may have different -O flags
+5. **R/Rcpp overhead** - Function call overhead between R and C++
 4. **Memory layout** - Cache efficiency differences between R/C++ and legacy
 5. **Compiler optimizations** - Legacy may have different optimization flags
 6. **Aggregation overhead** - FactorModel::CalcLkhd aggregation logic
