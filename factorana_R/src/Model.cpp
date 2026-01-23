@@ -4,6 +4,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <algorithm>
+#include <R_ext/Print.h>  // For Rprintf, R_FlushConsole
 
 Model::Model(ModelType type, int outcome, int missing,
              const std::vector<int>& regs, int nfac, int ntyp,
@@ -1353,16 +1354,11 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         // DEBUG: Print fast path decision (once per model configuration)
         static thread_local int debug_print_count = 0;
         if (debug_print_count < 5) {
-            Rcpp::Rcout << "[EvalLogit Hess]"
-                        << " nchoice=" << numchoice
-                        << " nrank=" << numrank
-                        << " facnorm.size=" << facnorm.size()
-                        << " ifreefac=" << ifreefac
-                        << " numfac=" << numfac
-                        << " n_quad=" << n_quadratic_loadings
-                        << " n_inter=" << n_interaction_loadings
-                        << " all_free=" << all_loadings_free
-                        << " FAST=" << use_fast_path << "\n";
+            Rprintf("[EvalLogit Hess] nchoice=%d nrank=%d facnorm.size=%d ifreefac=%d numfac=%d n_quad=%d n_inter=%d all_free=%d FAST=%d\n",
+                    numchoice, numrank, (int)facnorm.size(), ifreefac, numfac,
+                    n_quadratic_loadings, n_interaction_loadings,
+                    (int)all_loadings_free, (int)use_fast_path);
+            R_FlushConsole();
             debug_print_count++;
         }
 
