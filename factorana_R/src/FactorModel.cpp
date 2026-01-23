@@ -1353,30 +1353,39 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                             }
                         } else {
                             // ===== Independent factors Hessian =====
-                            // Use pre-computed df_dsigma2 (chain rule factor) for efficiency
-                            for (int i = 0; i < nDimModHess; i++) {
-                                for (int j = i; j < nDimModHess; j++) {
+                            // OPTIMIZATION: Separate loops to avoid conditionals in inner loops
+                            // This matches the legacy TMinLkhd.cc structure for better performance
+
+                            // 1. Factor × Factor terms (with chain rule and diagonal second derivative)
+                            for (int i = 0; i < nfac; i++) {
+                                for (int j = i; j < nfac; j++) {
                                     int modhess_idx = i * nDimModHess + j;
-                                    int full_i = (i < nfac) ? i : (firstpar + i - nfac);
-                                    int full_j = (j < nfac) ? j : (firstpar + j - nfac);
-                                    int full_idx = full_i * nparam + full_j;
-
-                                    // Use pre-computed df_dsigma2[k] = x_node[k] / (2 * sigma[k])
-                                    double chain_factor = 1.0;
-                                    if (i < nfac) {
-                                        chain_factor *= df_dsigma2[i];
-                                    }
-                                    if (j < nfac) {
-                                        chain_factor *= df_dsigma2[j];
-                                    }
-
+                                    int full_idx = i * nparam + j;
+                                    double chain_factor = df_dsigma2[i] * df_dsigma2[j];
                                     hess_this_type[full_idx] += modHess[modhess_idx] * chain_factor;
-
-                                    // Second derivative term for factor variance diagonal
-                                    // Uses pre-computed d2f_dsigma2_sq[i] = -x_node[i] / (4 * sigma[i]³)
-                                    if (i < nfac && i == j) {
+                                    // Diagonal second derivative term
+                                    if (i == j) {
                                         hess_this_type[full_idx] += modEval[i + 1] * d2f_dsigma2_sq[i];
                                     }
+                                }
+                            }
+
+                            // 2. Factor × Model param terms (with chain rule on factor side only)
+                            for (int i = 0; i < nfac; i++) {
+                                for (int jparam = 0; jparam < base_param_count_hess; jparam++) {
+                                    int j = nfac + jparam;
+                                    int modhess_idx = i * nDimModHess + j;
+                                    int full_idx = i * nparam + (firstpar + jparam);
+                                    hess_this_type[full_idx] += modHess[modhess_idx] * df_dsigma2[i];
+                                }
+                            }
+
+                            // 3. Model param × Model param terms (no chain rule - direct copy)
+                            for (int iparam = 0; iparam < base_param_count_hess; iparam++) {
+                                for (int jparam = iparam; jparam < base_param_count_hess; jparam++) {
+                                    int modhess_idx = (nfac + iparam) * nDimModHess + (nfac + jparam);
+                                    int full_idx = (firstpar + iparam) * nparam + (firstpar + jparam);
+                                    hess_this_type[full_idx] += modHess[modhess_idx];
                                 }
                             }
                         }

@@ -960,9 +960,10 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         if (logitgrad.size() < logitgrad_size) {
             logitgrad.resize(logitgrad_size);
         }
-        std::fill(logitgrad.begin(), logitgrad.begin() + logitgrad_size, 0.0);
+        // Note: logitgrad is zeroed inside the rank loop at line ~1088, not here
 
         // Initialize Hessian BEFORE the rank loop so it accumulates across ranks
+        // Must zero because hess uses += accumulation and is reused across calls
         size_t hess_size = static_cast<size_t>(npar * npar);
         if (hess.size() < hess_size) {
             hess.resize(hess_size);
@@ -1084,8 +1085,9 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
 
         // ===== GRADIENT CALCULATION =====
         // Reset logitgrad for this rank (it stores rank-specific demeaned derivatives for Hessian)
+        // Use memset for speed and only zero the elements we need (numchoice * npar)
         if (flag == 3) {
-            std::fill(logitgrad.begin(), logitgrad.end(), 0.0);
+            std::memset(logitgrad.data(), 0, static_cast<size_t>(numchoice * npar) * sizeof(double));
         }
 
         // Gradient for factor variance parameters (theta)
