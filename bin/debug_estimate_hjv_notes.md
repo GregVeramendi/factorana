@@ -29,13 +29,25 @@ The R package (factorana) Hessian computation is ~2x slower than the legacy C++ 
 | Grad | 0.893s | 0.630s | 1.4x |
 | Hess | 1220.2s | 600.4s | **2.03x** |
 
-**Key observation:**
-- Application Hessian: ~same speed (1.07x)
-- Switching Hessian: **2x slower**
-- LL and Gradient ratios are similar (~2x, ~1.4x) for both configs
-- Both models use fast path (FAST=1)
+**Reduced model (no apply/switch, just adveng, advmath, HS_Track, linear/probit):**
+| Metric | R (v0.2.35) | Legacy | Ratio |
+|--------|-------------|--------|-------|
+| **nfac=8:** |  |  |  |
+| LL | 2.680s | 1.560s | 1.7x |
+| Grad | 3.748s | 3.100s | 1.2x |
+| Hess | 364.1s | 332.2s | **1.10x** |
+| **nfac=4:** |  |  |  |
+| LL | 0.381s | 0.190s | 2.0x |
+| Grad | 0.797s | 0.410s | 1.9x |
+| Hess | 50.0s | 42.4s | **1.18x** |
 
-The absolute Hessian time for application (2386s) is 4x the switching (600s), yet R matches legacy for application but not for switching. This suggests an overhead that matters more for smaller workloads.
+**Key observation:**
+- Base model (no logit): Hess **~1.1x** (same speed)
+- Base + application: Hess **~1.07x** (same speed)
+- Base + switching: Hess **~2.03x** (2x slower)
+- Both logit models use fast path (FAST=1)
+
+The slowdown is **specific to the switching model**. Application (exploded logit, 13 ranks) runs at legacy speed, but switching (regular logit, 1 rank) is 2x slower despite having less work.
 
 ## Parameter Count Discrepancy
 
