@@ -203,18 +203,57 @@ Added debug print to verify fast path usage. Results:
 
 **Conclusion:** All logit models use the fast path. This is NOT the cause of the 2x slowdown.
 
-## Remaining Investigation Areas (2026-01-23)
+## Root Cause Analysis (v0.2.49)
 
-Since fast path is confirmed for all models, the slowdown must be elsewhere:
+### Why switching (nrank=1) is 2x slower but application (nrank=13) is fast
 
-1. **Hessian accumulation in CalcLkhd** - O(nDimModHess²) loop at lines 1365-1389
-2. **Parameter count differences** - Switching model has ~800 params → ~640K Hessian elements
-3. **Memory access patterns** - Cache efficiency in Hessian accumulation
-4. **Compiler optimization** - Legacy code may have different -O flags
-5. **R/Rcpp overhead** - Function call overhead between R and C++
-4. **Memory layout** - Cache efficiency differences between R/C++ and legacy
-5. **Compiler optimizations** - Legacy may have different optimization flags
-6. **Aggregation overhead** - FactorModel::CalcLkhd aggregation logic
+**Key insight:** The overhead is per-EvalLogit-call, not per-Hessian-element.
+
+For 50k observations × 64 quadrature points = 3.2M EvalLogit calls per Hessian evaluation.
+
+- **Application model (nrank=13):** Each call does 13 ranks of work → overhead is amortized
+- **Switching model (nrank=1):** Each call does 1 rank of work → overhead dominates
+
+### Overhead sources identified by comparing with legacy TModel.cc:
+
+1. **Debug std::set lookup on EVERY call** (lines 1355-1362)
+   - O(log n) lookup happening 3.2M times per Hessian
+   - Even when not printing, the lookup still occurred
+
+2. **reg_values caching** (lines 1369-1375)
+   - Copied ALL regressor values into a vector every call
+   - Legacy accesses `data[iobs_offset+regressors[ireg]]` directly
+   - For 3.2M calls × 12 regressors = 38.4M extra memory writes
+
+3. **thread_local vector overhead**
+   - Multiple size comparisons and std::fill operations per call
+   - Legacy creates vectors fresh per rank inside the loop
+
+### Legacy code structure (TModel.cc:989-1257)
+
+```cpp
+// Legacy: Allocates INSIDE rank loop, uses constructor initialization
+for (int irank = 0 ; irank < numrank ; irank++) {
+    // ...
+    vector<double> rankedChoiceCorr(numchoice - 1, 0.0);  // Fresh each rank
+    vector<double> pdf(numchoice, 1.0/logitdenom);        // Fresh each rank
+    vector<double> logitgrad;
+    if (flag==3) logitgrad.resize(numchoice*npar, 0.0);   // Fresh each rank
+
+    // Direct data access in inner loops:
+    hess[index1*npar+index2] += -pdf[icat]*logitgrad[...]*data[iobs_offset+regressors[ireg]];
+}
+```
+
+### Fix applied in v0.2.49
+
+1. **Removed debug std::set lookup** - No more per-call overhead
+2. **Removed reg_values caching** - Direct data access like legacy
+3. **Removed unused headers** - `<set>`, `<R_ext/Print.h>`
+
+### Expected impact
+
+The switching model should now run closer to legacy speed (targeting ~1.1x instead of 2x).
 
 ## Bug Fix: Free Parameter Size Mismatch (v0.2.40)
 

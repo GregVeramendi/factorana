@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <iostream>
 #include <set>
-#include <R_ext/Print.h>  // For Rprintf, R_FlushConsole
 
 FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
                          int n_mix, bool correlated, int n_quad)
@@ -512,13 +511,6 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                            std::vector<double>& hessL,
                            int iflag)
 {
-    // DEBUG: Print iflag to verify Hessian is being requested
-    static int debug_calclkhd_count = 0;
-    if (debug_calclkhd_count < 3) {
-        REprintf("[CalcLkhd] iflag=%d nobs=%d nmodels=%d\n", iflag, nobs, (int)models.size());
-        debug_calclkhd_count++;
-    }
-
     // ===== STEP 1: Map free parameters to full parameter vector =====
     MapFreeToFull(free_params);
 

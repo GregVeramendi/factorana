@@ -2,10 +2,7 @@
 #include "distributions.h"
 #include <cmath>
 #include <cstring>
-#include <stdexcept>
 #include <algorithm>
-#include <set>
-#include <R_ext/Print.h>  // For Rprintf, R_FlushConsole
 
 Model::Model(ModelType type, int outcome, int missing,
              const std::vector<int>& regs, int nfac, int ntyp,
@@ -1352,27 +1349,9 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         bool use_fast_path = all_loadings_free && (n_quadratic_loadings == 0) &&
                              (n_interaction_loadings == 0);
 
-        // DEBUG: Print fast path decision (once per unique model config)
-        static thread_local std::set<std::pair<int,int>> debug_printed;
-        auto key = std::make_pair(numchoice, numrank);
-        if (debug_printed.find(key) == debug_printed.end()) {
-            REprintf("[EvalLogit Hess] nchoice=%d nrank=%d nregs=%d npar=%d ifreefac=%d FAST=%d\n",
-                    numchoice, numrank, nregressors, npar, ifreefac, (int)use_fast_path);
-            debug_printed.insert(key);
-        }
-
         if (use_fast_path) {
             // ===== FAST PATH: Matches legacy TModel.cc structure exactly =====
-            // OPTIMIZATION: Cache regressor values to avoid function call overhead in loops
-            // Legacy code accesses data[iobs_offset+regressors[ireg]] directly
-            // PERFORMANCE: Use thread_local to avoid repeated allocation across calls
-            static thread_local std::vector<double> reg_values;
-            if (reg_values.size() < static_cast<size_t>(nregressors)) {
-                reg_values.resize(nregressors);
-            }
-            for (int ireg = 0; ireg < nregressors; ireg++) {
-                reg_values[ireg] = data[iobs_offset + regressors[ireg]];
-            }
+            // Access data directly like legacy code - no caching overhead
 
             // Second-order derivative terms: dZ/dtheta dalpha
             if (obsCat > 0) {
@@ -1429,11 +1408,10 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                     // dbeta dbeta
                     for (int ireg = 0; ireg < nregressors; ireg++) {
                         int index1 = ibase_idx + ireg;
-                        double xval_i = reg_values[ireg];  // Use cached value
                         for (int jreg = 0; jreg < nregressors; jreg++) {
                             if ((jcat > icat) || (jreg >= ireg)) {
                                 int index2 = jbase_idx + jreg;
-                                hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * xval_i;
+                                hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * data[iobs_offset + regressors[ireg]];
                             }
                         }
                     }
@@ -1441,10 +1419,9 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
                     // dbeta dalpha
                     for (int ireg = 0; ireg < nregressors; ireg++) {
                         int index1 = ibase_idx + ireg;
-                        double xval_i = reg_values[ireg];  // Use cached value
                         for (int jfac = 0; jfac < numfac; jfac++) {
                             int index2 = jbase_idx + nregressors + jfac;
-                            hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * xval_i;
+                            hess[index1 * npar + index2] += -pdf[icat] * logitgrad[icat * npar + index2] * data[iobs_offset + regressors[ireg]];
                         }
                     }
 
