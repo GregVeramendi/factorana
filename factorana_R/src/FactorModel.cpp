@@ -515,8 +515,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     // DEBUG: Print iflag to verify Hessian is being requested
     static int debug_calclkhd_count = 0;
     if (debug_calclkhd_count < 3) {
-        Rprintf("[CalcLkhd] iflag=%d nobs=%d nmodels=%d\n", iflag, nobs, (int)models.size());
-        R_FlushConsole();
+        REprintf("[CalcLkhd] iflag=%d nobs=%d nmodels=%d\n", iflag, nobs, (int)models.size());
         debug_calclkhd_count++;
     }
 

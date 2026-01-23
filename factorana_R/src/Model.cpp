@@ -1354,11 +1354,10 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         // DEBUG: Print fast path decision (once per model configuration)
         static thread_local int debug_print_count = 0;
         if (debug_print_count < 5) {
-            Rprintf("[EvalLogit Hess] nchoice=%d nrank=%d facnorm.size=%d ifreefac=%d numfac=%d n_quad=%d n_inter=%d all_free=%d FAST=%d\n",
+            REprintf("[EvalLogit Hess] nchoice=%d nrank=%d facnorm.size=%d ifreefac=%d numfac=%d n_quad=%d n_inter=%d all_free=%d FAST=%d\n",
                     numchoice, numrank, (int)facnorm.size(), ifreefac, numfac,
                     n_quadratic_loadings, n_interaction_loadings,
                     (int)all_loadings_free, (int)use_fast_path);
-            R_FlushConsole();
             debug_print_count++;
         }
 
