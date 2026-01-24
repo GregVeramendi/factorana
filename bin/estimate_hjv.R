@@ -984,10 +984,12 @@ if (STAGE_TO_RUN == 1) {
   cat("\n--- Computing Factor Scores ---\n")
   cat("Factor scores will be saved with Stage 1 results for use in later stages.\n")
 
+  # Use high quadrature for accurate factor scores
+  fscore_control <- define_estimation_control(n_quad_points = 16)
   fscores <- estimate_factorscores_rcpp(
     result = result,
     data = dat,
-    n_quad = 16,  # Use high quadrature for accuracy
+    control = fscore_control,
     verbose = TRUE
   )
 

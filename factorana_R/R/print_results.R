@@ -37,19 +37,62 @@ print.factorana_result <- function(x, digits = 4, ...) {
   # Build parameter table
   param_df <- .build_param_table(x)
 
+  # Get fixed parameter info from param_table if available
+  is_fixed <- rep(FALSE, nrow(param_df))
+  if (!is.null(x$param_table) && "fixed" %in% names(x$param_table)) {
+    is_fixed <- x$param_table$fixed
+  }
+
+  # Get n_obs for each component from model_system
+  n_obs_map <- list()
+  if (!is.null(x$model_system$components)) {
+    for (comp in x$model_system$components) {
+      n_obs_map[[comp$name]] <- comp$n_obs
+    }
+  }
+
   # Print by component
   components <- unique(param_df$component)
+  param_num <- 1  # Running parameter number
 
   for (comp in components) {
     comp_df <- param_df[param_df$component == comp, ]
-    cat(paste0("--- ", comp, " ---\n"))
+    comp_idx <- which(param_df$component == comp)
+
+    # Print component header
+    cat(sprintf("****%s****\n", comp))
+
+    # Determine max label width for alignment
+    max_label_len <- max(nchar(comp_df$param_label))
+    max_label_len <- max(max_label_len, 15)  # minimum width
 
     for (i in seq_len(nrow(comp_df))) {
-      est_str <- format(round(comp_df$estimate[i], digits), nsmall = digits, width = 10)
-      se_str <- format(round(comp_df$se[i], digits), nsmall = digits, width = 10)
-      cat(sprintf("  %-25s %s (%s)\n",
-                  comp_df$param_label[i], est_str, se_str))
+      idx <- comp_idx[i]
+      param_fixed <- is_fixed[idx]
+
+      # Format estimate
+      est_val <- comp_df$estimate[i]
+      se_val <- comp_df$se[i]
+
+      # Right-align the parameter name
+      label <- sprintf("%*s:", max_label_len, comp_df$param_label[i])
+
+      if (param_fixed || is.na(se_val) || se_val == 0) {
+        # Fixed parameter - show value without SE
+        cat(sprintf("%3d. %s %10.4f\n", param_num, label, est_val))
+      } else {
+        # Free parameter - show value with SE
+        cat(sprintf("%3d. %s %10.4f (%10.4f)\n", param_num, label, est_val, se_val))
+      }
+      param_num <- param_num + 1
     }
+
+    # Print N for this component if available
+    if (comp %in% names(n_obs_map) && !is.null(n_obs_map[[comp]])) {
+      label <- sprintf("%*s:", max_label_len, "N")
+      cat(sprintf("     %s %10d\n", label, n_obs_map[[comp]]))
+    }
+
     cat("\n")
   }
 
@@ -955,6 +998,18 @@ components_to_latex <- function(result, digits = 3, file = NULL, caption = NULL,
   model_system <- result$model_system
   n_actual <- length(estimates)
 
+  # Use param_table directly if available (built correctly in estimate_model_rcpp)
+  if (!is.null(result$param_table) && nrow(result$param_table) == n_actual) {
+    return(data.frame(
+      component = result$param_table$component,
+      param_label = result$param_table$name,
+      param_type = result$param_table$type,
+      estimate = result$param_table$estimate,
+      se = result$param_table$std_error,
+      stringsAsFactors = FALSE
+    ))
+  }
+
   # Use stored param_names if available (preferred - matches exactly what optimizer used)
   if (!is.null(result$param_names) && length(result$param_names) == n_actual) {
     # Parse param_names to extract component and type info
@@ -972,6 +1027,9 @@ components_to_latex <- function(result, digits = 3, file = NULL, caption = NULL,
       } else if (grepl("^factor_corr_", name)) {
         components[i] <- "Factor Model"
         param_types[i] <- "factor_corr"
+      } else if (grepl("^se_", name)) {
+        components[i] <- "Factor Model"
+        param_types[i] <- "se_param"
       } else if (grepl("^type_[0-9]+_loading_", name)) {
         components[i] <- "Factor Model"
         param_types[i] <- "type_loading"
