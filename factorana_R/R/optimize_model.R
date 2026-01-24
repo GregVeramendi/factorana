@@ -1570,14 +1570,6 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
         if (cond_num > 1e10) {
           message("  Warning: Hessian is poorly conditioned")
         }
-
-        # Show Hessian diagonal elements
-        message("\n  Hessian diagonal elements (2nd derivatives of -loglik):")
-        hess_diag <- diag(hess_free)
-        for (i in seq_len(n_free)) {
-          param_idx <- free_params[i]
-          message(sprintf("    [%2d] %.4e", param_idx, hess_diag[i]))
-        }
       }
 
       # Invert the Hessian to get the covariance matrix for free parameters
@@ -1633,14 +1625,8 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
         }
       }
 
-      # Diagnostic: show covariance diagonal and standard errors
+      # Check for problematic standard errors
       if (verbose) {
-        message("\n  Covariance matrix diagonal (variance estimates):")
-        for (i in seq_along(free_params)) {
-          param_idx <- free_params[i]
-          message(sprintf("    [%2d] Var=%.4e, SE=%.4e", param_idx, cov_diag[i], se_free[i]))
-        }
-
         n_small_se <- sum(se_free < 1e-6 & se_free > 0)
         n_zero_se <- sum(se_free == 0)
         if (n_small_se > 0) {
