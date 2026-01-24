@@ -84,7 +84,13 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
             modEval.resize(ngrad);
         }
         std::memset(modEval.data(), 0, ngrad * sizeof(double));
-        // Note: hess is populated by Eval* functions, no need to clear here
+
+        // Clear hess at start of Eval (matches legacy TModel.cc line 354)
+        // This sets size to 0 so that resize(n, 0.0) in Eval* functions
+        // will allocate and zero all n elements properly
+        if (flag == 3) {
+            hess.clear();
+        }
     } else {
         if (modEval.size() < 1) {
             modEval.resize(1);
