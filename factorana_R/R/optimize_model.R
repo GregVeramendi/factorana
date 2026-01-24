@@ -717,6 +717,79 @@ find_saddle_escape_direction <- function(params, hessian_fn, objective_fn,
   return(list(new_params = best_params, found_escape = found_escape))
 }
 
+# ---- Adaptive quadrature summary ----
+
+#' Print adaptive quadrature summary
+#'
+#' Computes and displays statistics about adaptive integration point allocation.
+#' This is used internally to show the distribution of integration points
+#' across observations when adaptive quadrature is enabled.
+#'
+#' @param factor_ses Matrix (n_obs x n_factors) of factor score standard errors
+#' @param factor_vars Numeric vector of factor variances
+#' @param threshold Threshold for determining quadrature points
+#' @param max_quad Maximum quadrature points per factor
+#' @return Invisible list with summary statistics
+#' @keywords internal
+print_adaptive_quadrature_summary <- function(factor_ses, factor_vars, threshold, max_quad) {
+  n_obs <- nrow(factor_ses)
+  n_fac <- ncol(factor_ses)
+
+  # Compute per-observation total integration points
+  nquad_counts <- integer(0)
+  total_points <- 0
+  total_points_standard <- max_quad^n_fac
+
+  for (i in seq_len(n_obs)) {
+    obs_total <- 1
+    for (j in seq_len(n_fac)) {
+      f_se <- factor_ses[i, j]
+      f_var <- factor_vars[j]
+      ratio <- f_se / f_var / threshold
+      nq <- 1 + 2 * floor(ratio)
+      if (nq < 1) nq <- 1
+      if (nq > max_quad) nq <- max_quad
+      if (f_se > sqrt(f_var)) nq <- max_quad
+      obs_total <- obs_total * nq
+    }
+    key <- as.character(obs_total)
+    if (is.na(nquad_counts[key])) nquad_counts[key] <- 0
+    nquad_counts[key] <- nquad_counts[key] + 1
+    total_points <- total_points + obs_total
+  }
+
+  avg_points <- total_points / n_obs
+  reduction <- 100 * (1 - avg_points / total_points_standard)
+
+  # Print summary
+  message("\nAdaptive Integration Summary")
+  message("----------------------------")
+  message(sprintf("Threshold: %.2f, Max quad points: %d\n", threshold, max_quad))
+
+  message("Integration points per observation:")
+  message("  Points   Observations   Percent")
+
+  # Sort by number of points
+  sorted_keys <- sort(as.numeric(names(nquad_counts)))
+  for (pts in sorted_keys) {
+    key <- as.character(pts)
+    count <- nquad_counts[key]
+    pct <- 100 * count / n_obs
+    message(sprintf("%8d%15d%10.1f%%", pts, count, pct))
+  }
+
+  message(sprintf("\nAverage integration points: %.1f (vs %d standard)",
+                 avg_points, as.integer(total_points_standard)))
+  message(sprintf("Computational reduction: %.1f%%\n", reduction))
+
+  invisible(list(
+    avg_points = avg_points,
+    total_points_standard = total_points_standard,
+    reduction_pct = reduction,
+    distribution = nquad_counts
+  ))
+}
+
 # ---- Main estimation function ----
 
 #' Estimate factor model using R-based optimization
@@ -971,9 +1044,9 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
         set_adaptive_quadrature_cpp(.fm_ptr, scores_subset, ses_subset, factor_vars,
                                     adapt_thresh, adapt_max_quad, verbose = FALSE)
       })
+      # Print summary from R (works with parallel output)
       if (verbose) {
-        message(sprintf("Adaptive quadrature enabled (threshold: %.2f, max_quad: %d)",
-                       adapt_thresh, adapt_max_quad))
+        print_adaptive_quadrature_summary(factor_ses, factor_vars, adapt_thresh, adapt_max_quad)
       }
     }
   } else {
@@ -996,7 +1069,11 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       adapt_thresh <- control$adapt_int_thresh
       adapt_max_quad <- n_quad
       set_adaptive_quadrature_cpp(fm_ptrs[[1]], factor_scores, factor_ses, factor_vars,
-                                  adapt_thresh, adapt_max_quad, verbose = verbose)
+                                  adapt_thresh, adapt_max_quad, verbose = FALSE)
+      # Print summary from R for consistency with parallel mode
+      if (verbose) {
+        print_adaptive_quadrature_summary(factor_ses, factor_vars, adapt_thresh, adapt_max_quad)
+      }
     }
   }
 
