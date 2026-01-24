@@ -389,9 +389,17 @@ cat("Loading Stage 1 results from:", stage1_file, "\n")
 stage1_result <- readRDS(stage1_file)
 cat("Loaded", length(stage1_result$estimates), "fixed parameters from Stage 1\n\n")
 
-# Compute factor scores for adaptive quadrature (if enabled)
-if (USE_ADAPTIVE_QUADRATURE) {
+# Load factor scores from Stage 1 results (computed and saved at end of Stage 1)
+if (!is.null(stage1_result$factor_scores)) {
+  cat("Using saved factor scores from Stage 1 results\n")
+  factor_scores_s1 <- stage1_result$factor_scores
+  factor_ses_s1 <- stage1_result$factor_ses
+  factor_vars_s1 <- stage1_result$factor_vars
+  cat("  Factor scores for", nrow(factor_scores_s1), "observations\n\n")
+} else if (USE_ADAPTIVE_QUADRATURE) {
+  # Fallback: compute factor scores if not saved (backwards compatibility)
   cat("Computing factor scores from Stage 1 for adaptive quadrature...\n")
+  cat("  (Note: Re-run Stage 1 to save factor scores and avoid recomputation)\n")
   fscores_s1 <- estimate_factorscores_rcpp(
     result = stage1_result,
     data = dat,
@@ -401,12 +409,16 @@ if (USE_ADAPTIVE_QUADRATURE) {
   # Extract factor scores and SEs as matrices
   n_factors <- stage1_result$model_system$factor$n_factors
   factor_cols <- paste0("factor_", 1:n_factors)
-  se_cols <- paste0("se_factor_", 1:n_factors)
+  se_cols <- paste0("factor_", 1:n_factors, "_se")
   factor_scores_s1 <- as.matrix(fscores_s1[, factor_cols, drop = FALSE])
   factor_ses_s1 <- as.matrix(fscores_s1[, se_cols, drop = FALSE])
   # Extract factor variances from Stage 1 estimates
   factor_vars_s1 <- stage1_result$estimates[grep("^factor_var_", names(stage1_result$estimates))]
   cat("Factor scores computed for", nrow(factor_scores_s1), "observations\n\n")
+} else {
+  factor_scores_s1 <- NULL
+  factor_ses_s1 <- NULL
+  factor_vars_s1 <- NULL
 }
 
 # Use factor model from previous stage (must be identical object for define_model_system)
@@ -788,18 +800,25 @@ cat("Loading Stage 2 results from:", stage2_file, "\n")
 stage2_result <- readRDS(stage2_file)
 cat("Loaded", length(stage2_result$estimates), "fixed parameters from Stages 1+2\n\n")
 
-# Compute factor scores for adaptive quadrature (if enabled)
+# Load factor scores from Stage 1 results
 # Use Stage 1 measurement model for factor scores (not Stage 2 choice models)
-if (USE_ADAPTIVE_QUADRATURE) {
-  # Load Stage 1 results for factor score computation
-  stage1_file <- stage_result_files$stage1
-  if (!file.exists(stage1_file)) {
-    stop("Stage 1 results not found at: ", stage1_file, "\n",
-         "Stage 1 results are needed for adaptive quadrature factor scores.")
-  }
-  stage1_result <- readRDS(stage1_file)
+stage1_file <- stage_result_files$stage1
+if (!file.exists(stage1_file)) {
+  stop("Stage 1 results not found at: ", stage1_file, "\n",
+       "Stage 1 results are needed for factor scores.")
+}
+stage1_result <- readRDS(stage1_file)
 
+if (!is.null(stage1_result$factor_scores)) {
+  cat("Using saved factor scores from Stage 1 results\n")
+  factor_scores_s1 <- stage1_result$factor_scores
+  factor_ses_s1 <- stage1_result$factor_ses
+  factor_vars_s1 <- stage1_result$factor_vars
+  cat("  Factor scores for", nrow(factor_scores_s1), "observations\n\n")
+} else if (USE_ADAPTIVE_QUADRATURE) {
+  # Fallback: compute factor scores if not saved (backwards compatibility)
   cat("Computing factor scores from Stage 1 for adaptive quadrature...\n")
+  cat("  (Note: Re-run Stage 1 to save factor scores and avoid recomputation)\n")
   fscores_s1 <- estimate_factorscores_rcpp(
     result = stage1_result,
     data = dat,
@@ -809,12 +828,16 @@ if (USE_ADAPTIVE_QUADRATURE) {
   # Extract factor scores and SEs as matrices
   n_factors <- stage1_result$model_system$factor$n_factors
   factor_cols <- paste0("factor_", 1:n_factors)
-  se_cols <- paste0("se_factor_", 1:n_factors)
+  se_cols <- paste0("factor_", 1:n_factors, "_se")
   factor_scores_s1 <- as.matrix(fscores_s1[, factor_cols, drop = FALSE])
   factor_ses_s1 <- as.matrix(fscores_s1[, se_cols, drop = FALSE])
   # Extract factor variances from Stage 1 estimates
   factor_vars_s1 <- stage1_result$estimates[grep("^factor_var_", names(stage1_result$estimates))]
   cat("Factor scores computed for", nrow(factor_scores_s1), "observations\n\n")
+} else {
+  factor_scores_s1 <- NULL
+  factor_ses_s1 <- NULL
+  factor_vars_s1 <- NULL
 }
 
 # Use factor model from previous stage (must be identical object for define_model_system)
@@ -903,22 +926,36 @@ cat("Starting Stage", STAGE_TO_RUN, "Estimation\n")
 cat(rep("=", 70), "\n\n", sep = "")
 
 # Estimate using nlminb optimizer (uses analytical gradient + Hessian)
-# For Stages 2 and 3, optionally use adaptive quadrature with factor scores from Stage 1
-if (USE_ADAPTIVE_QUADRATURE && STAGE_TO_RUN > 1) {
-  # Use factor scores computed earlier (from Stage 1)
-  result <- estimate_model_rcpp(
-    model_system = ms,
-    data = dat,
-    control = control,
-    optimizer = "nlminb",
-    parallel = TRUE,
-    verbose = TRUE,
-    factor_scores = factor_scores_s1,
-    factor_ses = factor_ses_s1,
-    factor_vars = factor_vars_s1
-  )
+# For Stages 2 and 3, use factor scores for initialization and optionally for adaptive quadrature
+if (STAGE_TO_RUN > 1 && !is.null(factor_scores_s1)) {
+  if (USE_ADAPTIVE_QUADRATURE) {
+    # Use factor scores for BOTH initialization AND adaptive quadrature
+    result <- estimate_model_rcpp(
+      model_system = ms,
+      data = dat,
+      control = control,
+      optimizer = "nlminb",
+      parallel = TRUE,
+      verbose = TRUE,
+      factor_scores = factor_scores_s1,
+      factor_ses = factor_ses_s1,
+      factor_vars = factor_vars_s1,
+      init_factor_scores = factor_scores_s1  # Use factor scores for loading initialization
+    )
+  } else {
+    # Use factor scores only for initialization (not adaptive quadrature)
+    result <- estimate_model_rcpp(
+      model_system = ms,
+      data = dat,
+      control = control,
+      optimizer = "nlminb",
+      parallel = TRUE,
+      verbose = TRUE,
+      init_factor_scores = factor_scores_s1  # Use factor scores for loading initialization
+    )
+  }
 } else {
-  # Standard estimation without adaptive quadrature
+  # Stage 1 or no factor scores available: standard estimation
   result <- estimate_model_rcpp(
     model_system = ms,
     data = dat,
@@ -938,6 +975,37 @@ cat("Stage", STAGE_TO_RUN, "Estimation Results\n")
 cat(rep("=", 70), "\n\n", sep = "")
 
 print(result)
+
+# =============================================================================
+# Compute Factor Scores for Stage 1 (used by later stages)
+# =============================================================================
+
+if (STAGE_TO_RUN == 1) {
+  cat("\n--- Computing Factor Scores ---\n")
+  cat("Factor scores will be saved with Stage 1 results for use in later stages.\n")
+
+  fscores <- estimate_factorscores_rcpp(
+    result = result,
+    data = dat,
+    n_quad = 16,  # Use high quadrature for accuracy
+    verbose = TRUE
+  )
+
+  # Extract factor score columns (factor_1, factor_2, ...)
+  n_factors <- result$model_system$factor$n_factors
+  factor_cols <- paste0("factor_", seq_len(n_factors))
+  se_cols <- paste0("factor_", seq_len(n_factors), "_se")
+
+  # Store factor scores and SEs in result object
+  result$factor_scores <- as.matrix(fscores[, factor_cols, drop = FALSE])
+  result$factor_ses <- as.matrix(fscores[, se_cols, drop = FALSE])
+
+  # Extract factor variances for later use
+  result$factor_vars <- result$estimates[grep("^factor_var_", names(result$estimates))]
+
+  cat("Factor scores computed for", nrow(result$factor_scores), "observations\n")
+  cat("Factor score columns:", paste(factor_cols, collapse = ", "), "\n")
+}
 
 # =============================================================================
 # Save Results

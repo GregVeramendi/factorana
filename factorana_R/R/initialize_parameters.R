@@ -5,6 +5,10 @@
 #'
 #' @param model_system A model_system object from define_model_system()
 #' @param data Data frame containing all variables
+#' @param factor_scores Optional matrix of factor scores (nobs x n_factors). When provided,
+#'   factor loadings are estimated by including factor scores as regressors in the
+#'   initialization regressions. This is useful for two-stage estimation where factor
+#'   scores from Stage 1 can be used to initialize loadings in Stage 2 outcomes.
 #' @param verbose Whether to print progress (default TRUE)
 #'
 #' @return List with:
@@ -17,8 +21,13 @@
 #' Factor identification: For each factor, if NO component has a non-zero fixed loading,
 #' then the factor variance is not identified and must be fixed to 1.0.
 #'
+#' When \code{factor_scores} is provided, the initialization will estimate loadings by
+#' treating factor scores as additional regressors. For example, for a linear model:
+#' \code{Y ~ X + factor_scores} and the coefficients on factor_scores become the loading
+#' estimates. This typically provides better starting values than the default (0.5).
+#'
 #' @export
-initialize_parameters <- function(model_system, data, verbose = TRUE) {
+initialize_parameters <- function(model_system, data, factor_scores = NULL, verbose = TRUE) {
 
   if (verbose) {
     message("Initializing parameters...")
@@ -27,6 +36,26 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
   # Get n_types from factor model (needed in all code paths)
   n_types <- model_system$factor$n_types
   if (is.null(n_types)) n_types <- 1L
+
+  # Validate factor_scores if provided
+  n_factors <- model_system$factor$n_factors
+  use_factor_scores <- !is.null(factor_scores)
+  if (use_factor_scores) {
+    if (!is.matrix(factor_scores)) {
+      factor_scores <- as.matrix(factor_scores)
+    }
+    if (nrow(factor_scores) != nrow(data)) {
+      stop(sprintf("factor_scores has %d rows but data has %d rows",
+                   nrow(factor_scores), nrow(data)))
+    }
+    if (ncol(factor_scores) != n_factors) {
+      stop(sprintf("factor_scores has %d columns but model has %d factors",
+                   ncol(factor_scores), n_factors))
+    }
+    if (verbose) {
+      message("  Using factor scores to estimate loadings")
+    }
+  }
 
   # ---- 1. Handle previous_stage if present ----
   if (!is.null(model_system$previous_stage_info)) {
@@ -242,8 +271,37 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
     fixed_coefs <- if (!is.null(comp$fixed_coefficients)) comp$fixed_coefficients else list()
 
     if (comp$model_type == "linear") {
-      # Linear regression
-      if (ncol(X) > 0) {
+      # Linear regression - optionally include factor scores to estimate loadings
+      loading_init <- rep(0.5, n_free_loadings)  # Default loading initialization
+
+      if (use_factor_scores && n_free_loadings > 0 && !isTRUE(comp$is_dynamic)) {
+        # Get factor scores for FREE loadings only (subset to relevant factors)
+        free_factor_idx <- which(is.na(comp$loading_normalization))
+        # Use comp_data rows (respects evaluation_indicator subsetting)
+        fs_subset <- factor_scores[, free_factor_idx, drop = FALSE]
+        if (!is.null(comp$evaluation_indicator)) {
+          eval_mask <- data[[comp$evaluation_indicator]] == 1
+          fs_subset <- fs_subset[eval_mask, , drop = FALSE]
+        }
+
+        # Combine X and factor scores for regression
+        if (ncol(X) > 0) {
+          X_full <- cbind(X, fs_subset)
+        } else {
+          X_full <- fs_subset
+        }
+
+        fit <- lm(outcome ~ X_full - 1)
+        all_coefs <- coef(fit)
+        sigma <- summary(fit)$sigma
+
+        # Split coefficients: first ncol(X) are betas, rest are loadings
+        n_x <- ncol(X)
+        coefs <- if (n_x > 0) all_coefs[1:n_x] else numeric(0)
+        loading_init <- all_coefs[(n_x + 1):length(all_coefs)]
+        names(loading_init) <- NULL  # Remove names for clean output
+
+      } else if (ncol(X) > 0) {
         fit <- lm(outcome ~ X - 1)  # -1 because intercept is already in covariates
         coefs <- coef(fit)
         sigma <- summary(fit)$sigma
@@ -270,6 +328,10 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         n_fixed <- length(fixed_coefs)
         msg <- sprintf("  Linear model: %d covariates, sigma = %.4f", length(coefs), sigma)
         if (n_fixed > 0) msg <- paste0(msg, sprintf(" (%d fixed)", n_fixed))
+        if (use_factor_scores && n_free_loadings > 0) {
+          msg <- paste0(msg, sprintf(" (loadings from factor scores: %s)",
+                                     paste(sprintf("%.3f", loading_init), collapse = ", ")))
+        }
         message(msg)
       }
 
@@ -277,7 +339,7 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       # Get second-order loading initializations
       second_order <- get_second_order_loading_init(comp)
 
-      comp_params <- c(coefs, rep(0.5, n_free_loadings), second_order$values, sigma)
+      comp_params <- c(coefs, loading_init, second_order$values, sigma)
 
       # Build parameter names
       coef_names <- if (length(comp$covariates) > 0) {
@@ -312,9 +374,37 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       }
 
     } else if (comp$model_type == "probit") {
-      # Binary probit
-      fit <- glm(outcome ~ X - 1, family = binomial(link = "probit"))
-      coefs <- coef(fit)
+      # Binary probit - optionally include factor scores to estimate loadings
+      loading_init <- rep(0.5, n_free_loadings)  # Default loading initialization
+
+      if (use_factor_scores && n_free_loadings > 0) {
+        # Get factor scores for FREE loadings only
+        free_factor_idx <- which(is.na(comp$loading_normalization))
+        fs_subset <- factor_scores[, free_factor_idx, drop = FALSE]
+        if (!is.null(comp$evaluation_indicator)) {
+          eval_mask <- data[[comp$evaluation_indicator]] == 1
+          fs_subset <- fs_subset[eval_mask, , drop = FALSE]
+        }
+
+        # Combine X and factor scores for regression
+        if (ncol(X) > 0) {
+          X_full <- cbind(X, fs_subset)
+        } else {
+          X_full <- fs_subset
+        }
+
+        fit <- glm(outcome ~ X_full - 1, family = binomial(link = "probit"))
+        all_coefs <- coef(fit)
+
+        # Split coefficients
+        n_x <- ncol(X)
+        coefs <- if (n_x > 0) all_coefs[1:n_x] else numeric(0)
+        loading_init <- all_coefs[(n_x + 1):length(all_coefs)]
+        names(loading_init) <- NULL
+      } else {
+        fit <- glm(outcome ~ X - 1, family = binomial(link = "probit"))
+        coefs <- coef(fit)
+      }
 
       # Apply any fixed coefficient values
       coefs <- apply_fixed_coefficients(coefs, comp$covariates, fixed_coefs)
@@ -323,13 +413,17 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         n_fixed <- length(fixed_coefs)
         msg <- sprintf("  Probit model: %d covariates", length(coefs))
         if (n_fixed > 0) msg <- paste0(msg, sprintf(" (%d fixed)", n_fixed))
+        if (use_factor_scores && n_free_loadings > 0) {
+          msg <- paste0(msg, sprintf(" (loadings from factor scores: %s)",
+                                     paste(sprintf("%.3f", loading_init), collapse = ", ")))
+        }
         message(msg)
       }
 
       # Get second-order loading initializations
       second_order <- get_second_order_loading_init(comp)
 
-      comp_params <- c(coefs, rep(0.5, n_free_loadings), second_order$values)
+      comp_params <- c(coefs, loading_init, second_order$values)
 
       # Build parameter names
       coef_names <- if (length(comp$covariates) > 0) {
@@ -364,9 +458,37 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
 
     } else if (comp$model_type == "logit") {
       if (comp$num_choices == 2) {
-        # Binary logit
-        fit <- glm(outcome ~ X - 1, family = binomial(link = "logit"))
-        coefs <- coef(fit)
+        # Binary logit - optionally include factor scores to estimate loadings
+        loading_init <- rep(0.5, n_free_loadings)  # Default loading initialization
+
+        if (use_factor_scores && n_free_loadings > 0) {
+          # Get factor scores for FREE loadings only
+          free_factor_idx <- which(is.na(comp$loading_normalization))
+          fs_subset <- factor_scores[, free_factor_idx, drop = FALSE]
+          if (!is.null(comp$evaluation_indicator)) {
+            eval_mask <- data[[comp$evaluation_indicator]] == 1
+            fs_subset <- fs_subset[eval_mask, , drop = FALSE]
+          }
+
+          # Combine X and factor scores for regression
+          if (ncol(X) > 0) {
+            X_full <- cbind(X, fs_subset)
+          } else {
+            X_full <- fs_subset
+          }
+
+          fit <- glm(outcome ~ X_full - 1, family = binomial(link = "logit"))
+          all_coefs <- coef(fit)
+
+          # Split coefficients
+          n_x <- ncol(X)
+          coefs <- if (n_x > 0) all_coefs[1:n_x] else numeric(0)
+          loading_init <- all_coefs[(n_x + 1):length(all_coefs)]
+          names(loading_init) <- NULL
+        } else {
+          fit <- glm(outcome ~ X - 1, family = binomial(link = "logit"))
+          coefs <- coef(fit)
+        }
 
         # Apply any fixed coefficient values
         coefs <- apply_fixed_coefficients(coefs, comp$covariates, fixed_coefs)
@@ -375,13 +497,17 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
           n_fixed <- length(fixed_coefs)
           msg <- sprintf("  Binary logit: %d covariates", length(coefs))
           if (n_fixed > 0) msg <- paste0(msg, sprintf(" (%d fixed)", n_fixed))
+          if (use_factor_scores && n_free_loadings > 0) {
+            msg <- paste0(msg, sprintf(" (loadings from factor scores: %s)",
+                                       paste(sprintf("%.3f", loading_init), collapse = ", ")))
+          }
           message(msg)
         }
 
         # Get second-order loading initializations
         second_order <- get_second_order_loading_init(comp)
 
-        comp_params <- c(coefs, rep(0.5, n_free_loadings), second_order$values)
+        comp_params <- c(coefs, loading_init, second_order$values)
 
         # Build parameter names
         coef_names <- if (length(comp$covariates) > 0) {
@@ -418,6 +544,47 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         # Multinomial logit
         if (!requireNamespace("nnet", quietly = TRUE)) {
           stop("nnet package required for multinomial logit initialization. Install with: install.packages('nnet')")
+        }
+
+        # Prepare factor scores if using them for loading estimation
+        loading_init_by_choice <- NULL
+        if (use_factor_scores && n_free_loadings > 0) {
+          # Get factor scores for FREE loadings only
+          free_factor_idx <- which(is.na(comp$loading_normalization))
+          fs_subset <- factor_scores[, free_factor_idx, drop = FALSE]
+          if (!is.null(comp$evaluation_indicator)) {
+            eval_mask <- data[[comp$evaluation_indicator]] == 1
+            fs_subset <- fs_subset[eval_mask, , drop = FALSE]
+          }
+
+          # Estimate loadings for each choice using linear probability model
+          # (LPM is simpler and faster than running multinomial logit with factor scores)
+          loading_init_by_choice <- list()
+          for (choice in seq_len(comp$num_choices - 1)) {
+            # Binary indicator: 1 if this choice, 0 otherwise
+            choice_indicator <- as.numeric(outcome == (choice + 1))  # +1 because reference is 1
+
+            # Run LPM: choice ~ X + factor_scores
+            if (ncol(X) > 0) {
+              X_full <- cbind(X, fs_subset)
+            } else {
+              X_full <- fs_subset
+            }
+
+            lpm_fit <- tryCatch(
+              lm(choice_indicator ~ X_full - 1),
+              error = function(e) NULL
+            )
+
+            if (!is.null(lpm_fit)) {
+              all_coefs <- coef(lpm_fit)
+              n_x <- ncol(X)
+              loading_init_by_choice[[choice]] <- all_coefs[(n_x + 1):length(all_coefs)]
+              names(loading_init_by_choice[[choice]]) <- NULL
+            } else {
+              loading_init_by_choice[[choice]] <- rep(0.5, n_free_loadings)
+            }
+          }
         }
 
         # Calculate number of weights needed
@@ -459,6 +626,9 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
           n_fixed <- length(fixed_coefs)
           msg <- sprintf("  Multinomial logit: %d choices, %d covariates", comp$num_choices, ncol(X))
           if (n_fixed > 0) msg <- paste0(msg, sprintf(" (%d fixed)", n_fixed))
+          if (use_factor_scores && n_free_loadings > 0) {
+            msg <- paste0(msg, " (loadings estimated from factor scores)")
+          }
           message(msg)
         }
 
@@ -484,8 +654,15 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
           # Get second-order loading initializations for this choice
           second_order <- get_second_order_loading_init(comp, choice = choice)
 
+          # Get loading initialization for this choice
+          if (!is.null(loading_init_by_choice) && choice <= length(loading_init_by_choice)) {
+            choice_loading_init <- loading_init_by_choice[[choice]]
+          } else {
+            choice_loading_init <- rep(0.5, n_free_loadings)
+          }
+
           # Add covariates, linear loadings, and second-order loadings
-          comp_params <- c(comp_params, choice_coefs, rep(0.5, n_free_loadings), second_order$values)
+          comp_params <- c(comp_params, choice_coefs, choice_loading_init, second_order$values)
 
           # Build parameter names for this choice
           coef_names <- if (length(comp$covariates) > 0) {
@@ -521,10 +698,12 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
       }
 
     } else if (comp$model_type == "oprobit") {
-      # Ordered probit
+      # Ordered probit - optionally include factor scores to estimate loadings
       if (!requireNamespace("MASS", quietly = TRUE)) {
         stop("MASS package required for ordered probit initialization. Install with: install.packages('MASS')")
       }
+
+      loading_init <- rep(0.5, n_free_loadings)  # Default loading initialization
 
       # For ordered probit, intercept is not identified (absorbed into thresholds)
       # Remove intercept column if present
@@ -534,7 +713,39 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         X_no_int <- X[, -intercept_col, drop = FALSE]
       }
 
-      # Fit model without intercept
+      # Estimate loadings from factor scores using linear approximation
+      if (use_factor_scores && n_free_loadings > 0) {
+        # Get factor scores for FREE loadings only
+        free_factor_idx <- which(is.na(comp$loading_normalization))
+        fs_subset <- factor_scores[, free_factor_idx, drop = FALSE]
+        if (!is.null(comp$evaluation_indicator)) {
+          eval_mask <- data[[comp$evaluation_indicator]] == 1
+          fs_subset <- fs_subset[eval_mask, , drop = FALSE]
+        }
+
+        # Use linear approximation: treat ordered outcome as continuous
+        # This gives reasonable starting values for loadings
+        outcome_numeric <- as.numeric(outcome)
+        if (ncol(X_no_int) > 0) {
+          X_full <- cbind(X_no_int, fs_subset)
+        } else {
+          X_full <- fs_subset
+        }
+
+        lpm_fit <- tryCatch(
+          lm(outcome_numeric ~ X_full - 1),
+          error = function(e) NULL
+        )
+
+        if (!is.null(lpm_fit)) {
+          all_coefs <- coef(lpm_fit)
+          n_x <- ncol(X_no_int)
+          loading_init <- all_coefs[(n_x + 1):length(all_coefs)]
+          names(loading_init) <- NULL
+        }
+      }
+
+      # Fit model without intercept (for betas and thresholds)
       # Suppress MASS::polr warning about intercept (it's expected for ordered models)
       if (ncol(X_no_int) > 0) {
         fit <- suppressWarnings(
@@ -614,13 +825,17 @@ initialize_parameters <- function(model_system, data, verbose = TRUE) {
         n_fixed <- length(fixed_coefs)
         msg <- sprintf("  Ordered probit: %d covariates, %d thresholds (incremental form)", length(coefs), length(thresholds))
         if (n_fixed > 0) msg <- paste0(msg, sprintf(" (%d fixed)", n_fixed))
+        if (use_factor_scores && n_free_loadings > 0) {
+          msg <- paste0(msg, sprintf(" (loadings from factor scores: %s)",
+                                     paste(sprintf("%.3f", loading_init), collapse = ", ")))
+        }
         message(msg)
       }
 
       # Get second-order loading initializations
       second_order <- get_second_order_loading_init(comp)
 
-      comp_params <- c(coefs, rep(0.5, n_free_loadings), second_order$values, thresholds)
+      comp_params <- c(coefs, loading_init, second_order$values, thresholds)
 
       # Build parameter names
       coef_names <- character(0)

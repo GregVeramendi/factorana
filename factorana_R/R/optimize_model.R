@@ -745,6 +745,11 @@ find_saddle_escape_direction <- function(params, hessian_fn, objective_fn,
 #'   from a previous stage. Used for adaptive quadrature. (default NULL)
 #' @param factor_vars Named numeric vector of factor variances from a previous
 #'   stage. Used for adaptive quadrature. (default NULL)
+#' @param init_factor_scores Matrix (n_obs x n_factors) of factor scores to use
+#'   for initializing factor loadings. When provided, loadings are estimated by
+#'   treating factor scores as regressors, giving better starting values than
+#'   the default (0.5). Useful for two-stage estimation where Stage 1 factor
+#'   scores can improve Stage 2 initialization. (default NULL)
 #' @param checkpoint_file Path to file for saving checkpoint parameters during
 #'   optimization. When specified, parameters are saved each time the Hessian is
 #'   evaluated at a point with improved likelihood. Useful for long-running
@@ -768,6 +773,7 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
                                 max_restarts = 5,
                                 factor_scores = NULL, factor_ses = NULL,
                                 factor_vars = NULL,
+                                init_factor_scores = NULL,
                                 checkpoint_file = NULL) {
 
   # WORKAROUND: Deep copy model_system to avoid C++ reuse bug
@@ -875,7 +881,10 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
 
   if (is.null(init_params)) {
     # Use smart initialization based on separate component estimation
-    init_result <- initialize_parameters(model_system, data, verbose = verbose)
+    # If init_factor_scores provided, use them to estimate loadings
+    init_result <- initialize_parameters(model_system, data,
+                                          factor_scores = init_factor_scores,
+                                          verbose = verbose)
     full_init_params <- init_result$init_params
     factor_variance_fixed <- init_result$factor_variance_fixed
   } else {
