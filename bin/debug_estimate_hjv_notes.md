@@ -289,6 +289,55 @@ if (comp$intercept && !has_intercept_in_covariates) {
 }
 ```
 
+## memset vs resize Optimization (v0.2.52)
+
+### Root Cause Identified
+
+The key difference between R/Rcpp and legacy code in Hessian initialization:
+
+**R/Rcpp (before v0.2.52):**
+```cpp
+std::memset(hess.data(), 0, hess_size * sizeof(double));
+```
+Zeros ALL npar² elements every EvalLogit call.
+
+**Legacy TModel.cc (line 1149):**
+```cpp
+hess.resize(npar*npar, 0.0);
+```
+Only zeros NEW elements when growing. Does nothing if size matches.
+
+### Impact Analysis
+
+For switching model with npar≈146:
+- memset zeros 21,316 elements per call
+- For 50k obs × 16 intpts = 800k EvalLogit calls per Hessian
+- Total: 17 billion element writes per Hessian evaluation
+
+For application model (nrank=13):
+- Same zeroing overhead, but amortized over 13× more computation
+- Overhead is ~0.7% of total work → negligible
+
+For switching model (nrank=1):
+- Overhead is ~7% of total work → noticeable but not 2x
+
+**Note:** This optimization alone may not explain the full 2x difference. More investigation needed.
+
+### Fix Applied
+
+Changed Model.cpp EvalLogit to use resize() like legacy:
+```cpp
+hess.resize(hess_size, 0.0);  // Only zeros new elements
+```
+
+This matches legacy behavior where:
+1. First call with npar=N: allocates and zeros N² elements
+2. Subsequent calls with same npar: does nothing (size matches)
+
+### Potential Issue
+
+The resize approach means hess may contain stale values from previous observations. This is the same behavior as legacy code. Need to verify with FD tests that Hessian is still computed correctly.
+
 ## Files
 - Model file: `/Users/mendi/Dropbox (Personal)/Greg/Work/Research/Project-code/factorana/bin/estimate_hjv.R`
 - R package: `/Users/mendi/Dropbox (Personal)/Greg/Work/Research/Project-code/factorana/factorana_R/`

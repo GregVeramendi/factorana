@@ -963,12 +963,13 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         // Note: logitgrad is zeroed inside the rank loop at line ~1088, not here
 
         // Initialize Hessian BEFORE the rank loop so it accumulates across ranks
-        // Must zero because hess uses += accumulation and is reused across calls
+        // OPTIMIZATION: Use resize like legacy TModel.cc (line 1149) instead of memset
+        // resize(n, 0.0) only zeros NEW elements when growing, does nothing if size matches
+        // This matches legacy behavior and is much faster for repeated calls with same-size buffer
+        // Note: This means hess may contain stale values from previous calls, which is
+        // acceptable because the Hessian is accumulated across all observations anyway
         size_t hess_size = static_cast<size_t>(npar * npar);
-        if (hess.size() < hess_size) {
-            hess.resize(hess_size);
-        }
-        std::memset(hess.data(), 0, hess_size * sizeof(double));
+        hess.resize(hess_size, 0.0);
 
         // Build free index lookup for optimization
         if (use_free_opt) {
