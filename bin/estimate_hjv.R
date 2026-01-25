@@ -993,10 +993,10 @@ if (STAGE_TO_RUN == 1) {
     verbose = TRUE
   )
 
-  # Extract factor score columns (factor_1, factor_2, ...)
+  # Extract factor score columns (factor_1, factor_2, ... and se_factor_1, se_factor_2, ...)
   n_factors <- result$model_system$factor$n_factors
   factor_cols <- paste0("factor_", seq_len(n_factors))
-  se_cols <- paste0("factor_", seq_len(n_factors), "_se")
+  se_cols <- paste0("se_factor_", seq_len(n_factors))
 
   # Store factor scores and SEs in result object
   result$factor_scores <- as.matrix(fscores[, factor_cols, drop = FALSE])
