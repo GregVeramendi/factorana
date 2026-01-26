@@ -886,17 +886,19 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 }
 
                 // Apply importance sampling correction
-                // Uses adapt_factor_var (prior variance from Stage 1) for the IS weight
+                // The IS weight corrects for sampling from q(f) = N(center, SE²) instead of p(f) = N(0, σ²)
+                // where σ² is the CURRENT factor variance parameter (not Stage 1 value!)
                 // The IS weight includes:
-                // 1. exp(z²/2) to undo the GH weight's exp(-z²/2)
+                // 1. exp(z²/2) to undo the GH weight's exp(-z²/2) from proposal
                 // 2. exp(-f²/(2σ²)) to apply the prior N(0, σ²)
-                // 3. SE/σ Jacobian factor for the change of variables f = h + SE*z
+                // 3. SE/σ Jacobian factor for the change of variables f = center + SE*z
                 for (int ifac = 0; ifac < nfac; ifac++) {
                     int nq = obs_nq[ifac];
                     double x_node = adapt_nodes.at(nq)[facint[ifac]];
                     double f = fac_val[ifac];
-                    double var = adapt_factor_var[ifac];  // Prior variance from Stage 1
-                    double sd = std::sqrt(var);
+                    // Use CURRENT factor variance, not Stage 1 value
+                    double var = sigma_fac[ifac] * sigma_fac[ifac];  // Current factor variance parameter
+                    double sd = sigma_fac[ifac];
                     double se = fac_spread[ifac];  // SE from Stage 1 (or full SD if SE was large)
 
                     // IS correction = (SE/σ) × exp(z²/2 - f²/(2σ²))
