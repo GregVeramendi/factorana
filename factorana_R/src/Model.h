@@ -43,6 +43,7 @@ private:
     int n_interaction_loadings; // Number of interaction loading parameters
     bool is_dynamic;          // True for dynamic factor model (outcome is a factor)
     int outcome_factor_idx;   // 0-based index of outcome factor (-1 if not dynamic)
+    bool use_types;           // If true, use type-specific intercepts for this model
 
 public:
     // Constructor
@@ -53,7 +54,8 @@ public:
           FactorSpec fspec = FactorSpec::LINEAR,
           bool dynamic = false, int outcome_fac_idx = -1,
           const std::vector<int>& outcome_idxs = std::vector<int>(),
-          bool excl_chosen = true, int rankshare_idx = -1);
+          bool excl_chosen = true, int rankshare_idx = -1,
+          bool uses_types = false);
 
     // Main evaluation function
     // Computes likelihood, gradient, and Hessian for a single observation
@@ -98,6 +100,7 @@ public:
     int GetNumInteractionLoadings() const { return n_interaction_loadings; }
     bool GetIsDynamic() const { return is_dynamic; }
     int GetOutcomeFactorIdx() const { return outcome_factor_idx; }
+    bool GetUseTypes() const { return use_types; }
 
 private:
     // Helper to get regressor value (handles special marker -3 for intercept)

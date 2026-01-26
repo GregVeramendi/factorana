@@ -46,11 +46,13 @@ test_that("n_types=2 creates correct number of parameters for linear model", {
   mc1 <- define_model_component(
     name = "m1", data = dat, outcome = "y1", factor = fm,
     covariates = "intercept", model_type = "linear",
-    loading_normalization = 1.0  # Fix loading to 1
+    loading_normalization = 1.0,  # Fix loading to 1
+    use_types = TRUE  # Explicitly enable type intercepts
   )
   mc2 <- define_model_component(
     name = "m2", data = dat, outcome = "y2", factor = fm,
-    covariates = "intercept", model_type = "linear"
+    covariates = "intercept", model_type = "linear",
+    use_types = TRUE
   )
 
   ms <- define_model_system(components = list(mc1, mc2), factor = fm)
@@ -82,11 +84,11 @@ test_that("gradient validation passes for n_types=2 linear model", {
   mc1 <- define_model_component(
     name = "m1", data = dat, outcome = "y1", factor = fm,
     covariates = "intercept", model_type = "linear",
-    loading_normalization = 1.0
+    loading_normalization = 1.0, use_types = TRUE
   )
   mc2 <- define_model_component(
     name = "m2", data = dat, outcome = "y2", factor = fm,
-    covariates = "intercept", model_type = "linear"
+    covariates = "intercept", model_type = "linear", use_types = TRUE
   )
 
   ms <- define_model_system(components = list(mc1, mc2), factor = fm)
@@ -137,11 +139,11 @@ test_that("n_types=2 model converges for linear outcomes", {
   mc1 <- define_model_component(
     name = "m1", data = dat, outcome = "y1", factor = fm,
     covariates = "intercept", model_type = "linear",
-    loading_normalization = 1.0
+    loading_normalization = 1.0, use_types = TRUE
   )
   mc2 <- define_model_component(
     name = "m2", data = dat, outcome = "y2", factor = fm,
-    covariates = "intercept", model_type = "linear"
+    covariates = "intercept", model_type = "linear", use_types = TRUE
   )
 
   ms <- define_model_system(components = list(mc1, mc2), factor = fm)
@@ -188,11 +190,11 @@ test_that("n_types=2 creates correct parameters for probit model", {
   mc1 <- define_model_component(
     name = "m1", data = dat, outcome = "y1", factor = fm,
     covariates = "intercept", model_type = "probit",
-    loading_normalization = 1.0
+    loading_normalization = 1.0, use_types = TRUE
   )
   mc2 <- define_model_component(
     name = "m2", data = dat, outcome = "y2", factor = fm,
-    covariates = "intercept", model_type = "probit"
+    covariates = "intercept", model_type = "probit", use_types = TRUE
   )
 
   ms <- define_model_system(components = list(mc1, mc2), factor = fm)
@@ -230,11 +232,11 @@ test_that("gradient validation passes for n_types=2 probit model", {
   mc1 <- define_model_component(
     name = "m1", data = dat, outcome = "y1", factor = fm,
     covariates = "intercept", model_type = "probit",
-    loading_normalization = 1.0
+    loading_normalization = 1.0, use_types = TRUE
   )
   mc2 <- define_model_component(
     name = "m2", data = dat, outcome = "y2", factor = fm,
-    covariates = "intercept", model_type = "probit"
+    covariates = "intercept", model_type = "probit", use_types = TRUE
   )
 
   ms <- define_model_system(components = list(mc1, mc2), factor = fm)
@@ -288,11 +290,11 @@ test_that("Hessian validation passes for n_types=2 linear model", {
   mc1 <- define_model_component(
     name = "m1", data = dat, outcome = "y1", factor = fm,
     covariates = "intercept", model_type = "linear",
-    loading_normalization = 1.0
+    loading_normalization = 1.0, use_types = TRUE
   )
   mc2 <- define_model_component(
     name = "m2", data = dat, outcome = "y2", factor = fm,
-    covariates = "intercept", model_type = "linear"
+    covariates = "intercept", model_type = "linear", use_types = TRUE
   )
 
   ms <- define_model_system(components = list(mc1, mc2), factor = fm)
@@ -374,7 +376,7 @@ test_that("n_types=3 creates correct number of type parameters", {
   mc1 <- define_model_component(
     name = "m1", data = dat, outcome = "y1", factor = fm,
     covariates = "intercept", model_type = "linear",
-    loading_normalization = 1.0
+    loading_normalization = 1.0, use_types = TRUE
   )
 
   ms <- define_model_system(components = list(mc1), factor = fm)
@@ -410,22 +412,22 @@ test_that("two-factor model with n_types=2 creates correct parameters", {
   mc1 <- define_model_component(
     name = "m1", data = dat, outcome = "y1", factor = fm,
     covariates = "intercept", model_type = "linear",
-    loading_normalization = c(1, 0)
+    loading_normalization = c(1, 0), use_types = TRUE
   )
   mc2 <- define_model_component(
     name = "m2", data = dat, outcome = "y2", factor = fm,
     covariates = "intercept", model_type = "linear",
-    loading_normalization = c(NA, 0)
+    loading_normalization = c(NA, 0), use_types = TRUE
   )
   mc3 <- define_model_component(
     name = "m3", data = dat, outcome = "y3", factor = fm,
     covariates = "intercept", model_type = "linear",
-    loading_normalization = c(0, 1)
+    loading_normalization = c(0, 1), use_types = TRUE
   )
   mc4 <- define_model_component(
     name = "m4", data = dat, outcome = "y4", factor = fm,
     covariates = "intercept", model_type = "linear",
-    loading_normalization = c(0, NA)
+    loading_normalization = c(0, NA), use_types = TRUE
   )
 
   ms <- define_model_system(components = list(mc1, mc2, mc3, mc4), factor = fm)

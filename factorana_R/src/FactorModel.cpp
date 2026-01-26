@@ -28,13 +28,15 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
     }
 
     // Compute type model parameters
-    // Type model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
-    // For ntyp > 1: (ntyp - 1) * nfac loading parameters
+    // Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
+    // For ntyp > 1: (ntyp - 1) intercepts + (ntyp - 1) * nfac loading parameters
     if (ntyp > 1) {
-        ntyp_param = (ntyp - 1) * nfac;
+        n_typeprob_intercepts = ntyp - 1;
+        ntyp_param = n_typeprob_intercepts + (ntyp - 1) * nfac;
         type_param_start = nparam;  // Type params come after factor params
         nparam += ntyp_param;
     } else {
+        n_typeprob_intercepts = 0;
         ntyp_param = 0;
         type_param_start = -1;
     }
@@ -89,11 +91,15 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
     }
 
     // Compute type model parameters
+    // Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
+    // For ntyp > 1: (ntyp - 1) intercepts + (ntyp - 1) * nfac loading parameters
     if (ntyp > 1) {
-        ntyp_param = (ntyp - 1) * nfac;
+        n_typeprob_intercepts = ntyp - 1;
+        ntyp_param = n_typeprob_intercepts + (ntyp - 1) * nfac;
         type_param_start = nparam;
         nparam += ntyp_param;
     } else {
+        n_typeprob_intercepts = 0;
         ntyp_param = 0;
         type_param_start = -1;
     }
@@ -965,10 +971,10 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 for (size_t imod = 0; imod < models.size(); imod++) {
                     int firstpar = param_model_start[imod];
 
-                    // Get type-specific intercept for types > 1
+                    // Get type-specific intercept for types > 1 (only if model uses types)
                     // Type 1 (ityp=0) is reference with intercept = 0
                     double type_intercept = 0.0;
-                    if (ityp > 0 && ntyp > 1) {
+                    if (ityp > 0 && ntyp > 1 && models[imod]->GetUseTypes()) {
                         // Type intercepts are stored after base model parameters
                         // ityp-1 because type 1 is reference (no intercept)
                         int intercept_offset = GetTypeInterceptIndex(ityp - 1, imod);
@@ -1054,17 +1060,18 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                         }
 
                         // Gradients w.r.t. model parameters (base params only, not type intercepts)
-                        // param_model_count includes type intercepts, but modEval only has base params
-                        int n_type_intercepts = (ntyp > 1) ? (ntyp - 1) : 0;
+                        // param_model_count includes type intercepts (if model uses types), but modEval only has base params
+                        bool model_uses_types = models[imod]->GetUseTypes();
+                        int n_type_intercepts = (ntyp > 1 && model_uses_types) ? (ntyp - 1) : 0;
                         int base_param_count = param_model_count[imod] - n_type_intercepts;
                         for (int iparam = 0; iparam < base_param_count; iparam++) {
                             grad_this_type[firstpar + iparam] += modEval[1 + nfac + iparam];
                         }
 
-                        // Gradient w.r.t. this type's intercept (only for types > 1)
+                        // Gradient w.r.t. this type's intercept (only for types > 1 and if model uses types)
                         // The gradient equals dL/d(linear_predictor) * 1
                         // For models with an intercept covariate (=1), this equals the base intercept gradient
-                        if (ntyp > 1 && ityp > 0) {
+                        if (ntyp > 1 && ityp > 0 && model_uses_types) {
                             int type_intercept_idx = firstpar + base_param_count + (ityp - 1);
                             // modEval[1 + nfac + 0] is gradient w.r.t. first covariate coefficient
                             // When first covariate is intercept (=1), this equals dL/d(linear_predictor)
@@ -1076,7 +1083,8 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     if (iflag == 3 && modHess.size() > 0) {
                         // Note: modHess from Model::Eval() only includes base parameters,
                         // not type-specific intercepts
-                        int n_type_intercepts_hess = (ntyp > 1) ? (ntyp - 1) : 0;
+                        bool model_uses_types_hess = models[imod]->GetUseTypes();
+                        int n_type_intercepts_hess = (ntyp > 1 && model_uses_types_hess) ? (ntyp - 1) : 0;
                         int base_param_count_hess = param_model_count[imod] - n_type_intercepts_hess;
                         int nDimModHess = nfac + base_param_count_hess;
 
@@ -1393,7 +1401,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                         // ===== STEP 9b: Add Hessian terms for type-specific intercepts =====
                         // Type-specific intercepts have the same derivative structure as base intercept.
                         // The Hessian contribution mirrors that of the base intercept (index 0 in model params).
-                        if (ntyp > 1 && ityp > 0) {
+                        if (ntyp > 1 && ityp > 0 && model_uses_types_hess) {
                             int type_intercept_idx = firstpar + base_param_count_hess + (ityp - 1);
 
                             // Diagonal term: d²L/d(type_intercept)² = d²L/d(intercept)²
@@ -1449,16 +1457,27 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                         }
                     }
 
-                    // Gradient w.r.t. type model loadings (for types > 1)
-                    // π_t = exp(η_t) / (1 + Σ_s exp(η_s)) where η_t = Σ_k λ_{t,k} * f_k
-                    // dπ_ityp/dλ_{s,k} = π_ityp * (δ_{ityp,s} - π_s) * f_k
+                    // Gradient w.r.t. type model parameters (for types > 1)
+                    // η_t = typeprob_intercept_t + Σ_k λ_{t,k} * f_k
+                    // π_t = exp(η_t) / (1 + Σ_s exp(η_s))
+                    // dπ_ityp/dη_{t+1} = π_ityp * (δ_{ityp,t+1} - π_{t+1})
                     if (ntyp > 1) {
+                        // Gradient w.r.t. typeprob intercepts
+                        // dπ_ityp/d(intercept_t) = π_ityp * (δ_{ityp,t+1} - π_{t+1})
+                        for (int t = 0; t < ntyp - 1; t++) {
+                            int intercept_idx = GetTypeProbInterceptIndex(t);
+                            double dpi_dintercept = type_probs[ityp] *
+                                ((ityp == t + 1 ? 1.0 : 0.0) - type_probs[t + 1]);
+                            type_weighted_grad[intercept_idx] += dpi_dintercept * prob_this_type;
+                        }
+
+                        // Gradient w.r.t. type loadings
+                        // dπ_ityp/dλ_{s,k} = π_ityp * (δ_{ityp,s+1} - π_{s+1}) * f_k
                         for (int t = 0; t < ntyp - 1; t++) {  // Types 2, 3, ... (t+1 in 1-indexed)
                             for (int k = 0; k < nfac; k++) {
                                 int param_idx = GetTypeLoadingIndex(t, k);
                                 // ityp is 0-based (0 = type 1, 1 = type 2, etc.)
                                 // t is 0-based index for types with loadings (0 = type 2, etc.)
-                                // dπ_ityp/dη_{t+1} = π_ityp * (δ_{ityp,t+1} - π_{t+1})
                                 double dpi_dlambda = type_probs[ityp] *
                                     ((ityp == t + 1 ? 1.0 : 0.0) - type_probs[t + 1]) * fac_val[k];
                                 type_weighted_grad[param_idx] += dpi_dlambda * prob_this_type;
@@ -1504,13 +1523,85 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                         }
                     }
 
-                    // ===== STEP 9d: Additional Hessian terms for type model loadings =====
-                    // The mixture L_mix = Σ_t π_t * L_t depends on type loadings through π_t
+                    // ===== STEP 9d: Additional Hessian terms for type model parameters =====
+                    // The mixture L_mix = Σ_t π_t * L_t depends on type parameters through π_t
                     // d²L_mix/dθdφ = Σ_t [d²π_t/dθdφ * L_t + dπ_t/dθ * dL_t/dφ + dπ_t/dφ * dL_t/dθ + π_t * d²L_t/dθdφ]
                     // The last term is already handled above.
-                    // For type loading λ_{s,k}: dπ_t/dλ = π_t * (δ_{t,s} - π_s) * f_k
+                    // For typeprob intercept α_s: dπ_t/dα_s = π_t * (δ_{t,s+1} - π_{s+1})
+                    // For type loading λ_{s,k}: dπ_t/dλ = π_t * (δ_{t,s+1} - π_{s+1}) * f_k
                     // For model parameters: dπ_t/dθ = 0
                     if (ntyp > 1) {
+                        // 0. Second derivative terms for typeprob intercepts: d²π_t/dα_s dα_r * L_t
+                        // d²π_t/dη_s dη_r = π_t * (δ_{t,s} - π_s) * (δ_{t,r} - π_r) - π_t * π_s * (δ_{s,r} - π_r)
+                        for (int s = 0; s < ntyp - 1; s++) {
+                            for (int r = s; r < ntyp - 1; r++) {  // r >= s for upper triangle
+                                double delta_ts = (ityp == s + 1) ? 1.0 : 0.0;
+                                double delta_tr = (ityp == r + 1) ? 1.0 : 0.0;
+                                double delta_sr = (s == r) ? 1.0 : 0.0;
+
+                                double d2pi_deta = type_probs[ityp] * (delta_ts - type_probs[s + 1])
+                                                                    * (delta_tr - type_probs[r + 1])
+                                                 - type_probs[ityp] * type_probs[s + 1]
+                                                                    * (delta_sr - type_probs[r + 1]);
+
+                                int intercept_idx_s = GetTypeProbInterceptIndex(s);
+                                int intercept_idx_r = GetTypeProbInterceptIndex(r);
+                                int pi = std::min(intercept_idx_s, intercept_idx_r);
+                                int pj = std::max(intercept_idx_s, intercept_idx_r);
+                                int idx = pi * nparam + pj;
+
+                                // d²π_t/dα_s dα_r = d2pi_deta (no f_k factor for intercepts)
+                                type_weighted_hess[idx] += d2pi_deta * prob_this_type;
+                            }
+                        }
+
+                        // 0b. Cross terms: d²π_t/dα_s dλ_{r,l} * L_t (intercept × loading)
+                        for (int s = 0; s < ntyp - 1; s++) {
+                            int intercept_idx_s = GetTypeProbInterceptIndex(s);
+                            for (int r = 0; r < ntyp - 1; r++) {
+                                double delta_ts = (ityp == s + 1) ? 1.0 : 0.0;
+                                double delta_tr = (ityp == r + 1) ? 1.0 : 0.0;
+                                double delta_sr = (s == r) ? 1.0 : 0.0;
+
+                                double d2pi_deta = type_probs[ityp] * (delta_ts - type_probs[s + 1])
+                                                                    * (delta_tr - type_probs[r + 1])
+                                                 - type_probs[ityp] * type_probs[s + 1]
+                                                                    * (delta_sr - type_probs[r + 1]);
+
+                                for (int l = 0; l < nfac; l++) {
+                                    int loading_idx_rl = GetTypeLoadingIndex(r, l);
+                                    int pi = std::min(intercept_idx_s, loading_idx_rl);
+                                    int pj = std::max(intercept_idx_s, loading_idx_rl);
+                                    int idx = pi * nparam + pj;
+
+                                    // d²π_t/dα_s dλ_{r,l} = d2pi_deta * f_l
+                                    type_weighted_hess[idx] += d2pi_deta * fac_val[l] * prob_this_type;
+                                }
+                            }
+                        }
+
+                        // 0c. Cross terms: dπ_t/dα_s * dL_t/dθ (intercept × model_param)
+                        for (int s = 0; s < ntyp - 1; s++) {
+                            int intercept_idx = GetTypeProbInterceptIndex(s);
+                            double delta_ts = (ityp == s + 1) ? 1.0 : 0.0;
+                            double dpi_dintercept = type_probs[ityp] * (delta_ts - type_probs[s + 1]);
+
+                            for (int ipar = 0; ipar < nparam; ipar++) {
+                                // Skip if ipar is a type parameter (intercept or loading)
+                                if (ntyp_param > 0 && ipar >= type_param_start &&
+                                    ipar < type_param_start + ntyp_param) {
+                                    continue;
+                                }
+
+                                int pi = std::min(intercept_idx, ipar);
+                                int pj = std::max(intercept_idx, ipar);
+                                int idx = pi * nparam + pj;
+
+                                // dπ_t/dα_s * dL_t/dθ = dπ_t/dα_s * L_t * d(log L_t)/dθ
+                                type_weighted_hess[idx] += dpi_dintercept * prob_this_type * grad_this_type[ipar];
+                            }
+                        }
+
                         // 1. Second derivative terms: d²π_t/dλdλ * L_t
                         // d²π_t/dη_s dη_r = π_t * (δ_{t,s} - π_s) * (δ_{t,r} - π_r) - π_t * π_s * (δ_{s,r} - π_r)
                         for (int s = 0; s < ntyp - 1; s++) {
@@ -1694,6 +1785,40 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
                                     type_weighted_hess[idx] += d2_term * prob_this_type;
                                 }
+                            }
+
+                            // 3d. Cross terms: dπ_t/dσ²_k * dL_t/dα_s + d²π_t/dσ²_k dα_s * L_t
+                            // (for σ²_k × typeprob_intercept_s)
+                            // Note: dL_t/dα = 0 (type-specific likelihoods don't depend on typeprob intercepts)
+                            // So we only need d²π_t/dσ²_k dα_s * L_t
+                            for (int s = 0; s < ntyp - 1; s++) {
+                                int intercept_idx = GetTypeProbInterceptIndex(s);
+
+                                // d(dπ_t/dα_s)/dσ²_k = d(π_t * (δ_{t,s+1} - π_{s+1}))/dσ²_k
+                                //                    = (dπ_t/dσ²_k) * (δ_{t,s+1} - π_{s+1})
+                                //                      - π_t * (dπ_{s+1}/dσ²_k)
+
+                                double delta_ts = (ityp == s + 1) ? 1.0 : 0.0;
+
+                                // dπ_{s+1}/dσ²_k (probability of type s+1, not ityp)
+                                double dpi_s_df_k = 0.0;
+                                for (int r = 0; r < ntyp - 1; r++) {
+                                    int lambda_rk_idx = GetTypeLoadingIndex(r, k);
+                                    double lambda_rk = param[lambda_rk_idx];
+                                    double delta_s1_r1 = (s == r) ? 1.0 : 0.0;
+                                    dpi_s_df_k += type_probs[s + 1] * (delta_s1_r1 - type_probs[r + 1]) * lambda_rk;
+                                }
+                                double dpi_s_dsigma2_k = dpi_s_df_k * df_dsigma2[k];
+
+                                // d²(π_t*(δ_{t,s+1}-π_{s+1}))/dσ²_k
+                                double d2_term = dpi_dsigma2_k * (delta_ts - type_probs[s + 1])
+                                               - type_probs[ityp] * dpi_s_dsigma2_k;
+
+                                int pi = std::min(k, intercept_idx);
+                                int pj = std::max(k, intercept_idx);
+                                int idx = pi * nparam + pj;
+
+                                type_weighted_hess[idx] += d2_term * prob_this_type;
                             }
                         }
                     }
@@ -2017,16 +2142,29 @@ void FactorModel::CalcLkhdSingleObs(int iobs,
     }
 }
 
-int FactorModel::GetTypeLoadingIndex(int ityp, int ifac)
+int FactorModel::GetTypeProbInterceptIndex(int ityp)
 {
-    // Type model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
+    // Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
     // ityp: 0-based type index (0 = type 2 since type 1 is reference)
-    // ifac: 0-based factor index
-    // Returns: index in parameter vector for lambda_{ityp+2, ifac+1}
+    // Returns: index in parameter vector for typeprob_intercept_{ityp+2}
+    // Intercepts come first, then loadings
     if (ntyp <= 1 || type_param_start < 0) {
         return -1;  // No type parameters
     }
-    return type_param_start + ityp * nfac + ifac;
+    return type_param_start + ityp;
+}
+
+int FactorModel::GetTypeLoadingIndex(int ityp, int ifac)
+{
+    // Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
+    // ityp: 0-based type index (0 = type 2 since type 1 is reference)
+    // ifac: 0-based factor index
+    // Returns: index in parameter vector for lambda_{ityp+2, ifac+1}
+    // Intercepts come first (n_typeprob_intercepts), then loadings
+    if (ntyp <= 1 || type_param_start < 0) {
+        return -1;  // No type parameters
+    }
+    return type_param_start + n_typeprob_intercepts + ityp * nfac + ifac;
 }
 
 int FactorModel::GetTypeInterceptIndex(int ityp, int model_idx)
@@ -2053,10 +2191,11 @@ int FactorModel::GetTypeInterceptIndex(int ityp, int model_idx)
 void FactorModel::ComputeTypeProbabilities(const std::vector<double>& fac, std::vector<double>& probs)
 {
     // Compute type probabilities using multinomial logit
-    // Type model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
+    // Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
     //
-    // P(type=1) = 1 / (1 + sum_{t=2}^T exp(sum_k lambda_t_k * f_k))
-    // P(type=t) = exp(sum_k lambda_t_k * f_k) / (1 + sum_{t=2}^T exp(sum_k lambda_t_k * f_k))
+    // P(type=1) = 1 / (1 + sum_{t=2}^T exp(eta_t))
+    // P(type=t) = exp(eta_t) / (1 + sum_{t=2}^T exp(eta_t))
+    // where eta_t = typeprob_t_intercept + sum_k lambda_t_k * f_k
     //
     // OPTIMIZATION: probs is pre-allocated by caller to avoid allocation per call
 
@@ -2072,7 +2211,11 @@ void FactorModel::ComputeTypeProbabilities(const std::vector<double>& fac, std::
     double max_log_odds = 0.0;  // For numerical stability
 
     for (int t = 0; t < ntyp - 1; t++) {
-        log_odds[t] = 0.0;
+        // Start with the intercept for this type
+        int intercept_idx = GetTypeProbInterceptIndex(t);
+        log_odds[t] = param[intercept_idx];
+
+        // Add factor loadings
         for (int k = 0; k < nfac; k++) {
             int param_idx = GetTypeLoadingIndex(t, k);
             log_odds[t] += param[param_idx] * fac[k];

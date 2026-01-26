@@ -50,10 +50,11 @@ private:
     int nse_param;                     // Total SE parameters
 
     // Type model parameters (for n_types > 1)
-    // Type probability model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
-    // Total: (n_types - 1) * n_factors parameters
-    int ntyp_param;                    // Number of type model loading parameters
-    int type_param_start;              // Starting index for type model parameters
+    // Type probability model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
+    // Total: (n_types - 1) intercepts + (n_types - 1) * n_factors loadings
+    int ntyp_param;                    // Total type model parameters (intercepts + loadings)
+    int n_typeprob_intercepts;         // Number of typeprob intercepts (n_types - 1)
+    int type_param_start;              // Starting index for type model parameters (intercepts first, then loadings)
 
     // Quadrature
     int nquad_points;                  // Number of quadrature points per dimension
@@ -203,7 +204,11 @@ private:
     int GetMixtureWeightIndex(int imix);
 
     // Helper: Get type model parameter indices
-    // Type model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
+    // Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
+    // ityp: 0-based type index (0 = type 2 since type 1 is reference)
+    // Returns index of typeprob_intercept for type t+2
+    int GetTypeProbInterceptIndex(int ityp);
+
     // Returns index of lambda_t_k (loading for type t on factor k)
     // ityp: 0-based type index (0 = type 2 since type 1 is reference)
     // ifac: 0-based factor index

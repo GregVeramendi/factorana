@@ -194,10 +194,18 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
       param_names <- c(param_names, "factor_corr_1_2")
     }
 
-    # Add type model parameters if n_types > 1
-    # Type model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
-    # (n_types - 1) * n_factors parameters (type 1 is reference)
-    if (n_types > 1L) {
+    # Add type model parameters if n_types > 1 AND at least one component uses types
+    # Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
+    # (n_types - 1) intercepts + (n_types - 1) * n_factors loadings (type 1 is reference)
+    any_uses_types <- any(sapply(model_system$components, function(c) isTRUE(c$use_types)))
+    if (n_types > 1L && any_uses_types) {
+      # Type probability intercepts (n_types - 1)
+      typeprob_intercepts <- rep(0.0, n_types - 1L)
+      typeprob_intercept_names <- paste0("typeprob_", 2:n_types, "_intercept")
+      init_params <- c(init_params, typeprob_intercepts)
+      param_names <- c(param_names, typeprob_intercept_names)
+
+      # Type probability loadings ((n_types - 1) * n_factors)
       type_loadings <- rep(0.0, (n_types - 1L) * n_factors)
       type_loading_names <- character(0)
       for (t in 2:n_types) {
@@ -354,10 +362,9 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
       }
       comp_param_names <- c(coef_names, loading_names, second_order$names, paste0(comp$name, "_sigma"))
 
-      # Add type-specific intercepts if n_types > 1
-      # Always include ALL type intercepts in the parameter vector (C++ expects them)
-      # Fixed intercepts are initialized to 0.0; free ones to small non-zero values
-      if (n_types > 1L) {
+      # Add type-specific intercepts if component uses types and n_types > 1
+      # Only components with use_types = TRUE get type intercepts
+      if (isTRUE(comp$use_types) && n_types > 1L) {
         type_intercepts <- numeric(n_types - 1L)
         type_intercept_names <- character(n_types - 1L)
         for (t in 2:n_types) {
@@ -438,9 +445,8 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
       }
       comp_param_names <- c(coef_names, loading_names, second_order$names)
 
-      # Add type-specific intercepts if n_types > 1
-      # Always include ALL type intercepts in the parameter vector (C++ expects them)
-      if (n_types > 1L) {
+      # Add type-specific intercepts if component uses types and n_types > 1
+      if (isTRUE(comp$use_types) && n_types > 1L) {
         type_intercepts <- numeric(n_types - 1L)
         type_intercept_names <- character(n_types - 1L)
         for (t in 2:n_types) {
@@ -522,9 +528,8 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
         }
         comp_param_names <- c(coef_names, loading_names, second_order$names)
 
-        # Add type-specific intercepts if n_types > 1
-        # Always include ALL type intercepts in the parameter vector (C++ expects them)
-        if (n_types > 1L) {
+        # Add type-specific intercepts if component uses types and n_types > 1
+        if (isTRUE(comp$use_types) && n_types > 1L) {
           type_intercepts <- numeric(n_types - 1L)
           type_intercept_names <- character(n_types - 1L)
           for (t in 2:n_types) {
@@ -678,10 +683,9 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
           comp_param_names <- c(comp_param_names, coef_names, loading_names, second_order$names)
         }
 
-        # Add type-specific intercepts if n_types > 1
+        # Add type-specific intercepts if component uses types and n_types > 1
         # For multinomial logit, each non-reference choice gets type-specific intercepts
-        # Initialize to small non-zero values to make types distinguishable
-        if (n_types > 1L) {
+        if (isTRUE(comp$use_types) && n_types > 1L) {
           for (choice in seq_len(comp$num_choices - 1)) {
             type_intercepts <- numeric(0)
             type_intercept_names <- character(0)
@@ -851,10 +855,9 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
       threshold_names <- paste0(comp$name, "_thresh_", seq_len(n_thresholds))
       comp_param_names <- c(coef_names, loading_names, second_order$names, threshold_names)
 
-      # Add type-specific intercepts if n_types > 1
+      # Add type-specific intercepts if component uses types and n_types > 1
       # For oprobit, type-specific intercepts shift all thresholds by a constant
-      # Always include ALL type intercepts in the parameter vector (C++ expects them)
-      if (n_types > 1L) {
+      if (isTRUE(comp$use_types) && n_types > 1L) {
         type_intercepts <- numeric(n_types - 1L)
         type_intercept_names <- character(n_types - 1L)
         for (t in 2:n_types) {

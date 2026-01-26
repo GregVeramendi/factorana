@@ -28,6 +28,11 @@
 #'   - `"interactions"`: Linear + interaction terms (lambda * f + lambda_inter * f_j * f_k)
 #'   - `"full"`: Linear + quadratic + interaction terms
 #'   Note: Interaction terms require n_factors >= 2.
+#' @param use_types Logical. Whether this component uses type-specific intercepts
+#'   when n_types > 1 in the factor model. Default FALSE. When TRUE and n_types > 1,
+#'   the component will have (n_types - 1) type-specific intercept parameters that
+#'   shift the linear predictor for each non-reference type. This allows types to
+#'   affect outcome models while keeping measurement models type-invariant.
 #' @param skip_collinearity_check Logical. If TRUE, skip the multicollinearity check
 #'   on the design matrix. Useful when many coefficients will be fixed via fix_coefficient()
 #'   after component creation, which resolves the collinearity. Default FALSE.
@@ -49,6 +54,7 @@ define_model_component <- function(name,
                                    rankshare_var = NULL,
                                    loading_normalization = NULL,
                                    factor_spec = c("linear", "quadratic", "interactions", "full"),
+                                   use_types = FALSE,
                                    skip_collinearity_check = FALSE) {
   # ---- 1. Basic argument checks ----
   # Confirm data types and presence of required columns/objects
@@ -134,6 +140,18 @@ define_model_component <- function(name,
     warning("factor_spec='", factor_spec, "' requires n_factors >= 2. ",
             "Downgrading to '", if (factor_spec == "full") "quadratic" else "linear", "'.")
     factor_spec <- if (factor_spec == "full") "quadratic" else "linear"
+  }
+
+  # Validate use_types
+  if (!is.logical(use_types) || length(use_types) != 1L) {
+    stop("`use_types` must be a single TRUE/FALSE.")
+  }
+  # Get n_types from factor model
+  n_types <- factor$n_types
+  if (is.null(n_types)) n_types <- 1L
+  if (use_types && n_types < 2L) {
+    warning("`use_types = TRUE` has no effect when n_types < 2. Setting to FALSE.")
+    use_types <- FALSE
   }
 
   # intercept: is it a boolean?
@@ -417,17 +435,30 @@ define_model_component <- function(name,
   # Total second-order loadings
   n_second_order_loadings <- n_quadratic_loadings + n_interaction_loadings
 
+  # Calculate number of type intercept parameters
+  n_type_intercepts <- if (use_types && n_types > 1L) {
+    if (model_type == "logit" && num_choices > 2) {
+      # Multinomial logit: each non-reference choice gets (n_types - 1) type intercepts
+      (num_choices - 1L) * (n_types - 1L)
+    } else {
+      # Other models: (n_types - 1) type intercepts
+      n_types - 1L
+    }
+  } else {
+    0L
+  }
+
   # Calculate number of model parameters based on model type
   if (model_type == "logit" && num_choices > 2) {
     # Multinomial logit: each non-reference choice has its own parameters
     nparamchoice <- length(covariates) + n_free_loadings + n_second_order_loadings
-    nparam_model <- (num_choices - 1) * nparamchoice
+    nparam_model <- (num_choices - 1) * nparamchoice + n_type_intercepts
   } else if (model_type == "oprobit") {
-    # Ordered probit: shared coefficients + (num_choices - 1) thresholds
-    nparam_model <- length(covariates) + n_free_loadings + n_second_order_loadings + (num_choices - 1)
+    # Ordered probit: shared coefficients + (num_choices - 1) thresholds + type intercepts
+    nparam_model <- length(covariates) + n_free_loadings + n_second_order_loadings + (num_choices - 1) + n_type_intercepts
   } else {
     # Binary models (linear, probit, binary logit)
-    nparam_model <- length(covariates) + n_free_loadings + n_second_order_loadings
+    nparam_model <- length(covariates) + n_free_loadings + n_second_order_loadings + n_type_intercepts
     if (model_type == "linear") nparam_model <- nparam_model + 1  # Add sigma
   }
 
@@ -456,6 +487,8 @@ define_model_component <- function(name,
     factor_spec = factor_spec,
     n_quadratic_loadings = n_quadratic_loadings,
     n_interaction_loadings = n_interaction_loadings,
+    use_types = use_types,
+    n_type_intercepts = n_type_intercepts,
     fixed_coefficients = list()  # List of fixed coefficient constraints
   )
 
@@ -505,6 +538,9 @@ print.model_component <- function(x, ...) {
   }
   if (x$n_interaction_loadings > 0) {
     cat("Interaction loadings:    ", x$n_interaction_loadings, "\n")
+  }
+  if (!is.null(x$use_types) && x$use_types) {
+    cat("Use types:               ", "Yes (", x$n_type_intercepts, " type intercepts)\n", sep = "")
   }
   cat("Number of choices:       ", x$num_choices, "\n")
   if (!is.null(x$nrank) && x$nrank > 1) {

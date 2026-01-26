@@ -179,11 +179,19 @@ build_parameter_metadata <- function(model_system) {
     component_id <- c(component_id, 0)  # 0 = factor model
   }
 
-  # Add type model loading parameters if n_types > 1
-  # Type model: log(P(type=t)/P(type=1)) = sum_k lambda_t_k * f_k
-  # (n_types - 1) * n_factors parameters (type 1 is reference)
+  # Add type model parameters if n_types > 1 and at least one component uses types
+  # Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
+  # (n_types - 1) intercepts + (n_types - 1) * n_factors loadings (type 1 is reference)
   n_types <- model_system$factor$n_types
-  if (!is.null(n_types) && n_types > 1L) {
+  any_uses_types <- any(sapply(model_system$components, function(c) isTRUE(c$use_types)))
+  if (!is.null(n_types) && n_types > 1L && any_uses_types) {
+    # Type probability intercepts
+    for (t in 2:n_types) {
+      param_names <- c(param_names, sprintf("typeprob_%d_intercept", t))
+      param_types <- c(param_types, "typeprob_intercept")
+      component_id <- c(component_id, 0)  # 0 = factor model
+    }
+    # Type probability loadings
     for (t in 2:n_types) {
       for (k in seq_len(n_factors)) {
         param_names <- c(param_names, sprintf("type_%d_loading_%d", t, k))
@@ -338,13 +346,25 @@ build_parameter_metadata <- function(model_system) {
       }
     }
 
-    # Type-specific intercepts for this component (if n_types > 1)
+    # Type-specific intercepts for this component (only if use_types = TRUE and n_types > 1)
     # Added after all other component parameters to match initialize_parameters.R ordering
-    if (!is.null(n_types) && n_types > 1L) {
-      for (t in 2:n_types) {
-        param_names <- c(param_names, sprintf("%s_type_%d_intercept", comp_name, t))
-        param_types <- c(param_types, "type_intercept")
-        component_id <- c(component_id, i)
+    if (isTRUE(comp$use_types) && !is.null(n_types) && n_types > 1L) {
+      # For multinomial logit, each non-reference choice gets type-specific intercepts
+      if (comp$model_type == "logit" && !is.null(comp$num_choices) && comp$num_choices > 2) {
+        for (choice in seq_len(comp$num_choices - 1)) {
+          for (t in 2:n_types) {
+            param_names <- c(param_names, sprintf("%s_c%d_type_%d_intercept", comp_name, choice, t))
+            param_types <- c(param_types, "type_intercept")
+            component_id <- c(component_id, i)
+          }
+        }
+      } else {
+        # Standard case: one type intercept per type
+        for (t in 2:n_types) {
+          param_names <- c(param_names, sprintf("%s_type_%d_intercept", comp_name, t))
+          param_types <- c(param_types, "type_intercept")
+          component_id <- c(component_id, i)
+        }
       }
     }
   }

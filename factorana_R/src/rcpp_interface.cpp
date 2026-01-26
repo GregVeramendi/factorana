@@ -143,6 +143,18 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
 
     // Add model components
     List components = model_system["components"];
+
+    // Pre-scan: check if any component uses types (needed for type loadings)
+    bool any_uses_types = false;
+    for (int i = 0; i < components.size(); i++) {
+        List comp = components[i];
+        if (comp.containsElementNamed("use_types") && !Rf_isNull(comp["use_types"])) {
+            if (as<bool>(comp["use_types"])) {
+                any_uses_types = true;
+                break;
+            }
+        }
+    }
     for (int i = 0; i < components.size(); i++) {
         List comp = components[i];
 
@@ -317,12 +329,18 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             }
         }
 
+        // Extract use_types flag (whether this component uses type-specific intercepts)
+        bool comp_use_types = false;
+        if (comp.containsElementNamed("use_types") && !Rf_isNull(comp["use_types"])) {
+            comp_use_types = as<bool>(comp["use_types"]);
+        }
+
         // Create Model object
         std::shared_ptr<Model> model = std::make_shared<Model>(
             mtype, outcome_idx, missing_idx, regressor_idx,
             n_fac, n_types, facnorm, n_choice, n_rank, all_params_fixed, fspec,
             is_dynamic, outcome_factor_idx, outcome_indices,
-            exclude_chosen, ranksharevar_idx
+            exclude_chosen, ranksharevar_idx, comp_use_types
         );
 
         // Calculate number of parameters for this model
@@ -340,23 +358,23 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         if (mtype == ModelType::LOGIT && n_choice > 2) {
             // Multinomial logit: each non-reference choice has its own parameters
             n_params = (n_choice - 1) * (regressor_idx.size() + n_free_loadings + n_quad + n_inter);
-            // For multinomial logit with types, each choice gets (n_types - 1) type-specific intercepts
-            if (n_types > 1) {
+            // For multinomial logit with use_types, each choice gets (n_types - 1) type-specific intercepts
+            if (comp_use_types && n_types > 1) {
                 n_params += (n_choice - 1) * (n_types - 1);
             }
         } else if (mtype == ModelType::OPROBIT) {
             // Ordered probit: shared coefficients + thresholds
             n_params = regressor_idx.size() + n_free_loadings + n_quad + n_inter + (n_choice - 1);
-            // Add type-specific intercepts for n_types > 1
-            if (n_types > 1) {
+            // Add type-specific intercepts only if use_types and n_types > 1
+            if (comp_use_types && n_types > 1) {
                 n_params += (n_types - 1);
             }
         } else {
             // Binary models (linear, probit, binary logit)
             n_params = regressor_idx.size() + n_free_loadings + n_quad + n_inter;
             if (mtype == ModelType::LINEAR) n_params += 1;  // sigma
-            // Add type-specific intercepts for n_types > 1
-            if (n_types > 1) {
+            // Add type-specific intercepts only if use_types and n_types > 1
+            if (comp_use_types && n_types > 1) {
                 n_params += (n_types - 1);
             }
         }
@@ -400,9 +418,11 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         }
     }
 
-    // Add type model parameters offset if n_types > 1
-    if (n_types > 1) {
-        param_offset += (n_types - 1) * n_fac;  // Type loadings
+    // Add type model parameters offset if n_types > 1 and at least one component uses types
+    // Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
+    // Parameters: (n_types - 1) intercepts + (n_types - 1) * n_fac loadings
+    if (n_types > 1 && any_uses_types) {
+        param_offset += (n_types - 1) + (n_types - 1) * n_fac;  // Type intercepts + Type loadings
     }
 
     // Check if previous_stage_info exists - if so, fix all factor-level parameters
@@ -457,6 +477,12 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             }
         }
 
+        // Extract use_types for this component
+        bool comp_use_types = false;
+        if (comp.containsElementNamed("use_types") && !Rf_isNull(comp["use_types"])) {
+            comp_use_types = as<bool>(comp["use_types"]);
+        }
+
         // Calculate n_params for this component (needed for both all_params_fixed and offset)
         int n_params_comp;
         ModelType mtype;
@@ -467,14 +493,14 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
 
         if (mtype == ModelType::LOGIT && n_choice > 2) {
             n_params_comp = (n_choice - 1) * (covariate_names.size() + n_free_loadings + n_quad + n_inter);
-            if (n_types > 1) n_params_comp += (n_choice - 1) * (n_types - 1);
+            if (comp_use_types && n_types > 1) n_params_comp += (n_choice - 1) * (n_types - 1);
         } else if (mtype == ModelType::OPROBIT) {
             n_params_comp = covariate_names.size() + n_free_loadings + n_quad + n_inter + (n_choice - 1);
-            if (n_types > 1) n_params_comp += (n_types - 1);
+            if (comp_use_types && n_types > 1) n_params_comp += (n_types - 1);
         } else {
             n_params_comp = covariate_names.size() + n_free_loadings + n_quad + n_inter;
             if (mtype == ModelType::LINEAR) n_params_comp += 1;
-            if (n_types > 1) n_params_comp += (n_types - 1);
+            if (comp_use_types && n_types > 1) n_params_comp += (n_types - 1);
         }
 
         // Check if all parameters are fixed for this component (multi-stage estimation)

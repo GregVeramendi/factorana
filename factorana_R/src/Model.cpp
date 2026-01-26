@@ -11,14 +11,16 @@ Model::Model(ModelType type, int outcome, int missing,
              FactorSpec fspec,
              bool dynamic, int outcome_fac_idx,
              const std::vector<int>& outcome_idxs,
-             bool excl_chosen, int rankshare_idx)
+             bool excl_chosen, int rankshare_idx,
+             bool uses_types)
     : modtype(type), outcome_idx(outcome), missing_idx(missing),
       regressors(regs), numfac(nfac), numtyp(ntyp),
       facnorm(fnorm), numchoice(nchoice), numrank(nrank),
       exclude_chosen(excl_chosen), ranksharevar_idx(rankshare_idx),
       ignore(false), all_params_fixed(params_fixed),
       factor_spec(fspec),
-      is_dynamic(dynamic), outcome_factor_idx(outcome_fac_idx)
+      is_dynamic(dynamic), outcome_factor_idx(outcome_fac_idx),
+      use_types(uses_types)
 {
     nregressors = regressors.size();
 

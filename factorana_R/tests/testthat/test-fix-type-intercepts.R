@@ -10,7 +10,8 @@ test_that("fix_type_intercepts validates inputs correctly", {
   mc1 <- define_model_component(
     name = "Y", data = dat, outcome = "Y", factor = fm1,
     covariates = c("intercept", "x1"), model_type = "linear",
-    loading_normalization = NA_real_, evaluation_indicator = "eval"
+    loading_normalization = NA_real_, evaluation_indicator = "eval",
+    use_types = TRUE
   )
 
   expect_error(
@@ -23,7 +24,8 @@ test_that("fix_type_intercepts validates inputs correctly", {
   mc2 <- define_model_component(
     name = "Y", data = dat, outcome = "Y", factor = fm2,
     covariates = c("intercept", "x1"), model_type = "linear",
-    loading_normalization = NA_real_, evaluation_indicator = "eval"
+    loading_normalization = NA_real_, evaluation_indicator = "eval",
+    use_types = TRUE
   )
 
   mc2_fixed <- fix_type_intercepts(mc2)
@@ -59,7 +61,8 @@ test_that("fix_type_intercepts stores constraint info correctly", {
   mc <- define_model_component(
     name = "Y", data = dat, outcome = "Y", factor = fm,
     covariates = c("intercept", "x1"), model_type = "linear",
-    loading_normalization = 1.0, evaluation_indicator = "eval"
+    loading_normalization = 1.0, evaluation_indicator = "eval",
+    use_types = TRUE
   )
 
   nparam_before <- mc$nparam_model
@@ -87,7 +90,8 @@ test_that("fix_type_intercepts initializes fixed params to 0", {
   mc1 <- define_model_component(
     name = "Y", data = dat, outcome = "Y", factor = fm,
     covariates = c("intercept", "x1"), model_type = "linear",
-    loading_normalization = 1.0, evaluation_indicator = "eval"
+    loading_normalization = 1.0, evaluation_indicator = "eval",
+    use_types = TRUE
   )
   ms1 <- define_model_system(components = list(mc1), factor = fm)
   init1 <- initialize_parameters(ms1, dat, verbose = FALSE)
@@ -96,7 +100,8 @@ test_that("fix_type_intercepts initializes fixed params to 0", {
   mc2 <- define_model_component(
     name = "Y", data = dat, outcome = "Y", factor = fm,
     covariates = c("intercept", "x1"), model_type = "linear",
-    loading_normalization = 1.0, evaluation_indicator = "eval"
+    loading_normalization = 1.0, evaluation_indicator = "eval",
+    use_types = TRUE
   )
   mc2 <- fix_type_intercepts(mc2)
   ms2 <- define_model_system(components = list(mc2), factor = fm)
@@ -127,7 +132,8 @@ test_that("fix_type_intercepts works with 3 types and partial fixing", {
   mc <- define_model_component(
     name = "Y", data = dat, outcome = "Y", factor = fm,
     covariates = c("intercept", "x1"), model_type = "linear",
-    loading_normalization = 1.0, evaluation_indicator = "eval"
+    loading_normalization = 1.0, evaluation_indicator = "eval",
+    use_types = TRUE
   )
 
   # Fix only type 2 (leave type 3 free)
@@ -150,7 +156,8 @@ test_that("fix_type_intercepts works with 3 types and partial fixing", {
   mc_all <- define_model_component(
     name = "Y", data = dat, outcome = "Y", factor = fm,
     covariates = c("intercept", "x1"), model_type = "linear",
-    loading_normalization = 1.0, evaluation_indicator = "eval"
+    loading_normalization = 1.0, evaluation_indicator = "eval",
+    use_types = TRUE
   )
   mc_all <- fix_type_intercepts(mc_all)  # Fixes types 2 and 3
 
@@ -175,7 +182,8 @@ test_that("is_type_intercept_fixed helper works correctly", {
   mc <- define_model_component(
     name = "Y", data = dat, outcome = "Y", factor = fm,
     covariates = c("intercept", "x1"), model_type = "linear",
-    loading_normalization = 1.0, evaluation_indicator = "eval"
+    loading_normalization = 1.0, evaluation_indicator = "eval",
+    use_types = TRUE
   )
 
   # Before fixing
@@ -225,29 +233,30 @@ test_that("3-type 2-factor model with measurement system and full 2nd order outc
   # Factor 1 indicators: T1, T2, T3
   # Loading normalization: c(1, NA) means load=1 on factor 1, load=0 on factor 2
 
+  # Measurement components with use_types = FALSE (default) - NO type intercepts
   mc_T1 <- define_model_component(
     name = "T1", data = dat, outcome = "T1", factor = fm,
     covariates = "intercept", model_type = "linear",
     loading_normalization = c(1, 0),  # Fixed loading on F1, zero on F2
-    evaluation_indicator = "eval"
+    evaluation_indicator = "eval",
+    use_types = FALSE  # No type intercepts for measurement
   )
-  mc_T1 <- fix_type_intercepts(mc_T1)
 
   mc_T2 <- define_model_component(
     name = "T2", data = dat, outcome = "T2", factor = fm,
     covariates = "intercept", model_type = "linear",
     loading_normalization = c(NA, 0),  # Free loading on F1, zero on F2
-    evaluation_indicator = "eval"
+    evaluation_indicator = "eval",
+    use_types = FALSE
   )
-  mc_T2 <- fix_type_intercepts(mc_T2)
 
   mc_T3 <- define_model_component(
     name = "T3", data = dat, outcome = "T3", factor = fm,
     covariates = "intercept", model_type = "linear",
     loading_normalization = c(NA, 0),  # Free loading on F1, zero on F2
-    evaluation_indicator = "eval"
+    evaluation_indicator = "eval",
+    use_types = FALSE
   )
-  mc_T3 <- fix_type_intercepts(mc_T3)
 
   # Factor 2 indicators: T4, T5, T6
   # Loading normalization: c(0, 1) means load=0 on factor 1, load=1 on factor 2
@@ -256,45 +265,47 @@ test_that("3-type 2-factor model with measurement system and full 2nd order outc
     name = "T4", data = dat, outcome = "T4", factor = fm,
     covariates = "intercept", model_type = "linear",
     loading_normalization = c(0, 1),  # Zero on F1, fixed loading on F2
-    evaluation_indicator = "eval"
+    evaluation_indicator = "eval",
+    use_types = FALSE
   )
-  mc_T4 <- fix_type_intercepts(mc_T4)
 
   mc_T5 <- define_model_component(
     name = "T5", data = dat, outcome = "T5", factor = fm,
     covariates = "intercept", model_type = "linear",
     loading_normalization = c(0, NA),  # Zero on F1, free loading on F2
-    evaluation_indicator = "eval"
+    evaluation_indicator = "eval",
+    use_types = FALSE
   )
-  mc_T5 <- fix_type_intercepts(mc_T5)
 
   mc_T6 <- define_model_component(
     name = "T6", data = dat, outcome = "T6", factor = fm,
     covariates = "intercept", model_type = "linear",
     loading_normalization = c(0, NA),  # Zero on F1, free loading on F2
-    evaluation_indicator = "eval"
+    evaluation_indicator = "eval",
+    use_types = FALSE
   )
-  mc_T6 <- fix_type_intercepts(mc_T6)
 
   # ---- Outcome Equations (3 components with full 2nd order) ----
   # Full 2nd order: linear + quadratic + interaction terms for both factors
   # Type intercepts are FREE (not fixed)
 
+  # Outcome components with use_types = TRUE - type intercepts are free
   mc_Y1 <- define_model_component(
     name = "Y1", data = dat, outcome = "Y1", factor = fm,
     covariates = c("intercept", "x1"), model_type = "linear",
     loading_normalization = c(NA_real_, NA_real_),  # Free loadings on both factors
     factor_spec = "full",  # Quadratic + interaction terms
-    evaluation_indicator = "eval"
+    evaluation_indicator = "eval",
+    use_types = TRUE  # Type intercepts are free
   )
-  # Note: NO fix_type_intercepts() - type intercepts are free
 
   mc_Y2 <- define_model_component(
     name = "Y2", data = dat, outcome = "Y2", factor = fm,
     covariates = c("intercept", "x1"), model_type = "linear",
     loading_normalization = c(NA_real_, NA_real_),
     factor_spec = "full",
-    evaluation_indicator = "eval"
+    evaluation_indicator = "eval",
+    use_types = TRUE
   )
 
   mc_Y3 <- define_model_component(
@@ -302,7 +313,8 @@ test_that("3-type 2-factor model with measurement system and full 2nd order outc
     covariates = c("intercept", "x1"), model_type = "linear",
     loading_normalization = c(NA_real_, NA_real_),
     factor_spec = "full",
-    evaluation_indicator = "eval"
+    evaluation_indicator = "eval",
+    use_types = TRUE
   )
 
   # ---- Build Model System ----
@@ -317,35 +329,26 @@ test_that("3-type 2-factor model with measurement system and full 2nd order outc
   # ---- Verify Structure ----
   expect_equal(length(ms$components), 9)
 
-  # Verify measurement components have type intercepts fixed
+  # Verify measurement components do NOT use types (use_types = FALSE)
   for (i in 1:6) {
-    expect_true(is_type_intercept_fixed(ms$components[[i]], 2))
-    expect_true(is_type_intercept_fixed(ms$components[[i]], 3))
+    expect_false(isTRUE(ms$components[[i]]$use_types))
   }
 
-  # Verify outcome components have type intercepts free
+  # Verify outcome components use types (use_types = TRUE)
   for (i in 7:9) {
-    expect_false(is_type_intercept_fixed(ms$components[[i]], 2))
-    expect_false(is_type_intercept_fixed(ms$components[[i]], 3))
+    expect_true(isTRUE(ms$components[[i]]$use_types))
   }
 
   # ---- Initialize Parameters ----
   init <- initialize_parameters(ms, dat, verbose = FALSE)
 
-  # All components have type intercepts in param_names (C++ requires full vector)
-  # Measurement components (T1-T6) have them but initialized to 0 (fixed)
-  expect_true("T1_type_2_intercept" %in% init$param_names)
-  expect_true("T1_type_3_intercept" %in% init$param_names)
-  expect_true("T6_type_2_intercept" %in% init$param_names)
-  expect_true("T6_type_3_intercept" %in% init$param_names)
+  # Measurement components (T1-T6) should NOT have type intercepts
+  expect_false("T1_type_2_intercept" %in% init$param_names)
+  expect_false("T1_type_3_intercept" %in% init$param_names)
+  expect_false("T6_type_2_intercept" %in% init$param_names)
+  expect_false("T6_type_3_intercept" %in% init$param_names)
 
-  # Measurement type intercepts are initialized to 0
-  idx_T1_t2 <- which(init$param_names == "T1_type_2_intercept")
-  idx_T6_t3 <- which(init$param_names == "T6_type_3_intercept")
-  expect_equal(unname(init$init_params[idx_T1_t2]), 0.0)
-  expect_equal(unname(init$init_params[idx_T6_t3]), 0.0)
-
-  # Outcome components (Y1-Y3) should have type intercepts (free, non-zero init)
+  # Outcome components (Y1-Y3) should have type intercepts (free)
   expect_true("Y1_type_2_intercept" %in% init$param_names)
   expect_true("Y1_type_3_intercept" %in% init$param_names)
   expect_true("Y2_type_2_intercept" %in% init$param_names)
@@ -353,9 +356,9 @@ test_that("3-type 2-factor model with measurement system and full 2nd order outc
   expect_true("Y3_type_2_intercept" %in% init$param_names)
   expect_true("Y3_type_3_intercept" %in% init$param_names)
 
-  # Count type intercepts: 9 components x 2 type intercepts = 18 total
+  # Count type intercepts: 3 outcome components x 2 type intercepts = 6 total
   type_intercept_params <- grep("_type_[23]_intercept$", init$param_names, value = TRUE)
-  expect_equal(length(type_intercept_params), 18)
+  expect_equal(length(type_intercept_params), 6)
 
   # Verify full 2nd order parameters exist for outcome components
   # Quadratic loadings (2 per outcome = 6 total)
@@ -502,69 +505,72 @@ test_that("3-type 2-factor model parameter recovery with full 2nd order outcomes
 
   fm <- define_factor_model(n_factors = 2, n_types = 3)
 
-  # Measurement system (type intercepts fixed to 0)
+  # Measurement system (use_types = FALSE - no type intercepts)
   mc_T1 <- define_model_component(
     name = "T1", data = dat, outcome = "T1", factor = fm,
     covariates = "intercept", model_type = "linear",
-    loading_normalization = c(1, 0), evaluation_indicator = "eval"
+    loading_normalization = c(1, 0), evaluation_indicator = "eval",
+    use_types = FALSE
   )
-  mc_T1 <- fix_type_intercepts(mc_T1)
 
   mc_T2 <- define_model_component(
     name = "T2", data = dat, outcome = "T2", factor = fm,
     covariates = "intercept", model_type = "linear",
-    loading_normalization = c(NA_real_, 0), evaluation_indicator = "eval"
+    loading_normalization = c(NA_real_, 0), evaluation_indicator = "eval",
+    use_types = FALSE
   )
-  mc_T2 <- fix_type_intercepts(mc_T2)
 
   mc_T3 <- define_model_component(
     name = "T3", data = dat, outcome = "T3", factor = fm,
     covariates = "intercept", model_type = "linear",
-    loading_normalization = c(NA_real_, 0), evaluation_indicator = "eval"
+    loading_normalization = c(NA_real_, 0), evaluation_indicator = "eval",
+    use_types = FALSE
   )
-  mc_T3 <- fix_type_intercepts(mc_T3)
 
   mc_T4 <- define_model_component(
     name = "T4", data = dat, outcome = "T4", factor = fm,
     covariates = "intercept", model_type = "linear",
-    loading_normalization = c(0, 1), evaluation_indicator = "eval"
+    loading_normalization = c(0, 1), evaluation_indicator = "eval",
+    use_types = FALSE
   )
-  mc_T4 <- fix_type_intercepts(mc_T4)
 
   mc_T5 <- define_model_component(
     name = "T5", data = dat, outcome = "T5", factor = fm,
     covariates = "intercept", model_type = "linear",
-    loading_normalization = c(0, NA_real_), evaluation_indicator = "eval"
+    loading_normalization = c(0, NA_real_), evaluation_indicator = "eval",
+    use_types = FALSE
   )
-  mc_T5 <- fix_type_intercepts(mc_T5)
 
   mc_T6 <- define_model_component(
     name = "T6", data = dat, outcome = "T6", factor = fm,
     covariates = "intercept", model_type = "linear",
-    loading_normalization = c(0, NA_real_), evaluation_indicator = "eval"
+    loading_normalization = c(0, NA_real_), evaluation_indicator = "eval",
+    use_types = FALSE
   )
-  mc_T6 <- fix_type_intercepts(mc_T6)
 
-  # Outcome equations (type intercepts free, full 2nd order)
+  # Outcome equations (use_types = TRUE - free type intercepts, full 2nd order)
   mc_Y1 <- define_model_component(
     name = "Y1", data = dat, outcome = "Y1", factor = fm,
     covariates = c("intercept", "x1"), model_type = "linear",
     loading_normalization = c(NA_real_, NA_real_),
-    factor_spec = "full", evaluation_indicator = "eval"
+    factor_spec = "full", evaluation_indicator = "eval",
+    use_types = TRUE
   )
 
   mc_Y2 <- define_model_component(
     name = "Y2", data = dat, outcome = "Y2", factor = fm,
     covariates = c("intercept", "x1"), model_type = "linear",
     loading_normalization = c(NA_real_, NA_real_),
-    factor_spec = "full", evaluation_indicator = "eval"
+    factor_spec = "full", evaluation_indicator = "eval",
+    use_types = TRUE
   )
 
   mc_Y3 <- define_model_component(
     name = "Y3", data = dat, outcome = "Y3", factor = fm,
     covariates = c("intercept", "x1"), model_type = "linear",
     loading_normalization = c(NA_real_, NA_real_),
-    factor_spec = "full", evaluation_indicator = "eval"
+    factor_spec = "full", evaluation_indicator = "eval",
+    use_types = TRUE
   )
 
   ms <- define_model_system(
@@ -645,11 +651,11 @@ test_that("3-type 2-factor model parameter recovery with full 2nd order outcomes
   expect_equal(get_est("Y3_type_2_intercept"), true_outcome$Y3$type2_int, tolerance = type_int_tol)
   expect_equal(get_est("Y3_type_3_intercept"), true_outcome$Y3$type3_int, tolerance = type_int_tol)
 
-  # Verify measurement type intercepts are constrained to 0 (they ARE in the parameter vector, just fixed)
-  expect_equal(get_est("T1_type_2_intercept"), 0.0, tolerance = 0.001)
-  expect_equal(get_est("T1_type_3_intercept"), 0.0, tolerance = 0.001)
-  expect_equal(get_est("T6_type_2_intercept"), 0.0, tolerance = 0.001)
-  expect_equal(get_est("T6_type_3_intercept"), 0.0, tolerance = 0.001)
+  # Verify measurement components do NOT have type intercepts (use_types = FALSE)
+  expect_true(is.na(get_est("T1_type_2_intercept")))
+  expect_true(is.na(get_est("T1_type_3_intercept")))
+  expect_true(is.na(get_est("T6_type_2_intercept")))
+  expect_true(is.na(get_est("T6_type_3_intercept")))
 
   # Check that convergence was achieved
 
