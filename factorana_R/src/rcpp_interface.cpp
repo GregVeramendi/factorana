@@ -998,12 +998,12 @@ void set_adaptive_quadrature_cpp(SEXP fm_ptr,
             for (int j = 0; j < n_fac; j++) {
                 // Recompute nquad using same formula as SetAdaptiveQuadrature
                 double f_se = factor_ses(i, j);
-                double f_var = factor_vars[j];
-                double ratio = f_se / f_var / threshold;
+                double f_sd = std::sqrt(factor_vars[j]);
+                double ratio = f_se / f_sd / threshold;
                 int nq = 1 + 2 * static_cast<int>(std::floor(ratio));
                 if (nq < 1) nq = 1;
                 if (nq > max_quad) nq = max_quad;
-                if (f_se > std::sqrt(f_var)) nq = max_quad;
+                if (f_se > f_sd) nq = max_quad;
                 obs_total *= nq;
             }
             nquad_counts[obs_total]++;

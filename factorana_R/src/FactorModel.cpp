@@ -204,15 +204,25 @@ void FactorModel::SetAdaptiveQuadrature(const std::vector<std::vector<double>>& 
             double f_var = factor_vars[ifac];
             double f_sd = std::sqrt(f_var);
 
+            // Handle SE=0 or very small SE: use standard quadrature
+            // SE=0 would cause jacobian=0 in IS correction, making likelihood 0
+            if (f_se < 1e-10) {
+                obs_nquad[iobs][ifac] = max_quad;
+                obs_fac_center[iobs][ifac] = 0.0;  // Center at prior mean
+                obs_fac_se[iobs][ifac] = f_sd;     // Use full SD as spread
+                needed_nquad.insert(max_quad);
+                continue;  // Skip rest of this factor's processing
+            }
+
             // Store factor score center and SE
             obs_fac_center[iobs][ifac] = f_score;
             obs_fac_se[iobs][ifac] = f_se;
 
             // Determine number of quadrature points based on SE
-            // Formula from legacy code: nquad = 1 + 2 * floor(se / var / threshold)
-            // When SE is small, use 1 point (just the factor score)
-            // When SE is large, use more points
-            double ratio = f_se / f_var / threshold;
+            // Formula from legacy code: nquad = 1 + 2 * floor(se / sd / threshold)
+            // When SE is small relative to SD, use 1 point (just the factor score)
+            // When SE is large relative to SD, use more points
+            double ratio = f_se / f_sd / threshold;
             int nq = 1 + 2 * static_cast<int>(std::floor(ratio));
 
             // Clamp to reasonable range
@@ -878,32 +888,33 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     probilk *= adapt_weights.at(nq)[facint[ifac]];
                 }
 
-                // Compute factor values (using SE as spread in importance sampling)
+                // Compute factor values using SE as spread (matching legacy code)
                 // f = fac_center + fac_spread * x_node
-                // where fac_spread = SE (from Stage 1) and fac_center = factor score
+                // where fac_center = factor score and fac_spread = SE (from Stage 1)
                 for (int ifac = 0; ifac < nfac; ifac++) {
                     fac_val[ifac] = fac_spread[ifac] * x_node_fac[ifac] + fac_center[ifac];
                 }
 
                 // Apply importance sampling correction
-                // The IS weight corrects for sampling from q(f) = N(center, SE²) instead of p(f) = N(0, σ²)
-                // where σ² is the CURRENT factor variance parameter (not Stage 1 value!)
-                // The IS weight includes:
-                // 1. exp(z²/2) to undo the GH weight's exp(-z²/2) from proposal
-                // 2. exp(-f²/(2σ²)) to apply the prior N(0, σ²)
-                // 3. SE/σ Jacobian factor for the change of variables f = center + SE*z
+                // Mathematical derivation:
+                //   We want: ∫ L(f) N(f|0,σ²) df
+                //   Using proposal N(f|fscore, SE²):
+                //   = ∫ L(f) [N(f|0,σ²)/N(f|fscore,SE²)] N(f|fscore,SE²) df
+                //   = Σ wᵢ L(fscore + SE·zᵢ) × IS(zᵢ)
+                // where IS = N(f|0,σ²) / N(f|fscore,SE²) = (SE/σ) × exp(z²/2 - f²/(2σ²))
+                //
+                // The jacobian SE/σ arises from the ratio of the normal density normalizing constants
                 for (int ifac = 0; ifac < nfac; ifac++) {
-                    int nq = obs_nq[ifac];
-                    double x_node = adapt_nodes.at(nq)[facint[ifac]];
+                    double x_node = x_node_fac[ifac];
                     double f = fac_val[ifac];
-                    // Use CURRENT factor variance, not Stage 1 value
-                    double var = sigma_fac[ifac] * sigma_fac[ifac];  // Current factor variance parameter
-                    double sd = sigma_fac[ifac];
-                    double se = fac_spread[ifac];  // SE from Stage 1 (or full SD if SE was large)
+                    double se = fac_spread[ifac];  // Factor score SE from Stage 1
+                    double sd = sigma_fac[ifac];   // sqrt(factor variance parameter)
+                    double var = sd * sd;
 
                     // IS correction = (SE/σ) × exp(z²/2 - f²/(2σ²))
                     double jacobian = se / sd;
                     double is_correction = jacobian * std::exp(x_node * x_node / 2.0 - f * f / (2.0 * var));
+
                     probilk *= is_correction;
                 }
 
