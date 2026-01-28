@@ -2007,7 +2007,8 @@ void FactorModel::CalcLkhdSingleObs(int iobs,
                                     double& logLkhd,
                                     std::vector<double>& gradL,
                                     std::vector<double>& hessL,
-                                    int iflag)
+                                    int iflag,
+                                    bool includePrior)
 {
     // ===== Factor score estimation mode =====
     // Evaluates likelihood for a single observation at given factor values.
@@ -2074,15 +2075,19 @@ void FactorModel::CalcLkhdSingleObs(int iobs,
         }
         logObs += std::log(Lm);
 
-        // Accumulate gradients: d(log L_obs)/df = sum_m (1/L_m) * dL_m/df
+        // Accumulate gradients: d(log L_obs)/df = sum_m d(log L_m)/df
+        // NOTE: Model::Eval returns d(log L_m)/df in modEval[ifac+1], NOT dL_m/df
+        // So we simply sum them directly without dividing by Lm
         if (iflag >= 2) {
             for (int ifac = 0; ifac < nfac; ifac++) {
-                // modEval[ifac + 1] is dL_m/df_ifac from this model
-                gradLogObs[ifac] += modEval[ifac + 1] / Lm;
+                // modEval[ifac + 1] is d(log L_m)/df_ifac from this model
+                gradLogObs[ifac] += modEval[ifac + 1];
             }
         }
 
-        // Accumulate Hessians: d²(log L_m)/df_i df_j = (1/L_m)*d²L_m/df² - (1/L_m²)*(dL_m/df_i)*(dL_m/df_j)
+        // Accumulate Hessians: d²(log L_obs)/df_i df_j = sum_m d²(log L_m)/df_i df_j
+        // NOTE: Model::Eval returns d²(log L_m)/df² in modHess, NOT d²L_m/df²
+        // So we simply sum them directly without applying the chain rule
         if (iflag == 3 && modHess.size() > 0) {
             int nDimModHess = nfac + param_model_count[imod];
             // Extract only the factor-factor part of the Hessian
@@ -2091,12 +2096,8 @@ void FactorModel::CalcLkhdSingleObs(int iobs,
                     int modhess_idx = i * nDimModHess + j;
                     int hess_idx = i * nfac + j;
 
-                    double dLi = modEval[i + 1];  // dL_m/df_i
-                    double dLj = modEval[j + 1];  // dL_m/df_j
-                    double d2L = modHess[modhess_idx];  // d²L_m/df_i df_j
-
-                    // d²(log L_m)/df_i df_j = d²L_m/df_i df_j / L_m - (dL_m/df_i * dL_m/df_j) / L_m²
-                    hessLogObs[hess_idx] += d2L / Lm - (dLi * dLj) / (Lm * Lm);
+                    // d²(log L_m)/df_i df_j - directly from model
+                    hessLogObs[hess_idx] += modHess[modhess_idx];
                 }
             }
         }
@@ -2105,25 +2106,30 @@ void FactorModel::CalcLkhdSingleObs(int iobs,
     // ===== Part 2: Factor prior φ(f|0,σ²) =====
     // log φ(f|0,σ²) = -0.5 * Σ [f²/σ² + log(2π*σ²)]
     // = -0.5 * Σ [f²/σ² + log(2π) + log(σ²)]
+    // Note: Legacy code does NOT include the prior when computing factor score SEs
+    // (see TMinLkhd.cc:5332-5336 where nfac_eff=0 when predicting)
+    // Set includePrior=false to match legacy behavior.
     double logPrior = 0.0;
     std::vector<double> gradPrior(nfac, 0.0);
     std::vector<double> hessPrior(nfac, 0.0);  // Diagonal only for uncorrelated factors
 
-    for (int ifac = 0; ifac < nfac; ifac++) {
-        double f = factor_values[ifac];
-        double sigma2 = factor_var[ifac];
+    if (includePrior) {
+        for (int ifac = 0; ifac < nfac; ifac++) {
+            double f = factor_values[ifac];
+            double sigma2 = factor_var[ifac];
 
-        // Log-prior contribution
-        logPrior -= 0.5 * (f * f / sigma2 + std::log(2.0 * M_PI * sigma2));
+            // Log-prior contribution
+            logPrior -= 0.5 * (f * f / sigma2 + std::log(2.0 * M_PI * sigma2));
 
-        // Gradient: d(logPrior)/df = -f/σ²
-        if (iflag >= 2) {
-            gradPrior[ifac] = -f / sigma2;
-        }
+            // Gradient: d(logPrior)/df = -f/σ²
+            if (iflag >= 2) {
+                gradPrior[ifac] = -f / sigma2;
+            }
 
-        // Hessian: d²(logPrior)/df² = -1/σ²
-        if (iflag == 3) {
-            hessPrior[ifac] = -1.0 / sigma2;
+            // Hessian: d²(logPrior)/df² = -1/σ²
+            if (iflag == 3) {
+                hessPrior[ifac] = -1.0 / sigma2;
+            }
         }
     }
 

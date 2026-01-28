@@ -10,6 +10,16 @@
 #' @param parallel Whether to use parallel computation (default FALSE).
 #'   When TRUE, uses the num_cores setting from control.
 #' @param verbose Whether to print progress (default TRUE)
+#' @param include_prior Whether to include the factor prior in likelihood/SE
+#'   computation (default FALSE). When FALSE, matches legacy C++ behavior where
+#'   SEs are based only on observation likelihood. When TRUE, includes the prior
+#'   contribution to the Hessian, resulting in smaller SEs.
+#' @param id_var Optional character string specifying the name of an ID variable
+#'   in data. If provided, this variable is included in the output data frame for
+#'   easier merging with other datasets. The ID values are taken from the original
+#'   data in the order observations were processed. Note: The ID column must be
+#'   numeric (not character) since data is converted to a numeric matrix. For
+#'   character IDs, use the obs_id column to merge with your original data.
 #'
 #' @details
 #' Factor scores are estimated by maximizing the posterior density:
@@ -24,7 +34,10 @@
 #' }
 #'
 #' Standard errors are computed from the diagonal of the inverse Hessian
-#' of the log-posterior at the mode.
+#' of the log-posterior at the mode. By default (include_prior=FALSE), the SE
+#' is based only on the observation likelihood Hessian, matching the legacy
+#' C++ implementation. Set include_prior=TRUE to include the prior's Hessian
+#' contribution (-1/sigma^2) which produces smaller SEs.
 #'
 #' When parallel=TRUE, observations are distributed across cores using
 #' doParallel/foreach, with each worker processing a subset of observations.
@@ -32,6 +45,7 @@
 #' @return A data frame with columns:
 #' \itemize{
 #'   \item \code{obs_id} - Observation index (1-based)
+#'   \item \code{<id_var>} - ID variable values (if id_var was specified)
 #'   \item \code{factor_1, factor_2, ...} - Estimated factor scores
 #'   \item \code{se_factor_1, se_factor_2, ...} - Standard errors
 #'   \item \code{converged} - Whether optimization converged for this observation
@@ -57,11 +71,25 @@
 #'
 #' @export
 estimate_factorscores_rcpp <- function(result, data, control = NULL,
-                                        parallel = FALSE, verbose = TRUE) {
+                                        parallel = FALSE, verbose = TRUE,
+                                        include_prior = FALSE,
+                                        id_var = NULL) {
 
   # Validate input
   if (!inherits(result, "factorana_result")) {
     stop("result must be a factorana_result object from estimate_model_rcpp()")
+  }
+
+  # Validate id_var if provided
+  id_values <- NULL
+  if (!is.null(id_var)) {
+    if (!is.character(id_var) || length(id_var) != 1) {
+      stop("id_var must be a single character string")
+    }
+    if (!id_var %in% names(data)) {
+      stop(sprintf("id_var '%s' not found in data", id_var))
+    }
+    id_values <- data[[id_var]]
   }
 
   # Get model system and estimates from result
@@ -81,7 +109,7 @@ estimate_factorscores_rcpp <- function(result, data, control = NULL,
     stop("No factors to estimate (n_factors = 0)")
   }
 
-  # Convert data to matrix
+  # Convert data to matrix (requires all columns to be numeric)
   data_mat <- as.matrix(data)
   n_obs <- nrow(data_mat)
 
@@ -94,11 +122,21 @@ estimate_factorscores_rcpp <- function(result, data, control = NULL,
   # Use parallel or serial implementation
   if (parallel && control$num_cores > 1) {
     result_df <- estimate_factorscores_parallel(
-      model_system, data_mat, estimates, n_factors, control, verbose
+      model_system, data_mat, estimates, n_factors, control, verbose, include_prior
     )
   } else {
     result_df <- estimate_factorscores_serial(
-      model_system, data_mat, estimates, n_factors, control, verbose
+      model_system, data_mat, estimates, n_factors, control, verbose, include_prior
+    )
+  }
+
+  # Add ID variable if specified
+  if (!is.null(id_var) && !is.null(id_values)) {
+    # Insert ID column as the first column after obs_id
+    result_df <- cbind(
+      obs_id = result_df$obs_id,
+      setNames(data.frame(id_values), id_var),
+      result_df[, -1, drop = FALSE]
     )
   }
 
@@ -109,7 +147,8 @@ estimate_factorscores_rcpp <- function(result, data, control = NULL,
 #' Serial factor score estimation (internal)
 #' @noRd
 estimate_factorscores_serial <- function(model_system, data_mat, estimates,
-                                          n_factors, control, verbose) {
+                                          n_factors, control, verbose,
+                                          include_prior = FALSE) {
   n_obs <- nrow(data_mat)
   n_quad <- control$n_quad_points
 
@@ -138,7 +177,7 @@ estimate_factorscores_serial <- function(model_system, data_mat, estimates,
   # Loop over observations
   for (iobs in seq_len(n_obs)) {
     obs_result <- estimate_single_factorscore(
-      fm_ptr, iobs, estimates, n_factors
+      fm_ptr, iobs, estimates, n_factors, include_prior
     )
 
     factor_scores[iobs, ] <- obs_result$factors
@@ -167,7 +206,8 @@ estimate_factorscores_serial <- function(model_system, data_mat, estimates,
 #' Parallel factor score estimation (internal)
 #' @noRd
 estimate_factorscores_parallel <- function(model_system, data_mat, estimates,
-                                            n_factors, control, verbose) {
+                                            n_factors, control, verbose,
+                                            include_prior = FALSE) {
   n_obs <- nrow(data_mat)
   n_cores <- control$num_cores
 
@@ -213,7 +253,7 @@ estimate_factorscores_parallel <- function(model_system, data_mat, estimates,
   worker_results <- foreach::foreach(
     obs_idx = obs_splits,
     .packages = c("factorana"),
-    .export = c("estimate_single_factorscore")
+    .export = c("estimate_single_factorscore", "include_prior")
   ) %dopar% {
     # Deserialize model_system in worker
     ms_local <- unserialize(model_system_raw)
@@ -232,7 +272,7 @@ estimate_factorscores_parallel <- function(model_system, data_mat, estimates,
     for (i in seq_along(obs_idx)) {
       iobs <- obs_idx[i]
       obs_result <- estimate_single_factorscore(
-        fm_ptr, iobs, estimates, n_factors
+        fm_ptr, iobs, estimates, n_factors, include_prior
       )
 
       local_factors[i, ] <- obs_result$factors
@@ -278,14 +318,18 @@ estimate_factorscores_parallel <- function(model_system, data_mat, estimates,
 
 #' Estimate factor scores for a single observation (internal)
 #' @noRd
-estimate_single_factorscore <- function(fm_ptr, iobs, estimates, n_factors) {
+estimate_single_factorscore <- function(fm_ptr, iobs, estimates, n_factors,
+                                         include_prior = FALSE) {
   # Define optimization functions
+  # Note: For optimization, we always include the prior to find the posterior mode.
+  # The include_prior flag only affects SE computation (observation-only vs posterior).
   objective <- function(fac_values) {
     res <- evaluate_factorscore_likelihood_cpp(
       fm_ptr, iobs - 1,  # Convert to 0-based index
       fac_values, estimates,
       compute_gradient = FALSE,
-      compute_hessian = FALSE
+      compute_hessian = FALSE,
+      include_prior = TRUE  # Always include prior for finding the mode
     )
     return(-res$logLikelihood)  # Negative for minimization
   }
@@ -295,59 +339,86 @@ estimate_single_factorscore <- function(fm_ptr, iobs, estimates, n_factors) {
       fm_ptr, iobs - 1,
       fac_values, estimates,
       compute_gradient = TRUE,
-      compute_hessian = FALSE
+      compute_hessian = FALSE,
+      include_prior = TRUE  # Always include prior for finding the mode
     )
     return(-res$gradient)  # Negative for minimization
   }
+
+  # Extract factor variances for clipping bounds
+  # Clip at ±4.688738939305818364688 * sqrt(2) * sigma ≈ ±6.63 * sigma
+  # This matches legacy C++ behavior (TMinLkhd.cc:4816)
+  clip_multiplier <- 4.688738939305818364688 * sqrt(2)
+  factor_sds <- numeric(n_factors)
+  for (k in seq_len(n_factors)) {
+    var_name <- paste0("factor_var_", k)
+    if (var_name %in% names(estimates)) {
+      factor_sds[k] <- sqrt(estimates[var_name])
+    } else {
+      factor_sds[k] <- 1.0  # Default if not found
+    }
+  }
+  clip_bounds <- clip_multiplier * factor_sds
 
   # Use nlminb with multiple starting points for all models
   # nlminb uses the gradient for efficient convergence
   best_result <- NULL
   best_obj <- Inf
+  best_grad_norm <- Inf
 
-  # Starting points for optimization
+  # Starting points for optimization - include more points for robustness
   if (n_factors == 1) {
     # Multiple starting points for 1-factor models
-    start_points <- list(0, -1, 1, -2, 2)
+    start_points <- list(0, -1, 1, -2, 2, -3, 3)
   } else if (n_factors == 2) {
-    start_points <- list(c(0, 0), c(-1, 0), c(1, 0), c(0, -1), c(0, 1))
+    start_points <- list(c(0, 0), c(-1, 0), c(1, 0), c(0, -1), c(0, 1),
+                         c(-2, 0), c(2, 0), c(0, -2), c(0, 2))
   } else {
     # For 3+ factors, use origin plus perturbations along each axis
     start_points <- list(rep(0, n_factors))
     for (k in seq_len(n_factors)) {
-      vec <- rep(0, n_factors)
-      vec[k] <- 1
-      start_points <- c(start_points, list(vec))
-      vec[k] <- -1
-      start_points <- c(start_points, list(vec))
+      for (val in c(1, -1, 2, -2)) {
+        vec <- rep(0, n_factors)
+        vec[k] <- val
+        start_points <- c(start_points, list(vec))
+      }
     }
   }
+
+  # Gradient tolerance for accepting a solution
+  # This catches pathological cases (gradient ~10^7) while allowing reasonable solutions
+  grad_tol <- 1000  # Accept if max|gradient| < 1000
 
   for (init_fac in start_points) {
     init_fac <- as.numeric(init_fac)
 
+    # Use nlminb with R defaults - this is a well-scaled, smooth problem
+    # DO NOT CHANGE THESE CONVERGENCE SETTINGS without user permission
     opt_result <- tryCatch({
       stats::nlminb(
         start = init_fac,
         objective = objective,
-        gradient = gradient,
-        control = list(
-          iter.max = 500,
-          eval.max = 1000,
-          rel.tol = 1e-8
-        )
+        gradient = gradient
+        # Using R defaults: iter.max=150, eval.max=200, rel.tol=1e-10
       )
     }, error = function(e) {
       NULL
     })
 
     if (!is.null(opt_result) && is.finite(opt_result$objective)) {
-      if (opt_result$objective < best_obj) {
+      # Check gradient magnitude at solution
+      grad_at_solution <- gradient(opt_result$par)
+      grad_norm <- max(abs(grad_at_solution))
+
+      # Accept this solution if it's better and has reasonable gradient
+      if (opt_result$objective < best_obj && grad_norm < best_grad_norm) {
         best_obj <- opt_result$objective
         best_result <- opt_result
+        best_grad_norm <- grad_norm
       }
-      # If converged, stop trying more starting points
-      if (opt_result$convergence == 0) {
+
+      # If we have a good solution (small gradient), we can stop
+      if (grad_norm < grad_tol && opt_result$convergence == 0) {
         break
       }
     }
@@ -362,15 +433,30 @@ estimate_single_factorscore <- function(fm_ptr, iobs, estimates, n_factors) {
     ))
   }
 
-  # Consider converged if we found a finite solution
-  # (nlminb is reliable and any finite solution is usable)
-  converged <- TRUE
+  # Get the factor scores
+  factor_scores <- best_result$par
 
-  # Compute standard errors from Hessian at optimum
-  ses <- compute_factorscore_ses(fm_ptr, iobs, best_result$par, estimates, n_factors)
+  # Clip extreme factor scores to ±6.63*sigma (matches legacy C++ behavior)
+  # This prevents extreme values that are outside the Gauss-Hermite quadrature range
+  clipped <- FALSE
+  for (k in seq_len(n_factors)) {
+    if (abs(factor_scores[k]) > clip_bounds[k]) {
+      factor_scores[k] <- sign(factor_scores[k]) * clip_bounds[k]
+      clipped <- TRUE
+    }
+  }
+
+  # Consider converged only if gradient is small
+  # A large gradient indicates the optimizer stopped prematurely
+  converged <- best_grad_norm < grad_tol
+
+  # Compute standard errors from Hessian at optimum (or clipped value)
+  # include_prior controls whether SE is based on observation-only or posterior Hessian
+  ses <- compute_factorscore_ses(fm_ptr, iobs, factor_scores, estimates, n_factors,
+                                  include_prior)
 
   list(
-    factors = best_result$par,
+    factors = factor_scores,
     ses = ses,
     converged = converged,
     log_posterior = -best_result$objective
@@ -380,12 +466,14 @@ estimate_single_factorscore <- function(fm_ptr, iobs, estimates, n_factors) {
 
 #' Compute standard errors from Hessian (internal)
 #' @noRd
-compute_factorscore_ses <- function(fm_ptr, iobs, fac_values, estimates, n_factors) {
+compute_factorscore_ses <- function(fm_ptr, iobs, fac_values, estimates, n_factors,
+                                     include_prior = FALSE) {
   hess_result <- evaluate_factorscore_likelihood_cpp(
     fm_ptr, iobs - 1,
     fac_values, estimates,
     compute_gradient = FALSE,
-    compute_hessian = TRUE
+    compute_hessian = TRUE,
+    include_prior = include_prior  # Controls whether prior Hessian is included
   )
 
   # Convert upper triangle to full matrix
