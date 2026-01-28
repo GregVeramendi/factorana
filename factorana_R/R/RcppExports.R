@@ -125,9 +125,11 @@ disable_adaptive_quadrature_cpp <- function(fm_ptr) {
 #' @param model_params Vector of ALL model parameters (from previous estimation)
 #' @param compute_gradient Whether to compute gradient (default FALSE)
 #' @param compute_hessian Whether to compute Hessian (default FALSE)
+#' @param include_prior Whether to include factor prior in likelihood (default TRUE).
+#'        Set to FALSE to match legacy C++ behavior (observation likelihood only).
 #' @return List with log-likelihood, gradient (if requested), and Hessian (if requested)
 #' @export
-evaluate_factorscore_likelihood_cpp <- function(fm_ptr, iobs, factor_values, model_params, compute_gradient = FALSE, compute_hessian = FALSE) {
-    .Call(`_factorana_evaluate_factorscore_likelihood_cpp`, fm_ptr, iobs, factor_values, model_params, compute_gradient, compute_hessian)
+evaluate_factorscore_likelihood_cpp <- function(fm_ptr, iobs, factor_values, model_params, compute_gradient = FALSE, compute_hessian = FALSE, include_prior = TRUE) {
+    .Call(`_factorana_evaluate_factorscore_likelihood_cpp`, fm_ptr, iobs, factor_values, model_params, compute_gradient, compute_hessian, include_prior)
 }
 

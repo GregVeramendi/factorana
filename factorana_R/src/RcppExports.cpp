@@ -123,8 +123,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // evaluate_factorscore_likelihood_cpp
-List evaluate_factorscore_likelihood_cpp(SEXP fm_ptr, int iobs, NumericVector factor_values, NumericVector model_params, bool compute_gradient, bool compute_hessian);
-RcppExport SEXP _factorana_evaluate_factorscore_likelihood_cpp(SEXP fm_ptrSEXP, SEXP iobsSEXP, SEXP factor_valuesSEXP, SEXP model_paramsSEXP, SEXP compute_gradientSEXP, SEXP compute_hessianSEXP) {
+List evaluate_factorscore_likelihood_cpp(SEXP fm_ptr, int iobs, NumericVector factor_values, NumericVector model_params, bool compute_gradient, bool compute_hessian, bool include_prior);
+RcppExport SEXP _factorana_evaluate_factorscore_likelihood_cpp(SEXP fm_ptrSEXP, SEXP iobsSEXP, SEXP factor_valuesSEXP, SEXP model_paramsSEXP, SEXP compute_gradientSEXP, SEXP compute_hessianSEXP, SEXP include_priorSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -134,7 +134,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type model_params(model_paramsSEXP);
     Rcpp::traits::input_parameter< bool >::type compute_gradient(compute_gradientSEXP);
     Rcpp::traits::input_parameter< bool >::type compute_hessian(compute_hessianSEXP);
-    rcpp_result_gen = Rcpp::wrap(evaluate_factorscore_likelihood_cpp(fm_ptr, iobs, factor_values, model_params, compute_gradient, compute_hessian));
+    Rcpp::traits::input_parameter< bool >::type include_prior(include_priorSEXP);
+    rcpp_result_gen = Rcpp::wrap(evaluate_factorscore_likelihood_cpp(fm_ptr, iobs, factor_values, model_params, compute_gradient, compute_hessian, include_prior));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -151,7 +152,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_factorana_set_observation_weights_cpp", (DL_FUNC) &_factorana_set_observation_weights_cpp, 2},
     {"_factorana_set_adaptive_quadrature_cpp", (DL_FUNC) &_factorana_set_adaptive_quadrature_cpp, 7},
     {"_factorana_disable_adaptive_quadrature_cpp", (DL_FUNC) &_factorana_disable_adaptive_quadrature_cpp, 1},
-    {"_factorana_evaluate_factorscore_likelihood_cpp", (DL_FUNC) &_factorana_evaluate_factorscore_likelihood_cpp, 6},
+    {"_factorana_evaluate_factorscore_likelihood_cpp", (DL_FUNC) &_factorana_evaluate_factorscore_likelihood_cpp, 7},
     {"_rcpp_module_boot_factorana_module", (DL_FUNC) &_rcpp_module_boot_factorana_module, 0},
     {NULL, NULL, 0}
 };
