@@ -1,9 +1,9 @@
 ## Makevars.win for factorana (Windows)
 
 ## Suppress warnings from Eigen headers
-PKG_CPPFLAGS = -DEIGEN_PERMANENTLY_DISABLE_STUPID_WARNINGS -Wno-unused-but-set-variable
+PKG_CPPFLAGS = -DEIGEN_PERMANENTLY_DISABLE_STUPID_WARNINGS
 
-## Use O2 for optimization (same as legacy code)
-PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) -O2
+## Use O2 for optimization, suppress Eigen-related warnings
+PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) -O2 -Wno-unused-but-set-variable -Wno-ignored-attributes
 
 PKG_LIBS = $(SHLIB_OPENMP_LDFLAGS)

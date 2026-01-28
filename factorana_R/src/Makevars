@@ -1,10 +1,10 @@
 ## Makevars for factorana
 
-## Suppress warnings from Eigen headers
-PKG_CPPFLAGS = -DEIGEN_PERMANENTLY_DISABLE_STUPID_WARNINGS -Wno-unused-but-set-variable
+## Suppress warnings from Eigen headers (works on both GCC and Clang)
+PKG_CPPFLAGS = -DEIGEN_PERMANENTLY_DISABLE_STUPID_WARNINGS
 
-## Use O2 for optimization (same as legacy code), native arch for CPU-specific optimizations
-PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) -O2 -march=native
+## Use O2 for optimization, suppress Eigen-related warnings
+PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) -O2 -Wno-unused-but-set-variable -Wno-ignored-attributes
 
 ## OS-specific libraries
 ## On macOS: link against Accelerate framework for optimized math
