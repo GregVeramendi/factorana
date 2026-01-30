@@ -384,17 +384,20 @@ test_that("Factor score estimation works with ordered probit model", {
   mc1 <- define_model_component(
     name = "m1", data = dat, outcome = "y1", factor = fm,
     covariates = NULL, model_type = "oprobit",
-    loading_normalization = 1, num_choices = 4
+    loading_normalization = 1, num_choices = 4,
+    intercept = FALSE
   )
   mc2 <- define_model_component(
     name = "m2", data = dat, outcome = "y2", factor = fm,
     covariates = NULL, model_type = "oprobit",
-    num_choices = 4
+    num_choices = 4,
+    intercept = FALSE
   )
   mc3 <- define_model_component(
     name = "m3", data = dat, outcome = "y3", factor = fm,
     covariates = NULL, model_type = "oprobit",
-    num_choices = 4
+    num_choices = 4,
+    intercept = FALSE
   )
 
   ms <- define_model_system(

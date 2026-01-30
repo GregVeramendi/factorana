@@ -6,7 +6,8 @@ test_that("probit requires 0/1 outcome", {
   fm  <- define_factor_model(1, 1)
   expect_error(
     define_model_component("sel", dat, "Y", fm,
-                           covariates = "Z1", model_type = "probit"),
+                           covariates = "Z1", model_type = "probit",
+                           intercept = FALSE),
     regexp = "0/1"
   )
 })
@@ -25,7 +26,8 @@ test_that("ordered probit returns J-1 ordered cutpoints", {
                                evaluation_indicator = "eval_y1",
                                covariates = "X1",
                                model_type = "oprobit",
-                               num_choices = 4)
+                               num_choices = 4,
+                               intercept = FALSE)
 
   # Create model system for initialization
   ms <- define_model_system(components = list(mc), factor = fm)
@@ -57,7 +59,8 @@ test_that("oprobit works with multi-factor loading normalization", {
     covariates = "X1",
     model_type = "oprobit",
     num_choices = 4,
-    loading_normalization = c(NA, 1)
+    loading_normalization = c(NA, 1),
+    intercept = FALSE
   )
 
   # Create model system for initialization

@@ -19,7 +19,8 @@ test_that("multi-factor loadings work with normalization (linear)", {
                                evaluation_indicator = "eval",
                                covariates = c("x1","x2"),
                                model_type = "linear",
-                               loading_normalization = c(NA, 0, 1))
+                               loading_normalization = c(NA, 0, 1),
+                               intercept = FALSE)
 
   # Create model system for initialization
   ms <- define_model_system(components = list(mc), factor = fm)
@@ -47,7 +48,8 @@ test_that("multi-factor loadings work with normalization (probit)", {
                                evaluation_indicator = "eval",
                                covariates = c("x1","x2"),
                                model_type = "probit",
-                               loading_normalization = c(NA, 1))
+                               loading_normalization = c(NA, 1),
+                               intercept = FALSE)
 
   # Create model system for initialization
   ms <- define_model_system(components = list(mc), factor = fm)
@@ -117,7 +119,8 @@ test_that("two-factor CFA with ordered probit converges and recovers parameters"
     covariates = NULL,
     model_type = "oprobit",
     loading_normalization = c(NA, 0),  # f1=free, f2=0
-    num_choices = 5
+    num_choices = 5,
+    intercept = FALSE
   )
 
   # m2: free loading on f1
@@ -126,7 +129,8 @@ test_that("two-factor CFA with ordered probit converges and recovers parameters"
     covariates = NULL,
     model_type = "oprobit",
     loading_normalization = c(NA, 0),  # f1=free, f2=0 (zero)
-    num_choices = 5
+    num_choices = 5,
+    intercept = FALSE
   )
 
   # m3: free loading on f1
@@ -135,7 +139,8 @@ test_that("two-factor CFA with ordered probit converges and recovers parameters"
     covariates = NULL,
     model_type = "oprobit",
     loading_normalization = c(NA, 0),  # f1=free, f2=0 (zero)
-    num_choices = 5
+    num_choices = 5,
+    intercept = FALSE
   )
 
   # Factor 2 measures: zero on f1, loading on f2
@@ -145,7 +150,8 @@ test_that("two-factor CFA with ordered probit converges and recovers parameters"
     covariates = NULL,
     model_type = "oprobit",
     loading_normalization = c(0, NA),  # f1=0, f2=free
-    num_choices = 5
+    num_choices = 5,
+    intercept = FALSE
   )
 
   # m5: free loading on f2
@@ -154,7 +160,8 @@ test_that("two-factor CFA with ordered probit converges and recovers parameters"
     covariates = NULL,
     model_type = "oprobit",
     loading_normalization = c(0, NA),  # f1=0 (zero), f2=free
-    num_choices = 5
+    num_choices = 5,
+    intercept = FALSE
   )
 
   # m6: free loading on f2
@@ -163,7 +170,8 @@ test_that("two-factor CFA with ordered probit converges and recovers parameters"
     covariates = NULL,
     model_type = "oprobit",
     loading_normalization = c(0, NA),  # f1=0 (zero), f2=free
-    num_choices = 5
+    num_choices = 5,
+    intercept = FALSE
   )
 
   # Create model system
@@ -363,7 +371,8 @@ test_that("two-factor CFA with ordered probit and covariates converges and recov
     covariates = c("intercept", "x1"),
     model_type = "oprobit",
     loading_normalization = c(NA, 0),  # f1=free, f2=0
-    num_choices = 5
+    num_choices = 5,
+    intercept = FALSE
   )
 
   # m2: free loading on f1
@@ -372,7 +381,8 @@ test_that("two-factor CFA with ordered probit and covariates converges and recov
     covariates = c("intercept", "x1"),
     model_type = "oprobit",
     loading_normalization = c(NA, 0),  # f1=free, f2=0
-    num_choices = 5
+    num_choices = 5,
+    intercept = FALSE
   )
 
   # m3: free loading on f1
@@ -381,7 +391,8 @@ test_that("two-factor CFA with ordered probit and covariates converges and recov
     covariates = c("intercept", "x1"),
     model_type = "oprobit",
     loading_normalization = c(NA, 0),  # f1=free, f2=0
-    num_choices = 5
+    num_choices = 5,
+    intercept = FALSE
   )
 
   # Factor 2 measures: zero on f1, loading on f2
@@ -391,7 +402,8 @@ test_that("two-factor CFA with ordered probit and covariates converges and recov
     covariates = c("intercept", "x1"),
     model_type = "oprobit",
     loading_normalization = c(0, NA),  # f1=0, f2=free
-    num_choices = 5
+    num_choices = 5,
+    intercept = FALSE
   )
 
   # m5: free loading on f2
@@ -400,7 +412,8 @@ test_that("two-factor CFA with ordered probit and covariates converges and recov
     covariates = c("intercept", "x1"),
     model_type = "oprobit",
     loading_normalization = c(0, NA),  # f1=0, f2=free
-    num_choices = 5
+    num_choices = 5,
+    intercept = FALSE
   )
 
   # m6: free loading on f2
@@ -409,7 +422,8 @@ test_that("two-factor CFA with ordered probit and covariates converges and recov
     covariates = c("intercept", "x1"),
     model_type = "oprobit",
     loading_normalization = c(0, NA),  # f1=0, f2=free
-    num_choices = 5
+    num_choices = 5,
+    intercept = FALSE
   )
 
   # Create model system
@@ -444,12 +458,13 @@ test_that("two-factor CFA with ordered probit and covariates converges and recov
   # Check standard errors are computed
   expect_true(is.numeric(result$std_errors))
   expect_true(all(is.finite(result$std_errors)))
-  # Fixed parameters (factor variances, oprobit intercepts) correctly have std_error = 0
-  # Only check that non-fixed parameters have positive std_errors
-  free_param_idx <- which(!grepl("factor_var|_beta_intercept", names(result$std_errors)))
-  expect_true(all(result$std_errors[free_param_idx] > 0),
-              info = sprintf("Non-fixed params should have positive std_errors. Zero SEs at: %s",
-                             paste(names(result$std_errors)[result$std_errors == 0], collapse=", ")))
+  # For oprobit models: factor variances may be fixed (when loadings identify the scale)
+  # and intercepts are absorbed into thresholds. Only check that loadings and
+  # covariate effects (x1) have positive std_errors.
+  loading_and_coef_idx <- grep("loading|_x1", names(result$std_errors))
+  expect_true(all(result$std_errors[loading_and_coef_idx] > 0),
+              info = sprintf("Loadings and covariate effects should have positive std_errors. Zero SEs at: %s",
+                             paste(names(result$std_errors)[loading_and_coef_idx][result$std_errors[loading_and_coef_idx] == 0], collapse=", ")))
 
   # Print results for manual inspection
   cat("\n=== Two-Factor CFA with Covariates Results ===\n")

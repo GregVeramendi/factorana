@@ -275,6 +275,9 @@ build_parameter_metadata <- function(model_system) {
       }
     } else {
       # Standard handling for all other model types
+      # Note: For linear models with intercept=TRUE, "intercept" is automatically
+      # added to covariates in define_model_component(), so no special handling needed here.
+
       # Covariate coefficients - naming must match initialize_parameters.R: comp_name_covariate
       # Include ALL covariates (even fixed ones) to match init_params vector
       if (!is.null(comp$covariates) && length(comp$covariates) > 0) {
@@ -418,16 +421,38 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
 
   param_fixed <- rep(FALSE, n_params)
 
-  # Handle previous_stage: mark all previous-stage parameters as fixed
+  # Handle previous_stage: mark previous-stage parameters as fixed (by name, not position)
   if (!is.null(model_system$previous_stage_info)) {
-    n_fixed <- model_system$previous_stage_info$n_params_fixed
-    if (n_fixed > 0 && n_fixed <= n_params) {
-      # Fix first n_fixed parameters (from previous stage)
-      param_fixed[1:n_fixed] <- TRUE
-      # Set bounds to fixed values
-      fixed_values <- model_system$previous_stage_info$fixed_param_values
-      lower_bounds[1:n_fixed] <- fixed_values
-      upper_bounds[1:n_fixed] <- fixed_values
+    fixed_param_names <- model_system$previous_stage_info$fixed_param_names
+    fixed_param_values <- model_system$previous_stage_info$fixed_param_values
+
+    if (length(fixed_param_names) > 0) {
+      # Match fixed parameter names to indices in current model
+      fixed_indices <- match(fixed_param_names, param_metadata$names)
+
+      # Remove NA matches (parameters not in current model)
+      valid_matches <- !is.na(fixed_indices)
+      if (any(!valid_matches) && verbose) {
+        message(sprintf("Note: %d previous_stage parameters not in current model (expected for new components)",
+                        sum(!valid_matches)))
+      }
+
+      fixed_indices <- fixed_indices[valid_matches]
+      fixed_values <- fixed_param_values[valid_matches]
+
+      if (length(fixed_indices) > 0) {
+        param_fixed[fixed_indices] <- TRUE
+        lower_bounds[fixed_indices] <- fixed_values
+        upper_bounds[fixed_indices] <- fixed_values
+
+        if (verbose) {
+          message(sprintf("Fixed %d parameters from previous_stage", length(fixed_indices)))
+          if (!is.null(model_system$previous_stage_info$free_param_names)) {
+            message(sprintf("Free parameters from previous_stage: %s",
+                            paste(model_system$previous_stage_info$free_param_names, collapse = ", ")))
+          }
+        }
+      }
     }
   }
 
@@ -1626,6 +1651,7 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   # The Hessian is for FREE params only; fixed params get SE = 0
   # Initialize full vector for all params
   std_errors <- rep(NA, length(estimates))
+  names(std_errors) <- names(estimates)
 
   tryCatch({
     # C++ returns Hessian for FREE params only as upper triangle vector
@@ -1713,12 +1739,19 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
       # Exception: previous_stage parameters should retain their SEs
       std_errors[fixed_params] <- 0.0
 
-      # If we have previous_stage, use those standard errors
+      # If we have previous_stage, use those standard errors (match by name)
       if (!is.null(model_system$previous_stage_info)) {
-        n_prev_stage <- model_system$previous_stage_info$n_params_fixed
-        prev_se <- model_system$previous_stage_info$fixed_std_errors
-        if (length(prev_se) == n_prev_stage) {
-          std_errors[1:n_prev_stage] <- prev_se
+        fixed_param_names <- model_system$previous_stage_info$fixed_param_names
+        fixed_std_errors <- model_system$previous_stage_info$fixed_std_errors
+
+        if (length(fixed_param_names) > 0 && length(fixed_std_errors) == length(fixed_param_names)) {
+          # Match fixed parameter names to indices in current model
+          fixed_indices <- match(fixed_param_names, param_names)
+          valid_matches <- !is.na(fixed_indices)
+
+          if (any(valid_matches)) {
+            std_errors[fixed_indices[valid_matches]] <- fixed_std_errors[valid_matches]
+          }
         }
       }
 

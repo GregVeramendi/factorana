@@ -995,7 +995,26 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     }
 
                     // If all parameters are fixed for this model, only compute likelihood (flag=1)
-                    int model_flag = models[imod]->GetAllParamsFixed() ? 1 : iflag;
+                    // EXCEPTION: For SE models, we still need factor gradients (dL/df_i) even when
+                    // model params are fixed, because SE parameters depend on factor values.
+                    // So for SE models, use iflag (to get factor gradients) but skip param gradients
+                    // in the model (handled by setting all_params_fixed flag).
+                    int model_flag;
+                    if (models[imod]->GetAllParamsFixed()) {
+                        if (factor_structure == FactorStructure::SE_LINEAR ||
+                            factor_structure == FactorStructure::SE_QUADRATIC) {
+                            // SE models: need factor gradients AND factor-factor Hessian
+                            // for computing SE parameter derivatives.
+                            // The model params are fixed, but we still need modHess for
+                            // the factor-factor block (d2L/df_i*df_j) used by SE Hessian.
+                            model_flag = iflag;
+                        } else {
+                            // Non-SE: all params fixed means no gradients needed
+                            model_flag = 1;
+                        }
+                    } else {
+                        model_flag = iflag;
+                    }
 
                     // Pass model-local free indices for Hessian optimization
                     // Only pass when SOME (not all) parameters are fixed - avoids overhead when all are free

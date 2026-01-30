@@ -426,7 +426,8 @@ test_that("Gradient accuracy for ordered probit with interaction factor terms", 
     num_choices = 3,
     loading_normalization = c(1.0, NA_real_),
     factor_spec = "interactions",
-    evaluation_indicator = "eval"
+    evaluation_indicator = "eval",
+    intercept = FALSE
   )
 
   ms <- define_model_system(components = list(mc), factor = fm)
@@ -473,7 +474,8 @@ test_that("Hessian accuracy for ordered probit with interaction factor terms", {
     num_choices = 3,
     loading_normalization = c(1.0, NA_real_),
     factor_spec = "interactions",
-    evaluation_indicator = "eval"
+    evaluation_indicator = "eval",
+    intercept = FALSE
   )
 
   ms <- define_model_system(components = list(mc), factor = fm)
@@ -1216,7 +1218,8 @@ test_that("Ordered probit model estimation with interaction factor terms recover
     loading_normalization = c(NA_real_, NA_real_),
     factor_spec = "interactions",
     evaluation_indicator = "eval",
-    num_choices = 3
+    num_choices = 3,
+    intercept = FALSE
   )
 
   ms <- define_model_system(

@@ -59,20 +59,100 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
 
   # ---- 1. Handle previous_stage if present ----
   if (!is.null(model_system$previous_stage_info)) {
-    # Use previous-stage parameter values directly
     n_fixed_comps <- model_system$previous_stage_info$n_components
-    init_params <- model_system$previous_stage_info$fixed_param_values
-    # Inherit names from previous stage if available
-    param_names <- if (!is.null(model_system$previous_stage_info$param_names)) {
-      model_system$previous_stage_info$param_names
+    allow_diff_struct <- isTRUE(model_system$previous_stage_info$allow_different_structure)
+
+    if (allow_diff_struct) {
+      # For SE_linear/SE_quadratic Stage 2: construct new parameter vector
+      # - Use Stage 2's factor structure (factor_var_1, factor_var_2, SE params)
+      # - Keep measurement parameters from Stage 1 (loadings, thresholds)
+
+      n_factors <- model_system$factor$n_factors
+      factor_structure <- model_system$factor$factor_structure
+
+      # Start with factor structure parameters for Stage 2
+      if (factor_structure == "SE_linear") {
+        # Factor variances for input factors only (n_factors - 1)
+        init_params <- rep(1.0, n_factors - 1)
+        param_names <- paste0("factor_var_", seq_len(n_factors - 1))
+
+        # SE parameters
+        n_input_factors <- n_factors - 1
+        init_params <- c(init_params, 0.0)  # se_intercept
+        param_names <- c(param_names, "se_intercept")
+
+        for (j in seq_len(n_input_factors)) {
+          init_params <- c(init_params, 0.5)  # se_linear_j
+          param_names <- c(param_names, paste0("se_linear_", j))
+        }
+
+        init_params <- c(init_params, 1.0)  # se_residual_var
+        param_names <- c(param_names, "se_residual_var")
+
+        if (verbose) {
+          message(sprintf("SE_linear structure: f_%d = intercept + linear_coefs * f_1..%d + epsilon",
+                          n_factors, n_input_factors))
+        }
+      } else if (factor_structure == "SE_quadratic") {
+        # Similar handling for SE_quadratic
+        init_params <- rep(1.0, n_factors - 1)
+        param_names <- paste0("factor_var_", seq_len(n_factors - 1))
+
+        n_input_factors <- n_factors - 1
+        init_params <- c(init_params, 0.0)  # se_intercept
+        param_names <- c(param_names, "se_intercept")
+
+        for (j in seq_len(n_input_factors)) {
+          init_params <- c(init_params, 0.5)  # se_linear_j
+          param_names <- c(param_names, paste0("se_linear_", j))
+        }
+
+        for (j in seq_len(n_input_factors)) {
+          init_params <- c(init_params, 0.0)  # se_quadratic_j
+          param_names <- c(param_names, paste0("se_quadratic_", j))
+        }
+
+        init_params <- c(init_params, 1.0)  # se_residual_var
+        param_names <- c(param_names, "se_residual_var")
+      }
+
+      # Add measurement parameters from Stage 1 (only fixed ones)
+      # These are loadings and thresholds (not factor_var or se_ params)
+      prev_params <- model_system$previous_stage_info$all_param_values
+      prev_names <- names(prev_params)
+      meas_idx <- !grepl("^(factor_var|se_|chol_)", prev_names)
+      meas_params <- prev_params[meas_idx]
+      meas_names <- prev_names[meas_idx]
+
+      init_params <- c(init_params, meas_params)
+      param_names <- c(param_names, meas_names)
+
+      if (verbose) {
+        message(sprintf("Using %d measurement parameters from Stage 1", length(meas_params)))
+        message(sprintf("Stage 2 has %d factor distribution parameters", sum(!meas_idx) + length(grep("^(factor_var|se_)", param_names[1:10]))))
+      }
+
     } else {
-      names(init_params)
+      # Standard previous_stage behavior: use ALL previous-stage parameter values
+      init_params <- model_system$previous_stage_info$all_param_values
+      param_names <- if (!is.null(model_system$previous_stage_info$param_names)) {
+        model_system$previous_stage_info$param_names
+      } else {
+        names(init_params)
+      }
+      if (is.null(param_names)) param_names <- character(0)
     }
-    if (is.null(param_names)) param_names <- character(0)
 
     if (verbose) {
-      message(sprintf("Using %d fixed parameters from previous stage", length(init_params)))
+      n_fixed <- length(model_system$previous_stage_info$fixed_param_names)
+      n_free <- length(model_system$previous_stage_info$free_param_names)
+      message(sprintf("Using %d parameters from previous stage (%d fixed, %d free)",
+                      length(model_system$previous_stage_info$all_param_values), n_fixed, n_free))
       message(sprintf("  Previous stage had %d components", n_fixed_comps))
+      if (n_free > 0) {
+        message(sprintf("  Free parameters: %s",
+                        paste(model_system$previous_stage_info$free_param_names, collapse = ", ")))
+      }
     }
 
     # Initialize only the new (second-stage) components
@@ -222,7 +302,10 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
 
   # ---- 2. Estimate each component separately ----
   # If previous_stage, only estimate new components
-  for (i_comp in start_comp_idx:length(model_system$components)) {
+  # Skip if no new components to estimate
+  n_total_comps <- length(model_system$components)
+  if (start_comp_idx <= n_total_comps) {
+  for (i_comp in start_comp_idx:n_total_comps) {
     comp <- model_system$components[[i_comp]]
 
     if (verbose) {
@@ -344,6 +427,8 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
       }
 
       # Build parameter vector: coefs, linear loadings, [second-order loadings], sigma
+      # Note: For linear models with intercept=TRUE, "intercept" is automatically
+      # added to covariates in define_model_component(), so it's handled as a covariate.
       # Get second-order loading initializations
       second_order <- get_second_order_loading_init(comp)
 
@@ -878,6 +963,7 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
     init_params <- c(init_params, comp_params)
     param_names <- c(param_names, comp_param_names)
   }
+  }  # End of if (start_comp_idx <= n_total_comps)
 
   if (verbose) {
     message(sprintf("\nInitialized %d parameters total", length(init_params)))
@@ -885,8 +971,15 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
 
   # Determine factor_variance_fixed status
   if (!is.null(model_system$previous_stage_info)) {
-    # For previous_stage, factor variance is always fixed
-    factor_variance_fixed_status <- TRUE
+    # For previous_stage, check if factor variances are in free_params
+    free_params <- model_system$previous_stage_info$free_param_names
+    if (!is.null(free_params) && any(grepl("^factor_var", free_params))) {
+      # At least some factor variances are free
+      factor_variance_fixed_status <- FALSE
+    } else {
+      # All factor variances are fixed
+      factor_variance_fixed_status <- TRUE
+    }
   } else {
     # Standard case: use the computed status (vector for multifactor models)
     factor_variance_fixed_status <- factor_variance_fixed

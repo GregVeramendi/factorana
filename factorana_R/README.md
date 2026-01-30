@@ -1007,38 +1007,36 @@ Model structural relationships between latent factors at different time points w
 <summary><b>Click to expand longitudinal SE model example</b></summary>
 
 ```r
+library(factorana)
+
 set.seed(123)
 n <- 1000
 
-# True parameters
-true_var_f1 <- 1.2          # Variance of factor at age 10
-true_se_intercept <- 0.0    # Set to 0 for identification
+# True parameters for SE_linear model: f2 = alpha_1*f1 + epsilon
+true_var_f1 <- 1.0          # Variance of factor at age 10
 true_se_linear <- 0.7       # Effect of age-10 factor on age-15 factor
-true_se_quadratic <- 0.15   # Quadratic effect
-true_se_residual_var <- 0.6 # Residual variance
+true_se_residual_var <- 0.5 # Residual variance
 
-# Generate factors according to structural equation: f2 = alpha + alpha_1*f1 + alpha_2*f1^2 + epsilon
+# Generate factors according to structural equation
 f1 <- rnorm(n, 0, sqrt(true_var_f1))
 eps <- rnorm(n, 0, sqrt(true_se_residual_var))
-f2 <- true_se_intercept + true_se_linear * f1 + true_se_quadratic * f1^2 + eps
+f2 <- true_se_linear * f1 + eps
 
 # Measurement system - 3 tests measured at each age
 # Same test properties (measurement invariance)
 true_loading_t2 <- 1.1
 true_loading_t3 <- 0.9
-true_sigma_t1 <- 0.5
-true_sigma_t2 <- 0.6
-true_sigma_t3 <- 0.4
+true_sigma <- 0.5
 
 # Age 10 measurements (factor 1)
-T1_age10 <- 0.0 + 1.0 * f1 + rnorm(n, 0, true_sigma_t1)  # loading fixed to 1
-T2_age10 <- 0.5 + true_loading_t2 * f1 + rnorm(n, 0, true_sigma_t2)
-T3_age10 <- 0.3 + true_loading_t3 * f1 + rnorm(n, 0, true_sigma_t3)
+T1_age10 <- 1.0 * f1 + rnorm(n, 0, true_sigma)  # loading fixed to 1
+T2_age10 <- true_loading_t2 * f1 + rnorm(n, 0, true_sigma)
+T3_age10 <- true_loading_t3 * f1 + rnorm(n, 0, true_sigma)
 
 # Age 15 measurements (factor 2) - SAME loadings and sigmas (invariance)
-T1_age15 <- 0.0 + 1.0 * f2 + rnorm(n, 0, true_sigma_t1)  # loading fixed to 1
-T2_age15 <- 0.5 + true_loading_t2 * f2 + rnorm(n, 0, true_sigma_t2)
-T3_age15 <- 0.3 + true_loading_t3 * f2 + rnorm(n, 0, true_sigma_t3)
+T1_age15 <- 1.0 * f2 + rnorm(n, 0, true_sigma)  # loading fixed to 1
+T2_age15 <- true_loading_t2 * f2 + rnorm(n, 0, true_sigma)
+T3_age15 <- true_loading_t3 * f2 + rnorm(n, 0, true_sigma)
 
 dat <- data.frame(
   intercept = 1,
@@ -1048,10 +1046,10 @@ dat <- data.frame(
 )
 
 # ============================================================
-# Define SE_quadratic model: f2 = alpha + alpha_1*f1 + alpha_2*f1^2 + epsilon
+# Define SE_linear model: f2 = alpha_1*f1 + epsilon
 # ============================================================
 
-fm <- define_factor_model(n_factors = 2, factor_structure = "SE_quadratic")
+fm <- define_factor_model(n_factors = 2, factor_structure = "SE_linear")
 ctrl <- define_estimation_control(n_quad_points = 16, num_cores = 1)
 
 # Age 10 measurement equations (factor 1 = input factor)
@@ -1105,37 +1103,38 @@ ms <- define_model_system(
 )
 
 # Estimate
-result <- estimate_model_rcpp(ms, dat, control = ctrl, verbose = FALSE)
+result <- estimate_model_rcpp(ms, dat, control = ctrl,
+                              optimizer = "nlminb", verbose = FALSE)
 
 # View structural equation parameters
-cat("Structural Equation: f2 = alpha + alpha_1*f1 + alpha_2*f1^2 + epsilon\n")
-cat("-------------------------------------------------------------------\n")
+cat("Structural Equation: f2 = alpha_1*f1 + epsilon\n")
+cat("----------------------------------------------\n")
 cat(sprintf("  Var(f1):        %.3f (true = %.3f)\n",
             result$estimates["factor_var_1"], true_var_f1))
-cat(sprintf("  SE intercept:   %.3f (true = %.3f)\n",
-            result$estimates["se_intercept"], true_se_intercept))
 cat(sprintf("  SE linear:      %.3f (true = %.3f)\n",
             result$estimates["se_linear_1"], true_se_linear))
-cat(sprintf("  SE quadratic:   %.3f (true = %.3f)\n",
-            result$estimates["se_quadratic_1"], true_se_quadratic))
 cat(sprintf("  Residual var:   %.3f (true = %.3f)\n",
             result$estimates["se_residual_var"], true_se_residual_var))
 
-# Verify equality constraints hold
-cat("\nEquality Constraints (measurement invariance):\n")
-cat(sprintf("  T2 loading: age10=%.3f, age15=%.3f (should be equal)\n",
+# Verify measurement invariance (constrained loadings should be equal)
+cat("\nMeasurement Invariance:\n")
+cat(sprintf("  T2 loading: age10=%.3f, age15=%.3f (constrained equal)\n",
             result$estimates["t2_age10_loading_1"],
             result$estimates["t2_age15_loading_2"]))
+cat(sprintf("  T3 loading: age10=%.3f, age15=%.3f (constrained equal)\n",
+            result$estimates["t3_age10_loading_1"],
+            result$estimates["t3_age15_loading_2"]))
 ```
 
 </details>
 
 **Key points:**
-- `factor_structure = "SE_quadratic"` specifies: f₂ = α + α₁f₁ + α₂f₁² + ε
+- `factor_structure = "SE_linear"` specifies: f₂ = α₁f₁ + ε (linear structural relationship)
+- `factor_structure = "SE_quadratic"` adds quadratic term: f₂ = α + α₁f₁ + α₂f₁² + ε
 - Input factor (f₁) variance is estimated from measurement equations
 - Residual variance (σ²_ε) is a free parameter
 - `equality_constraints` enforces measurement invariance (same loadings/sigmas at both ages)
-- Parameter names: `se_intercept`, `se_linear_1`, `se_quadratic_1`, `se_residual_var`
+- Parameter names: `se_linear_1`, `se_residual_var` (and `se_intercept`, `se_quadratic_1` for SE_quadratic)
 
 ---
 

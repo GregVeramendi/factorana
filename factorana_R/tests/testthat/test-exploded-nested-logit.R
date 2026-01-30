@@ -51,13 +51,15 @@ test_that("exploded nested logit works with exclude_chosen=FALSE", {
   mc_T1 <- define_model_component(
     name = "T1", data = dat, outcome = "T1", factor = fm,
     covariates = NULL, model_type = "linear",
-    loading_normalization = 1, evaluation_indicator = "eval"
+    loading_normalization = 1, evaluation_indicator = "eval",
+    intercept = FALSE
   )
 
   mc_T2 <- define_model_component(
     name = "T2", data = dat, outcome = "T2", factor = fm,
     covariates = NULL, model_type = "linear",
-    loading_normalization = NA_real_, evaluation_indicator = "eval"
+    loading_normalization = NA_real_, evaluation_indicator = "eval",
+    intercept = FALSE
   )
 
   # Exploded nested logit with exclude_chosen=FALSE
@@ -151,7 +153,8 @@ test_that("exclude_chosen=TRUE (standard exploded logit) still works", {
   mc_T1 <- define_model_component(
     name = "T1", data = dat, outcome = "T1", factor = fm,
     covariates = NULL, model_type = "linear",
-    loading_normalization = 1, evaluation_indicator = "eval"
+    loading_normalization = 1, evaluation_indicator = "eval",
+    intercept = FALSE
   )
 
   # Standard exploded logit (exclude_chosen=TRUE, which is default)
@@ -241,7 +244,8 @@ test_that("rankshare_var corrections are applied", {
   mc_T1 <- define_model_component(
     name = "T1", data = dat, outcome = "T1", factor = fm,
     covariates = NULL, model_type = "linear",
-    loading_normalization = 1, evaluation_indicator = "eval"
+    loading_normalization = 1, evaluation_indicator = "eval",
+    intercept = FALSE
   )
 
   # Nested logit with rankshare corrections
@@ -349,7 +353,8 @@ test_that("Hessian is correct for exploded nested logit", {
   mc_T1 <- define_model_component(
     name = "T1", data = dat, outcome = "T1", factor = fm,
     covariates = NULL, model_type = "linear",
-    loading_normalization = 1, evaluation_indicator = "eval"
+    loading_normalization = 1, evaluation_indicator = "eval",
+    intercept = FALSE
   )
 
   mc_choice <- define_model_component(
@@ -474,13 +479,15 @@ test_that("parameter recovery for exploded nested logit with factor", {
   mc_T1 <- define_model_component(
     name = "T1", data = dat, outcome = "T1", factor = fm,
     covariates = NULL, model_type = "linear",
-    loading_normalization = 1, evaluation_indicator = "eval"
+    loading_normalization = 1, evaluation_indicator = "eval",
+    intercept = FALSE
   )
 
   mc_T2 <- define_model_component(
     name = "T2", data = dat, outcome = "T2", factor = fm,
     covariates = NULL, model_type = "linear",
-    loading_normalization = NA_real_, evaluation_indicator = "eval"
+    loading_normalization = NA_real_, evaluation_indicator = "eval",
+    intercept = FALSE
   )
 
   mc_choice <- define_model_component(

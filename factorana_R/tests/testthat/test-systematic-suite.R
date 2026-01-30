@@ -268,7 +268,8 @@ test_that("Model C: Measurement system with 3 linear tests and ordered probit", 
     covariates = "x1",  # NO intercept for ordered probit (absorbed into thresholds)
     model_type = "oprobit",
     num_choices = 3,  # 3 ordered categories
-    loading_normalization = NA_real_, evaluation_indicator = "eval"
+    loading_normalization = NA_real_, evaluation_indicator = "eval",
+    intercept = FALSE
   )
 
   ms <- define_model_system(components = list(mc_T1, mc_T2, mc_T3, mc_y), factor = fm)
@@ -848,6 +849,316 @@ test_that("Model G: SE_linear structural equation model with 2 factors", {
 })
 
 # ==============================================================================
+# Test G2: Two-Stage SE_linear Estimation
+# Stage 1: Independent factors (measurement model)
+# Stage 2: SE_linear with previous_stage (structural equation)
+# ==============================================================================
+
+test_that("Model G2: Two-stage SE_linear estimation with previous_stage", {
+  skip_on_cran()
+
+  set.seed(301)
+
+  # Simulate data with known DGP
+  n <- 500
+
+  # True parameters
+  # Note: In two-stage estimation, Stage 1 assumes independent factors with mean 0.
+  # The measurement intercepts absorb the factor means. So in Stage 2, the SE intercept
+  # captures only ADDITIONAL mean shift beyond what Stage 1 absorbed. We set it to 0.
+  true_var_f1 <- 1.2        # Input factor variance
+  true_se_linear <- 0.7     # Structural coefficient
+  true_se_intercept <- 0.0  # Structural intercept (0 for two-stage identification)
+  true_se_residual_var <- 0.4  # Structural residual variance
+
+  # True measurement parameters
+  true_lambda_f1 <- c(1.0, 0.9, 1.1)  # Loadings for f1 (first fixed)
+  true_lambda_f2 <- c(1.0, 0.8, 1.2)  # Loadings for f2 (first fixed)
+  true_int_f1 <- c(2.0, 1.5, 1.0)
+  true_int_f2 <- c(1.8, 1.2, 0.5)
+  true_sigma_f1 <- c(0.8, 0.9, 0.7)
+  true_sigma_f2 <- c(0.9, 0.85, 0.95)
+
+  # Generate factors according to SE_linear structure
+  f1 <- rnorm(n, 0, sqrt(true_var_f1))
+  eps_se <- rnorm(n, 0, sqrt(true_se_residual_var))
+  f2 <- true_se_intercept + true_se_linear * f1 + eps_se
+
+  # Generate measurements
+  Y1_1 <- true_int_f1[1] + true_lambda_f1[1] * f1 + rnorm(n, 0, true_sigma_f1[1])
+  Y1_2 <- true_int_f1[2] + true_lambda_f1[2] * f1 + rnorm(n, 0, true_sigma_f1[2])
+  Y1_3 <- true_int_f1[3] + true_lambda_f1[3] * f1 + rnorm(n, 0, true_sigma_f1[3])
+  Y2_1 <- true_int_f2[1] + true_lambda_f2[1] * f2 + rnorm(n, 0, true_sigma_f2[1])
+  Y2_2 <- true_int_f2[2] + true_lambda_f2[2] * f2 + rnorm(n, 0, true_sigma_f2[2])
+  Y2_3 <- true_int_f2[3] + true_lambda_f2[3] * f2 + rnorm(n, 0, true_sigma_f2[3])
+
+  dat <- data.frame(
+    intercept = 1,
+    Y1_1 = Y1_1, Y1_2 = Y1_2, Y1_3 = Y1_3,
+    Y2_1 = Y2_1, Y2_2 = Y2_2, Y2_3 = Y2_3,
+    eval = 1
+  )
+
+  # =========================================================================
+  # STAGE 1: Measurement model with INDEPENDENT factors
+  # =========================================================================
+
+  fm_stage1 <- define_factor_model(n_factors = 2, factor_structure = "independent")
+
+  # Factor 1 measures
+  mc1_1 <- define_model_component(
+    name = "Y1_1", data = dat, outcome = "Y1_1", factor = fm_stage1,
+    covariates = "intercept", model_type = "linear",
+    loading_normalization = c(1, 0), evaluation_indicator = "eval"
+  )
+  mc1_2 <- define_model_component(
+    name = "Y1_2", data = dat, outcome = "Y1_2", factor = fm_stage1,
+    covariates = "intercept", model_type = "linear",
+    loading_normalization = c(NA_real_, 0), evaluation_indicator = "eval"
+  )
+  mc1_3 <- define_model_component(
+    name = "Y1_3", data = dat, outcome = "Y1_3", factor = fm_stage1,
+    covariates = "intercept", model_type = "linear",
+    loading_normalization = c(NA_real_, 0), evaluation_indicator = "eval"
+  )
+
+  # Factor 2 measures
+  mc2_1 <- define_model_component(
+    name = "Y2_1", data = dat, outcome = "Y2_1", factor = fm_stage1,
+    covariates = "intercept", model_type = "linear",
+    loading_normalization = c(0, 1), evaluation_indicator = "eval"
+  )
+  mc2_2 <- define_model_component(
+    name = "Y2_2", data = dat, outcome = "Y2_2", factor = fm_stage1,
+    covariates = "intercept", model_type = "linear",
+    loading_normalization = c(0, NA_real_), evaluation_indicator = "eval"
+  )
+  mc2_3 <- define_model_component(
+    name = "Y2_3", data = dat, outcome = "Y2_3", factor = fm_stage1,
+    covariates = "intercept", model_type = "linear",
+    loading_normalization = c(0, NA_real_), evaluation_indicator = "eval"
+  )
+
+  ms_stage1 <- define_model_system(
+    components = list(mc1_1, mc1_2, mc1_3, mc2_1, mc2_2, mc2_3),
+    factor = fm_stage1
+  )
+
+  # Stage 1 estimation
+  ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+  result_stage1 <- estimate_model_rcpp(
+    model_system = ms_stage1,
+    data = dat,
+    init_params = NULL,
+    control = ctrl,
+    optimizer = "nlminb",
+    verbose = FALSE
+  )
+
+  # Check Stage 1 convergence
+  expect_equal(result_stage1$convergence, 0, info = "Stage 1 should converge")
+
+  # Build true parameters for Stage 1 (independent 2-factor model)
+  # Parameter order: factor_var_1, factor_var_2, then per-component: intercept, [loading], sigma
+  true_params_s1 <- c(
+    true_var_f1,                              # factor_var_1
+    true_var_f1 * true_se_linear^2 + true_se_residual_var,  # factor_var_2 (marginal variance of f2)
+    true_int_f1[1], true_sigma_f1[1],         # Y1_1: intercept, sigma (loading fixed to 1)
+    true_int_f1[2], true_lambda_f1[2], true_sigma_f1[2],  # Y1_2: intercept, loading, sigma
+    true_int_f1[3], true_lambda_f1[3], true_sigma_f1[3],  # Y1_3: intercept, loading, sigma
+    true_int_f2[1], true_sigma_f2[1],         # Y2_1: intercept, sigma (loading fixed to 1)
+    true_int_f2[2], true_lambda_f2[2], true_sigma_f2[2],  # Y2_2: intercept, loading, sigma
+    true_int_f2[3], true_lambda_f2[3], true_sigma_f2[3]   # Y2_3: intercept, loading, sigma
+  )
+  names(true_params_s1) <- names(result_stage1$estimates)
+
+  # Get param_fixed vector for Stage 1
+  stage1_init <- initialize_parameters(ms_stage1, dat, verbose = FALSE)
+  param_metadata_s1 <- factorana:::build_parameter_metadata(ms_stage1)
+  param_constraints_s1 <- factorana:::setup_parameter_constraints(
+    ms_stage1, true_params_s1, param_metadata_s1,
+    stage1_init$factor_variance_fixed, verbose = FALSE
+  )
+  param_fixed_s1 <- rep(TRUE, length(true_params_s1))
+  param_fixed_s1[param_constraints_s1$free_idx] <- FALSE
+
+  # Check Stage 1 gradient accuracy at TRUE parameters (not at MLE)
+  grad_check_s1 <- check_gradient_accuracy(ms_stage1, dat, true_params_s1,
+                                           param_fixed = param_fixed_s1,
+                                           tol = GRAD_TOL, verbose = FALSE, n_quad = 8)
+  expect_true(grad_check_s1$pass,
+              info = sprintf("Stage 1 gradient check failed (max error: %.2e)", grad_check_s1$max_error))
+
+  # Check Stage 1 parameter recovery (measurement params)
+  # Factor variances - use unname() for comparison
+  expect_equal(unname(result_stage1$estimates["factor_var_1"]), true_var_f1, tolerance = 0.3,
+               info = "Stage 1: factor_var_1 recovery")
+
+  # Loadings (free ones) - use unname() for comparison
+  expect_equal(unname(result_stage1$estimates["Y1_2_loading_1"]), true_lambda_f1[2], tolerance = 0.15,
+               info = "Stage 1: Y1_2 loading recovery")
+  expect_equal(unname(result_stage1$estimates["Y2_2_loading_2"]), true_lambda_f2[2], tolerance = 0.15,
+               info = "Stage 1: Y2_2 loading recovery")
+
+  # Check Stage 1 SEs are computed
+  expect_true(all(!is.na(result_stage1$std_errors)),
+              info = "Stage 1 should have computed std_errors")
+  expect_true(all(result_stage1$std_errors > 0),
+              info = "Stage 1 std_errors should be positive")
+
+  if (VERBOSE) {
+    cat("\n=== Stage 1 (Independent Factors) ===\n")
+    cat(sprintf("Convergence: %d\n", result_stage1$convergence))
+    cat(sprintf("Log-likelihood: %.4f\n", result_stage1$loglik))
+    cat(sprintf("Gradient max error: %.2e\n", grad_check_s1$max_error))
+    cat(sprintf("factor_var_1: true=%.3f, est=%.3f\n",
+                true_var_f1, result_stage1$estimates["factor_var_1"]))
+  }
+
+  # =========================================================================
+  # STAGE 2: SE_linear with previous_stage
+  # =========================================================================
+
+  fm_stage2 <- define_factor_model(n_factors = 2, factor_structure = "SE_linear")
+
+  # No new components - just change factor structure
+  ms_stage2 <- define_model_system(
+    components = list(),
+    factor = fm_stage2,
+    previous_stage = result_stage1
+  )
+
+  # Initialize SE parameters
+  init_stage2 <- initialize_parameters(ms_stage2, dat, verbose = FALSE)
+  init_stage2$init_params["se_intercept"] <- 0.0
+  init_stage2$init_params["se_linear_1"] <- 0.5
+  init_stage2$init_params["se_residual_var"] <- 0.5
+
+  result_stage2 <- estimate_model_rcpp(
+    model_system = ms_stage2,
+    data = dat,
+    init_params = init_stage2$init_params,
+    control = ctrl,
+    optimizer = "nlminb",
+    verbose = FALSE
+  )
+
+  # Check Stage 2 convergence
+  expect_equal(result_stage2$convergence, 0, info = "Stage 2 should converge")
+
+  # Build true parameters for Stage 2 (SE_linear structure)
+  # Parameter order for SE_linear: factor_var_1, se_intercept, se_linear_1, se_residual_var,
+  # then measurement params from Stage 1
+  true_params_s2 <- c(
+    true_var_f1,          # factor_var_1
+    true_se_intercept,    # se_intercept
+    true_se_linear,       # se_linear_1
+    true_se_residual_var  # se_residual_var
+  )
+  # Append measurement parameters (using Stage 1 true params without factor variances)
+  meas_params <- true_params_s1[-(1:2)]  # Remove factor variances
+  true_params_s2 <- c(true_params_s2, meas_params)
+  names(true_params_s2) <- names(result_stage2$estimates)
+
+  # Get param_fixed vector for Stage 2
+  stage2_init <- initialize_parameters(ms_stage2, dat, verbose = FALSE)
+  param_metadata_s2 <- factorana:::build_parameter_metadata(ms_stage2)
+  param_constraints_s2 <- factorana:::setup_parameter_constraints(
+    ms_stage2, true_params_s2, param_metadata_s2,
+    stage2_init$factor_variance_fixed, verbose = FALSE
+  )
+  param_fixed_s2 <- rep(TRUE, length(true_params_s2))
+  param_fixed_s2[param_constraints_s2$free_idx] <- FALSE
+
+  # Check Stage 2 gradient accuracy at TRUE parameters (not at MLE)
+  grad_check_s2 <- check_gradient_accuracy(ms_stage2, dat, true_params_s2,
+                                           param_fixed = param_fixed_s2,
+                                           tol = GRAD_TOL, verbose = FALSE, n_quad = 8)
+  expect_true(grad_check_s2$pass,
+              info = sprintf("Stage 2 gradient check failed (max error: %.2e)", grad_check_s2$max_error))
+
+  # Check Stage 2 Hessian accuracy at TRUE parameters
+  hess_check_s2 <- check_hessian_accuracy(ms_stage2, dat, true_params_s2,
+                                          param_fixed = param_fixed_s2,
+                                          tol = HESS_TOL, verbose = FALSE, n_quad = 8)
+  expect_true(hess_check_s2$pass,
+              info = sprintf("Stage 2 Hessian check failed (max error: %.2e)", hess_check_s2$max_error))
+
+  # =========================================================================
+  # VERIFICATION: Parameters preserved from Stage 1
+  # =========================================================================
+
+  # Measurement parameters should be identical
+  stage1_meas_params <- result_stage1$estimates[!grepl("^factor_var", names(result_stage1$estimates))]
+  stage2_meas_params <- result_stage2$estimates[names(stage1_meas_params)]
+
+  max_meas_diff <- max(abs(stage1_meas_params - stage2_meas_params))
+  expect_true(max_meas_diff < 1e-10,
+              info = sprintf("Measurement params should be preserved (max diff: %.2e)", max_meas_diff))
+
+  # SEs for fixed params should be preserved
+  stage1_meas_se <- result_stage1$std_errors[names(stage1_meas_params)]
+  stage2_meas_se <- result_stage2$std_errors[names(stage1_meas_params)]
+
+  max_se_diff <- max(abs(stage1_meas_se - stage2_meas_se))
+  expect_true(max_se_diff < 1e-10,
+              info = sprintf("Measurement SEs should be preserved (max diff: %.2e)", max_se_diff))
+
+  # =========================================================================
+  # VERIFICATION: SE_linear parameter recovery
+  # =========================================================================
+
+  # SE linear coefficient (the key structural parameter)
+  est_se_linear <- unname(result_stage2$estimates["se_linear_1"])
+  expect_equal(est_se_linear, true_se_linear, tolerance = 0.15,
+               info = sprintf("SE linear recovery: true=%.3f, est=%.3f",
+                             true_se_linear, est_se_linear))
+
+  # SE intercept (should be ~0 since Stage 1 absorbed factor means)
+  est_se_intercept <- unname(result_stage2$estimates["se_intercept"])
+  expect_equal(est_se_intercept, true_se_intercept, tolerance = 0.15,
+               info = sprintf("SE intercept recovery: true=%.3f, est=%.3f",
+                             true_se_intercept, est_se_intercept))
+
+  # SE residual variance (relaxed tolerance due to sampling variability in SE models)
+  est_se_resvar <- unname(result_stage2$estimates["se_residual_var"])
+  expect_equal(est_se_resvar, true_se_residual_var, tolerance = 0.35,
+               info = sprintf("SE residual var recovery: true=%.3f, est=%.3f",
+                             true_se_residual_var, est_se_resvar))
+
+  # Factor variance for f1 (should be estimated in Stage 2)
+  est_var_f1 <- unname(result_stage2$estimates["factor_var_1"])
+  expect_equal(est_var_f1, true_var_f1, tolerance = 0.3,
+               info = sprintf("Factor var recovery: true=%.3f, est=%.3f",
+                             true_var_f1, est_var_f1))
+
+  # Check SE params have positive std_errors
+  se_param_names <- c("se_linear_1", "se_intercept", "se_residual_var", "factor_var_1")
+  se_std_errors <- result_stage2$std_errors[se_param_names]
+  expect_true(all(se_std_errors > 0),
+              info = "SE parameters should have positive std_errors")
+
+  if (VERBOSE) {
+    cat("\n=== Stage 2 (SE_linear) ===\n")
+    cat(sprintf("Convergence: %d\n", result_stage2$convergence))
+    cat(sprintf("Log-likelihood: %.4f\n", result_stage2$loglik))
+    cat(sprintf("Gradient max error: %.2e\n", grad_check_s2$max_error))
+    cat(sprintf("Hessian max error: %.2e\n", hess_check_s2$max_error))
+    cat(sprintf("Meas params preserved: max diff = %.2e\n", max_meas_diff))
+    cat(sprintf("Meas SEs preserved: max diff = %.2e\n", max_se_diff))
+    cat("\nSE Parameter Recovery:\n")
+    cat(sprintf("  se_linear_1: true=%.3f, est=%.3f (%.1f%%)\n",
+                true_se_linear, est_se_linear, 100*est_se_linear/true_se_linear))
+    cat(sprintf("  se_intercept: true=%.3f, est=%.3f\n",
+                true_se_intercept, est_se_intercept))
+    cat(sprintf("  se_residual_var: true=%.3f, est=%.3f (%.1f%%)\n",
+                true_se_residual_var, est_se_resvar, 100*est_se_resvar/true_se_residual_var))
+    cat(sprintf("  factor_var_1: true=%.3f, est=%.3f (%.1f%%)\n",
+                true_var_f1, est_var_f1, 100*est_var_f1/true_var_f1))
+  }
+})
+
+# ==============================================================================
 # Test H: Structural Equation Model (SE_quadratic)
 # f2 = se_intercept + se_linear_1 * f1 + se_quadratic_1 * f1^2 + epsilon
 # ==============================================================================
@@ -1335,7 +1646,8 @@ test_that("Test J: Two-stage with multiple outcome types and fixed coefficients"
   mc_oprobit <- define_model_component(name = "oprobit", data = dat, outcome = "Y_oprobit", factor = fm,
                                         covariates = c("intercept", "x1"), model_type = "oprobit",
                                         num_choices = 3, loading_normalization = NA_real_,
-                                        evaluation_indicator = "eval")
+                                        evaluation_indicator = "eval",
+                                        intercept = FALSE)
   mc_oprobit <- fix_coefficient(mc_oprobit, "intercept", 0)
 
   # Multinomial logit with choice 2 intercept fixed to 0

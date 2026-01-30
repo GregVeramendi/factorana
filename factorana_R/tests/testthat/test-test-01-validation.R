@@ -8,13 +8,15 @@ test_that("define_model_component validates inputs", {
   mc <- define_model_component("Y1", dat, "Y", fm,
                                evaluation_indicator = "eval_y1",
                                covariates = c("X1"),
-                               model_type = "linear")
+                               model_type = "linear",
+                               intercept = FALSE)
   expect_s3_class(mc, "model_component")
 
   # missing outcome ("NOPE" outcome name, doesn't exist)
   expect_error(
     define_model_component("bad", dat, "NOPE", fm,
-                           covariates = "X1", model_type = "linear"),
+                           covariates = "X1", model_type = "linear",
+                           intercept = FALSE),
     regexp = "Outcome variable.*not found"
   )
 
@@ -30,7 +32,8 @@ test_that("define_model_component validates inputs", {
   expect_error(
     define_model_component("bad", dat2, "Y", fm,
                            evaluation_indicator = "eval_bad",
-                           covariates = "X1", model_type = "linear"),
+                           covariates = "X1", model_type = "linear",
+                           intercept = FALSE),
     regexp = "evaluation_indicator"
   )
 })
@@ -56,7 +59,8 @@ test_that("define_model_component detects multicollinearity", {
     define_model_component("Y", dat, "Y", fm,
                            covariates = c("X1", "X2", "X3"),
                            model_type = "linear",
-                           evaluation_indicator = "eval"),
+                           evaluation_indicator = "eval",
+                           intercept = FALSE),
     regexp = "rank deficient|multicollinearity"
   )
 
@@ -64,6 +68,7 @@ test_that("define_model_component detects multicollinearity", {
   mc <- define_model_component("Y", dat, "Y", fm,
                                covariates = c("X1", "X2"),
                                model_type = "linear",
-                               evaluation_indicator = "eval")
+                               evaluation_indicator = "eval",
+                               intercept = FALSE)
   expect_s3_class(mc, "model_component")
 })

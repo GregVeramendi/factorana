@@ -294,7 +294,8 @@ test_that("Gradient accuracy for ordered probit with quadratic factor terms", {
     num_choices = 3,
     loading_normalization = 1.0,
     factor_spec = "quadratic",
-    evaluation_indicator = "eval"
+    evaluation_indicator = "eval",
+    intercept = FALSE
   )
 
   ms <- define_model_system(components = list(mc), factor = fm)
@@ -466,7 +467,8 @@ test_that("Hessian accuracy for ordered probit with quadratic factor terms", {
     num_choices = 3,
     loading_normalization = 1.0,
     factor_spec = "quadratic",
-    evaluation_indicator = "eval"
+    evaluation_indicator = "eval",
+    intercept = FALSE
   )
 
   ms <- define_model_system(components = list(mc), factor = fm)

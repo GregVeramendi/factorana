@@ -8,7 +8,8 @@ test_that("initialize_parameters returns expected shapes", {
   mc <- define_model_component("Y1", dat, "Y", fm,
                                evaluation_indicator = "eval_y1",
                                covariates = c("X1"),
-                               model_type = "linear")
+                               model_type = "linear",
+                               intercept = FALSE)
 
   # Create model system for initialization
   ms <- define_model_system(components = list(mc), factor = fm)

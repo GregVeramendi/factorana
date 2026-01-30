@@ -14,7 +14,8 @@ test_that("only eval==1 and non-missing Y are used", {
   expect_error(
     define_model_component("Y1", dat, "Y", fm,
                            evaluation_indicator = "eval_y1",
-                           covariates = "X1", model_type = "linear"),
+                           covariates = "X1", model_type = "linear",
+                           intercept = FALSE),
     regexp = "Missing values in outcome"
   )
 })
@@ -39,7 +40,8 @@ test_that("zero rows after conditioning throws a clear error", {
       factor = fm,
       evaluation_indicator = "eval_y1",
       covariates = "X1",
-      model_type = "linear"
+      model_type = "linear",
+      intercept = FALSE
     ),
     regexp = "Evaluation subset has zero rows", fixed = TRUE
   )

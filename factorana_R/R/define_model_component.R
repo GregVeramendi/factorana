@@ -159,6 +159,25 @@ define_model_component <- function(name,
     stop("`intercept` must be a single TRUE/FALSE.")
   }
 
+  # Warn if intercept=TRUE for models where it has no effect
+  # Note: intercept=TRUE is just metadata. Users must add their own intercept column to data
+  # and include it in covariates if they need an intercept term.
+  if (isTRUE(intercept)) {
+    has_intercept_in_covariates <- !is.null(covariates) &&
+      any(covariates %in% c("intercept", "constant"))
+
+    if (model_type == "oprobit") {
+      warning("`intercept = TRUE` has no effect for oprobit models (intercept is absorbed into thresholds).")
+    } else if (model_type == "linear" && !has_intercept_in_covariates) {
+      warning("`intercept = TRUE` does not automatically add an intercept. ",
+              "Add a column of 1s to your data (e.g., data$intercept <- 1) ",
+              "and include 'intercept' in covariates.")
+    } else if (model_type == "probit" && !has_intercept_in_covariates) {
+      warning("`intercept = TRUE` does not automatically add an intercept for probit models. ",
+              "Add a column of 1s to your data and include 'intercept' in covariates if needed.")
+    }
+  }
+
   # num_choices: basic validation (detailed validation against data comes later)
   num_choices <- as.integer(num_choices)
   if (is.na(num_choices) || num_choices < 2L) {
@@ -283,11 +302,8 @@ define_model_component <- function(name,
 
   # ---- 8b. Multicollinearity check ----
   # Build design matrix and check for rank deficiency and near-collinearity
-  # Note: Users must provide their own intercept column in covariates if needed.
-  # The `intercept` parameter is metadata for the model, not auto-added to design matrix.
 
   if (length(covariates) > 0 && !skip_collinearity_check) {
-    # Build design matrix from user-provided covariates only
     X <- as.matrix(data[idx, covariates, drop = FALSE])
     col_names <- covariates
 

@@ -427,12 +427,26 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
 
     // Check if previous_stage_info exists - if so, fix all factor-level parameters
     // (factor variances, correlations, SE params, type params)
+    // EXCEPTION: If allow_different_structure is TRUE, the factor-level parameters
+    // should remain FREE because Stage 2 uses a different factor structure (SE_linear/SE_quadratic)
     if (model_system.containsElementNamed("previous_stage_info") &&
         !Rf_isNull(model_system["previous_stage_info"])) {
-        // Mark all factor-level parameters as fixed
-        for (int j = 0; j < param_offset; j++) {
-            param_fixed_vec[j] = true;
+        List prev_stage_info = model_system["previous_stage_info"];
+        bool allow_diff_struct = false;
+        if (prev_stage_info.containsElementNamed("allow_different_structure") &&
+            !Rf_isNull(prev_stage_info["allow_different_structure"])) {
+            allow_diff_struct = as<bool>(prev_stage_info["allow_different_structure"]);
         }
+
+        if (!allow_diff_struct) {
+            // Standard case: fix all factor-level parameters from previous stage
+            for (int j = 0; j < param_offset; j++) {
+                param_fixed_vec[j] = true;
+            }
+        }
+        // When allow_diff_struct is true, factor-level parameters remain FREE
+        // When allow_diff_struct is true, factor-level parameters remain FREE
+        // and will use the new factor structure (SE_linear/SE_quadratic)
     }
 
     // Process each component's fixed coefficients and all_params_fixed

@@ -17,11 +17,17 @@
 #'   other parameters in the group are set equal to the primary.
 #'   Example: \code{list(c("Y1_loading_1", "Y2_loading_2"), c("Y1_sigma", "Y2_sigma"))}
 #'   This is useful for measurement invariance constraints in longitudinal models.
+#' @param free_params Optional. A character vector of parameter names from previous_stage
+#'   that should remain FREE (not fixed) in the current stage. This allows selectively
+#'   freeing specific parameters while keeping others fixed. Commonly used to free
+#'   factor variances while keeping measurement loadings/thresholds fixed.
+#'   Example: \code{c("factor_var_1", "factor_var_2")} to free factor variances.
+#'   Only used when previous_stage is provided.
 #'
 #' @return An object of class "model_system". A list of model_component objects and one factor_model object.
 #' @export
 define_model_system <- function(components, factor, previous_stage = NULL, weights = NULL,
-                                equality_constraints = NULL) {
+                                equality_constraints = NULL, free_params = NULL) {
   # Validate the inputs:
 
   if (!is.list(components) || !all(sapply(components, inherits, "model_component"))) {
@@ -84,6 +90,17 @@ define_model_system <- function(components, factor, previous_stage = NULL, weigh
     }
   }
 
+  # Validate free_params
+  if (!is.null(free_params) && is.null(previous_stage)) {
+    warning("`free_params` is ignored when `previous_stage` is not provided")
+    free_params <- NULL
+  }
+  if (!is.null(free_params)) {
+    if (!is.character(free_params)) {
+      stop("`free_params` must be a character vector of parameter names")
+    }
+  }
+
   # Handle previous_stage if provided
   previous_stage_info <- NULL
   if (!is.null(previous_stage)) {
@@ -99,8 +116,35 @@ define_model_system <- function(components, factor, previous_stage = NULL, weigh
     }
 
     # Check factor models match
+    # For SE_linear/SE_quadratic Stage 2: allow different factor structures
+    # as long as n_factors matches. This enables 2-stage estimation where
+    # Stage 1 uses independent factors and Stage 2 uses SE structure.
+    se_structures <- c("SE_linear", "SE_quadratic")
+    allow_different_structure <- FALSE
+
     if (!identical(prev_ms$factor, factor)) {
-      stop("Factor model in previous_stage must be identical to current factor model")
+      # Check if this is an SE model with matching n_factors
+      if (factor$factor_structure %in% se_structures &&
+          prev_ms$factor$n_factors == factor$n_factors) {
+        allow_different_structure <- TRUE
+        message(sprintf("Two-stage SE estimation: Stage 1 (%s) -> Stage 2 (%s)",
+                        prev_ms$factor$factor_structure, factor$factor_structure))
+        message("  Measurement parameters (loadings, thresholds) will be fixed from Stage 1")
+        message("  Factor distribution parameters will use Stage 2 structure")
+      } else {
+        stop("Factor model in previous_stage must be identical to current factor model, ",
+             "unless Stage 2 uses SE_linear or SE_quadratic with matching n_factors")
+      }
+    }
+
+    # Validate free_params are in previous_stage estimates
+    if (!is.null(free_params)) {
+      prev_param_names <- names(previous_stage$estimates)
+      invalid_params <- setdiff(free_params, prev_param_names)
+      if (length(invalid_params) > 0) {
+        stop("free_params contains parameter names not in previous_stage: ",
+             paste(invalid_params, collapse = ", "))
+      }
     }
 
     # Mark all previous stage components as having fixed parameters
@@ -112,18 +156,77 @@ define_model_system <- function(components, factor, previous_stage = NULL, weigh
     # Prepend previous stage components to new components
     components <- c(prev_components, components)
 
+    # Determine which parameters to fix (all except free_params)
+    all_param_names <- names(previous_stage$estimates)
+
+    # For SE structure Stage 2: only fix measurement parameters, not factor distribution
+    if (allow_different_structure) {
+      # Identify factor distribution parameters to exclude from fixing
+      # These include: factor_var_*, se_*, chol_* (correlation params)
+      factor_dist_patterns <- c("^factor_var", "^se_", "^chol_")
+      factor_dist_params <- unlist(lapply(factor_dist_patterns, function(p) {
+        grep(p, all_param_names, value = TRUE)
+      }))
+
+      # Only fix measurement parameters (loadings, thresholds, sigmas, intercepts, betas)
+      measurement_params <- setdiff(all_param_names, factor_dist_params)
+
+      # Apply free_params override if specified
+      fixed_param_names <- if (!is.null(free_params)) {
+        setdiff(measurement_params, free_params)
+      } else {
+        measurement_params
+      }
+
+      message(sprintf("  Fixing %d measurement parameters, ignoring %d factor distribution parameters",
+                      length(fixed_param_names), length(factor_dist_params)))
+    } else {
+      # Standard behavior: fix all except free_params
+      fixed_param_names <- if (!is.null(free_params)) {
+        setdiff(all_param_names, free_params)
+      } else {
+        all_param_names
+      }
+    }
+
     # Store metadata about previous stage
     previous_stage_info <- list(
       n_components = length(prev_components),
-      fixed_param_values = previous_stage$estimates,
-      fixed_param_names = names(previous_stage$estimates),
-      fixed_std_errors = previous_stage$std_errors,
-      n_params_fixed = length(previous_stage$estimates)
+      fixed_param_values = previous_stage$estimates[fixed_param_names],
+      fixed_param_names = fixed_param_names,
+      free_param_names = free_params,
+      fixed_std_errors = previous_stage$std_errors[fixed_param_names],
+      n_params_fixed = length(fixed_param_names),
+      all_param_values = previous_stage$estimates,  # Keep all for initialization
+      allow_different_structure = allow_different_structure
     )
 
-    # Mark factor variance as fixed
-    factor$variance_fixed <- TRUE
-    factor$variance_value <- previous_stage$estimates[1]  # First param is always factor variance
+    # Check if factor variance should be fixed
+    # For SE structure Stage 2: factor variances are always free (use Stage 2 structure)
+    if (allow_different_structure) {
+      factor$variance_fixed <- FALSE
+    } else {
+      # Standard behavior
+      # Fix variance only if it's NOT in free_params
+      var_param_names <- grep("^factor_var", all_param_names, value = TRUE)
+      free_var_params <- intersect(var_param_names, free_params)
+
+      if (length(free_var_params) == 0) {
+        # All factor variances are fixed
+        factor$variance_fixed <- TRUE
+        factor$variance_value <- previous_stage$estimates[var_param_names[1]]
+      } else if (length(free_var_params) < length(var_param_names)) {
+        # Some variances fixed, some free - complex case
+        # For now, mark which specific variances are fixed
+        factor$variance_fixed <- FALSE
+        factor$variance_partially_fixed <- TRUE
+        factor$fixed_variance_params <- setdiff(var_param_names, free_var_params)
+        factor$fixed_variance_values <- previous_stage$estimates[factor$fixed_variance_params]
+      } else {
+        # All factor variances are free
+        factor$variance_fixed <- FALSE
+      }
+    }
   }
 
   out <- list(
