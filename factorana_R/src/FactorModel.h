@@ -75,6 +75,15 @@ private:
     std::map<int, std::vector<double>> adapt_nodes;   // GH nodes for different nquad values
     std::map<int, std::vector<double>> adapt_weights; // GH weights for different nquad values
 
+    // Factor mean covariates: f_i ~ N(X_i * gamma, Sigma)
+    // Allows factor means to vary by observed characteristics
+    bool use_factor_mean_covariates;            // Whether factor mean covariates are enabled
+    int n_factor_mean_covariates;               // Number of covariates for factor means
+    int n_factors_with_mean;                    // Number of factors with mean covariates
+    int factor_mean_param_start;                // Starting index for factor mean params in param vector
+    std::vector<int> factor_mean_covariate_idx; // Column indices in data for each covariate
+    std::vector<std::vector<double>> factor_mean_covariate_data;  // [iobs][icov] covariate values
+
     // Parameter organization
     std::vector<int> param_model_start;  // Starting index for each model's parameters
     std::vector<int> param_model_count;  // Number of parameters per model
@@ -125,6 +134,11 @@ public:
 
     // Disable adaptive integration (revert to standard quadrature)
     void DisableAdaptiveQuadrature();
+
+    // Set up factor mean covariates: f_i ~ N(X_i * gamma, Sigma)
+    // covariate_data: pre-processed (demeaned) covariate matrix [nobs x n_covariates]
+    // The demeaning and variance checking should be done in R before calling this.
+    void SetFactorMeanCovariates(const std::vector<std::vector<double>>& covariate_data);
 
     // Set which parameters are fixed
     void SetParameterConstraints(const std::vector<bool>& fixed);

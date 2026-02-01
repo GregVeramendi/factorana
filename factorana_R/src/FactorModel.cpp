@@ -13,7 +13,9 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
       nmix(n_mix), fac_corr(correlated),
       factor_structure(correlated ? FactorStructure::CORRELATION : FactorStructure::INDEPENDENT),
       n_input_factors(0), n_outcome_factors(0), se_param_start(-1), nse_param(0),
-      nquad_points(n_quad), use_weights(false), use_adaptive(false), adapt_threshold(0.3)
+      nquad_points(n_quad), use_weights(false), use_adaptive(false), adapt_threshold(0.3),
+      use_factor_mean_covariates(false), n_factor_mean_covariates(0), n_factors_with_mean(0),
+      factor_mean_param_start(-1)
 {
     data.resize(nobs * nvar);
 
@@ -51,7 +53,9 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
       nmix(n_mix), fac_corr(fac_struct == FactorStructure::CORRELATION),
       factor_structure(fac_struct),
       n_input_factors(0), n_outcome_factors(0), se_param_start(-1), nse_param(0),
-      nquad_points(n_quad), use_weights(false), use_adaptive(false), adapt_threshold(0.3)
+      nquad_points(n_quad), use_weights(false), use_adaptive(false), adapt_threshold(0.3),
+      use_factor_mean_covariates(false), n_factor_mean_covariates(0), n_factors_with_mean(0),
+      factor_mean_param_start(-1)
 {
     data.resize(nobs * nvar);
 
@@ -282,6 +286,57 @@ void FactorModel::DisableAdaptiveQuadrature()
     adapt_factor_var.clear();
     adapt_nodes.clear();
     adapt_weights.clear();
+}
+
+void FactorModel::SetFactorMeanCovariates(const std::vector<std::vector<double>>& covariate_data)
+{
+    // Validate input dimensions
+    if (covariate_data.size() != nobs) {
+        throw std::runtime_error("Factor mean covariate data has wrong number of observations: expected " +
+                                 std::to_string(nobs) + " but got " + std::to_string(covariate_data.size()));
+    }
+
+    if (covariate_data.empty() || covariate_data[0].empty()) {
+        use_factor_mean_covariates = false;
+        return;
+    }
+
+    n_factor_mean_covariates = static_cast<int>(covariate_data[0].size());
+
+    // Determine which factors get mean covariates
+    // For SE models, only input factors get covariates (outcome factor mean is from SE)
+    if (factor_structure == FactorStructure::SE_LINEAR ||
+        factor_structure == FactorStructure::SE_QUADRATIC) {
+        n_factors_with_mean = n_input_factors;
+    } else {
+        n_factors_with_mean = nfac;
+    }
+
+    // Compute parameter index for factor mean coefficients
+    // They come after variance parameters and any SE/correlation parameters
+    // The order is: factor_var_1..k, [se_params or corr_params], factor_mean_1_cov1, factor_mean_1_cov2, ...
+    if (factor_structure == FactorStructure::SE_LINEAR ||
+        factor_structure == FactorStructure::SE_QUADRATIC) {
+        // After input factor variances and SE params
+        factor_mean_param_start = n_input_factors + nse_param;
+    } else if (factor_structure == FactorStructure::CORRELATION && nfac == 2) {
+        // After factor variances and correlation
+        factor_mean_param_start = nfac + 1;
+    } else {
+        // After factor variances
+        factor_mean_param_start = nfac;
+    }
+
+    // Store the pre-processed (demeaned) covariate data
+    // Demeaning and variance checking is done in R before calling this
+    factor_mean_covariate_data = covariate_data;
+
+    // Update total parameter count to include factor mean coefficients
+    // n_factors_with_mean * n_factor_mean_covariates additional parameters
+    int n_mean_params = n_factors_with_mean * n_factor_mean_covariates;
+    nparam += n_mean_params;
+
+    use_factor_mean_covariates = true;
 }
 
 void FactorModel::SetParameterConstraints(const std::vector<bool>& fixed)
@@ -668,7 +723,9 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     // OPTIMIZATION: Precompute integration point tables for likelihood/gradient only
     // For Hessian (iflag==3), inline computation is faster due to better cache locality
     // This gives us: faster likelihood/gradient from precomputation, fast Hessian from inline
-    bool use_precomputed_tables = !use_adaptive && (iflag < 3);
+    // NOTE: Cannot use precomputed tables when factor_mean_covariates is enabled because
+    // factor_mean varies per observation and tables are precomputed with factor_mean = 0
+    bool use_precomputed_tables = !use_adaptive && (iflag < 3) && !use_factor_mean_covariates;
 
     std::vector<std::vector<double>> fac_val_table;
     std::vector<double> probilk_table;
@@ -754,6 +811,22 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     // ===== STEP 5: Loop over observations =====
     for (int iobs = 0; iobs < nobs; iobs++) {
         int iobs_offset = iobs * nvar;
+
+        // Compute observation-specific factor means if covariates are set
+        // factor_mean[k] = sum_j(gamma_{k,j} * X_i_j)
+        if (use_factor_mean_covariates) {
+            for (int ifac = 0; ifac < n_factors_with_mean; ifac++) {
+                double mean_k = 0.0;
+                for (int icov = 0; icov < n_factor_mean_covariates; icov++) {
+                    // Parameter index: factor_mean_param_start + ifac * n_covariates + icov
+                    int param_idx = factor_mean_param_start + ifac * n_factor_mean_covariates + icov;
+                    double gamma_k_j = param[param_idx];
+                    double x_ij = factor_mean_covariate_data[iobs][icov];
+                    mean_k += gamma_k_j * x_ij;
+                }
+                factor_mean[ifac] = mean_k;
+            }
+        }
 
         double totalprob = 0.0;
         // Zero gradient entries for params that need gradients (free + tied)
@@ -1088,6 +1161,19 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                             // Independent factors: use pre-computed df_dsigma2
                             for (int ifac = 0; ifac < nfac; ifac++) {
                                 grad_this_type[ifac] += modEval[ifac + 1] * df_dsigma2[ifac];
+                            }
+                        }
+
+                        // Gradients w.r.t. factor mean covariate parameters
+                        // d(log L)/d(gamma_{k,j}) = d(log L)/d(f_k) * X_i_j
+                        if (use_factor_mean_covariates) {
+                            for (int ifac = 0; ifac < n_factors_with_mean; ifac++) {
+                                double dL_dfac = modEval[ifac + 1];
+                                for (int icov = 0; icov < n_factor_mean_covariates; icov++) {
+                                    int param_idx = factor_mean_param_start + ifac * n_factor_mean_covariates + icov;
+                                    double x_ij = factor_mean_covariate_data[iobs][icov];
+                                    grad_this_type[param_idx] += dL_dfac * x_ij;
+                                }
                             }
                         }
 
@@ -1426,6 +1512,60 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                     int modhess_idx = (nfac + iparam) * nDimModHess + (nfac + jparam);
                                     int full_idx = (firstpar + iparam) * nparam + (firstpar + jparam);
                                     hess_this_type[full_idx] += modHess[modhess_idx];
+                                }
+                            }
+
+                            // 4. Factor mean covariate Hessian terms
+                            if (use_factor_mean_covariates) {
+                                // Factor mean × Factor mean terms
+                                // d²L/d(gamma_{k1,j1})d(gamma_{k2,j2}) = d²L/df_{k1}df_{k2} * X_{j1} * X_{j2}
+                                for (int k1 = 0; k1 < n_factors_with_mean; k1++) {
+                                    for (int j1 = 0; j1 < n_factor_mean_covariates; j1++) {
+                                        int param_idx1 = factor_mean_param_start + k1 * n_factor_mean_covariates + j1;
+                                        double x_j1 = factor_mean_covariate_data[iobs][j1];
+
+                                        for (int k2 = k1; k2 < n_factors_with_mean; k2++) {
+                                            int j2_start = (k1 == k2) ? j1 : 0;
+                                            for (int j2 = j2_start; j2 < n_factor_mean_covariates; j2++) {
+                                                int param_idx2 = factor_mean_param_start + k2 * n_factor_mean_covariates + j2;
+                                                double x_j2 = factor_mean_covariate_data[iobs][j2];
+
+                                                int modhess_idx = k1 * nDimModHess + k2;
+                                                int full_idx = param_idx1 * nparam + param_idx2;
+                                                hess_this_type[full_idx] += modHess[modhess_idx] * x_j1 * x_j2;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Factor variance × Factor mean cross terms
+                                // d²L/d(sigma²_k1)d(gamma_{k2,j}) = d²L/df_{k1}df_{k2} * df/dsigma² * X_j
+                                for (int k1 = 0; k1 < nfac; k1++) {
+                                    for (int k2 = 0; k2 < n_factors_with_mean; k2++) {
+                                        for (int j = 0; j < n_factor_mean_covariates; j++) {
+                                            int param_idx_mean = factor_mean_param_start + k2 * n_factor_mean_covariates + j;
+                                            double x_j = factor_mean_covariate_data[iobs][j];
+
+                                            int modhess_idx = k1 * nDimModHess + k2;
+                                            int full_idx = k1 * nparam + param_idx_mean;
+                                            hess_this_type[full_idx] += modHess[modhess_idx] * df_dsigma2[k1] * x_j;
+                                        }
+                                    }
+                                }
+
+                                // Factor mean × Model param cross terms
+                                // d²L/d(gamma_{k,j})d(theta_m) = d²L/df_k d(theta_m) * X_j
+                                for (int k = 0; k < n_factors_with_mean; k++) {
+                                    for (int j = 0; j < n_factor_mean_covariates; j++) {
+                                        int param_idx_mean = factor_mean_param_start + k * n_factor_mean_covariates + j;
+                                        double x_j = factor_mean_covariate_data[iobs][j];
+
+                                        for (int mparam = 0; mparam < base_param_count_hess; mparam++) {
+                                            int modhess_idx = k * nDimModHess + (nfac + mparam);
+                                            int full_idx = param_idx_mean * nparam + (firstpar + mparam);
+                                            hess_this_type[full_idx] += modHess[modhess_idx] * x_j;
+                                        }
+                                    }
                                 }
                             }
                         }

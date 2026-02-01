@@ -179,6 +179,24 @@ build_parameter_metadata <- function(model_system) {
     component_id <- c(component_id, 0)  # 0 = factor model
   }
 
+  # Add factor mean covariate parameters if specified
+  factor_covariates <- model_system$factor$factor_covariates
+  if (!is.null(factor_covariates) && length(factor_covariates) > 0) {
+    # Determine how many factors get mean covariates
+    if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
+      n_factors_with_mean <- n_factors - 1L  # Only input factors
+    } else {
+      n_factors_with_mean <- n_factors
+    }
+    for (k in seq_len(n_factors_with_mean)) {
+      for (cov_name in factor_covariates) {
+        param_names <- c(param_names, sprintf("factor_mean_%d_%s", k, cov_name))
+        param_types <- c(param_types, "factor_mean")
+        component_id <- c(component_id, 0)  # 0 = factor model
+      }
+    }
+  }
+
   # Add type model parameters if n_types > 1 and at least one component uses types
   # Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
   # (n_types - 1) intercepts + (n_types - 1) * n_factors loadings (type 1 is reference)

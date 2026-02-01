@@ -137,6 +137,69 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
 
     fm->SetQuadrature(nodes, weights);
 
+    // Set up factor mean covariates if specified
+    // MUST be done BEFORE AddModel() so factor_mean params come before model params
+    // This ensures parameter ordering matches R: factor_var, factor_mean, model_params
+    if (factor_model.containsElementNamed("factor_covariates") &&
+        !Rf_isNull(factor_model["factor_covariates"])) {
+        CharacterVector factor_cov_names = factor_model["factor_covariates"];
+        int n_cov = factor_cov_names.size();
+        if (n_cov > 0) {
+            // Find column indices for factor covariates
+            std::vector<int> factor_cov_indices(n_cov);
+            for (int j = 0; j < n_cov; j++) {
+                std::string cov_name = as<std::string>(factor_cov_names[j]);
+                int idx = -1;
+                for (int k = 0; k < col_names.size(); k++) {
+                    if (std::string(col_names[k]) == cov_name) {
+                        idx = k;
+                        break;
+                    }
+                }
+                if (idx == -1) {
+                    Rcpp::stop("Factor mean covariate '" + cov_name + "' not found in data");
+                }
+                factor_cov_indices[j] = idx;
+            }
+
+            // Extract covariate values and compute means
+            std::vector<double> cov_means(n_cov, 0.0);
+            for (int i = 0; i < n_obs; i++) {
+                for (int j = 0; j < n_cov; j++) {
+                    cov_means[j] += data_mat(i, factor_cov_indices[j]);
+                }
+            }
+            for (int j = 0; j < n_cov; j++) {
+                cov_means[j] /= static_cast<double>(n_obs);
+            }
+
+            // Extract, demean, and check variance
+            std::vector<std::vector<double>> covariate_data(n_obs, std::vector<double>(n_cov));
+            std::vector<double> cov_var(n_cov, 0.0);
+            for (int i = 0; i < n_obs; i++) {
+                for (int j = 0; j < n_cov; j++) {
+                    double demeaned = data_mat(i, factor_cov_indices[j]) - cov_means[j];
+                    covariate_data[i][j] = demeaned;
+                    cov_var[j] += demeaned * demeaned;
+                }
+            }
+
+            // Check for near-zero variance (constant covariates)
+            for (int j = 0; j < n_cov; j++) {
+                cov_var[j] /= static_cast<double>(n_obs);
+                if (cov_var[j] < 1e-10) {
+                    std::string cov_name = as<std::string>(factor_cov_names[j]);
+                    Rcpp::stop("Factor mean covariate '" + cov_name + "' has near-zero variance " +
+                              "(variance = " + std::to_string(cov_var[j]) + "). " +
+                              "This covariate is constant or near-constant and its coefficient " +
+                              "is not identified. Remove it from factor_covariates.");
+                }
+            }
+
+            fm->SetFactorMeanCovariates(covariate_data);
+        }
+    }
+
     // Track which factors are identified via fixed non-zero loadings
     // A factor is identified if at least one component has loading_normalization != NA and != 0
     std::vector<bool> factor_identified(n_fac, false);
@@ -415,6 +478,24 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         // Add correlation parameter offset if present (backward compatibility)
         if (correlation && n_fac == 2) {
             param_offset += 1;
+        }
+    }
+
+    // Add factor mean covariate parameters offset if specified
+    // These parameters come after variance/SE/correlation params
+    if (factor_model.containsElementNamed("factor_covariates") &&
+        !Rf_isNull(factor_model["factor_covariates"])) {
+        CharacterVector factor_cov_names = factor_model["factor_covariates"];
+        int n_cov = factor_cov_names.size();
+        if (n_cov > 0) {
+            // Determine how many factors get mean covariates
+            int n_factors_with_mean;
+            if (fac_struct == FactorStructure::SE_LINEAR || fac_struct == FactorStructure::SE_QUADRATIC) {
+                n_factors_with_mean = n_fac - 1;  // Only input factors
+            } else {
+                n_factors_with_mean = n_fac;
+            }
+            param_offset += n_factors_with_mean * n_cov;
         }
     }
 

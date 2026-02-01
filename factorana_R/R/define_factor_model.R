@@ -13,13 +13,24 @@
 #'   - `"SE_linear"`: Structural equation f_k = alpha + alpha_1*f_1 + ... + epsilon
 #'   - `"SE_quadratic"`: Adds quadratic terms: f_k = alpha + alpha_1*f_1 + alpha_q1*f_1^2 + ... + epsilon
 #' @param n_mixtures Integer. Number of discrete mixtures (default = 1, allowed: 1-3)
+#' @param factor_covariates Character vector. Names of covariates that shift factor means.
+#'   When specified, the factor distribution becomes f_i ~ N((X_i - mean(X)) * gamma, Sigma)
+#'   where X_i is the covariate vector for observation i and gamma is a matrix of coefficients
+#'   (one column per factor). This allows factor means to vary by observed characteristics.
+#'   The covariates must be present in the data passed to \code{estimate_model_rcpp()}.
+#'   **Note:** All covariates are automatically demeaned internally to ensure the overall
+#'   factor mean is zero (required for identification). Including an intercept/constant
+#'   has no effect since it becomes zero after demeaning.
+#'   For SE_linear/SE_quadratic structures, covariates only affect input factor means
+#'   (not the outcome factor which is determined by the structural equation).
 #'
 #' @return An object of class "factor_model"
 #' @export
 define_factor_model <- function(n_factors,
                                 n_types = 1,
                                 factor_structure = "independent",
-                                n_mixtures = 1) {
+                                n_mixtures = 1,
+                                factor_covariates = NULL) {
 
   # ---- 1. Input validation ----
   # Check all arguments are the correct type and within supported range.
@@ -42,6 +53,50 @@ define_factor_model <- function(n_factors,
   if (factor_structure %in% c("SE_linear", "SE_quadratic") && n_factors < 2) {
     stop("Structural equation models require at least 2 factors (1 input + 1 outcome).")
   }
+
+  # Validate factor_covariates
+  if (!is.null(factor_covariates)) {
+    if (!is.character(factor_covariates)) {
+      stop("factor_covariates must be a character vector of covariate names")
+    }
+    if (length(factor_covariates) == 0) {
+      factor_covariates <- NULL
+    } else {
+      # Note: All covariates are automatically demeaned internally to ensure
+      # E[f_k] = 0 for identification (factor mean intercept is not separately
+      # identified from measurement equation intercepts).
+      #
+      # If user includes 'intercept' or 'constant', we REMOVE it because after
+      # demeaning it becomes a column of zeros, making its coefficient unidentified
+      # (gradient is always zero, Hessian is singular for that parameter).
+      intercept_names <- c("intercept", "constant", "Intercept", "Constant", "(Intercept)", "1")
+      intercept_in_covs <- factor_covariates %in% intercept_names
+      if (any(intercept_in_covs)) {
+        removed <- factor_covariates[intercept_in_covs]
+        factor_covariates <- factor_covariates[!intercept_in_covs]
+        message("Removing intercept/constant from factor_covariates: ",
+                paste(removed, collapse = ", "), ". ",
+                "All covariates are automatically demeaned for identification, ",
+                "so a constant term becomes zero (unidentified coefficient).")
+        if (length(factor_covariates) == 0) {
+          factor_covariates <- NULL
+        }
+      }
+    }
+  }
+
+  # Compute number of factor mean parameters
+  # For each covariate, we estimate one coefficient per factor
+  # For SE models, only input factors have mean parameters (outcome factor mean
+  # is determined by the structural equation)
+  n_factor_cov <- if (!is.null(factor_covariates)) length(factor_covariates) else 0L
+  if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
+    # Only input factors get covariate effects on mean
+    n_factors_with_mean <- n_factors - 1L
+  } else {
+    n_factors_with_mean <- n_factors
+  }
+  n_factor_mean_param <- as.integer(n_factor_cov * n_factors_with_mean)
 
   # ---- 2. Compute number of variance/covariance parameters ----
   # Depends on factor_structure:
@@ -85,7 +140,8 @@ define_factor_model <- function(n_factors,
   nfac_param <- as.integer(f_nvariance * n_mixtures +
                              (n_mixtures - 1L) * n_factors +
                              (n_mixtures - 1L) +
-                             nse_param)
+                             nse_param +
+                             n_factor_mean_param)
 
   # ---- 5. Compute type model parameter count ----
   # For n_types > 1, the type probability model has:
@@ -106,6 +162,9 @@ define_factor_model <- function(n_factors,
     nfac_param = nfac_param,
     nse_param = as.integer(nse_param),
     ntyp_param = ntyp_param,
+    factor_covariates = factor_covariates,
+    n_factor_covariates = n_factor_cov,
+    n_factor_mean_param = n_factor_mean_param,
     params = rep(0.0, nfac_param)
   )
 
@@ -127,6 +186,11 @@ print.factor_model <- function(x, ...) {
   } else if (x$factor_structure == "SE_quadratic") {
     cat("  Structural equation: f_k = alpha + alpha_1*f_1 + alpha_q1*f_1^2 + ... + epsilon\n")
     cat("  SE parameters:", x$nse_param, "(intercept, linear coefs, quadratic coefs, residual var)\n")
+  }
+  if (!is.null(x$factor_covariates) && length(x$factor_covariates) > 0) {
+    cat("Factor mean covariates:", paste(x$factor_covariates, collapse = ", "), "\n")
+    cat("  Factor mean parameters:", x$n_factor_mean_param, "\n")
+    cat("  Factor distribution: f_i ~ N(X_i * gamma, Sigma)\n")
   }
   cat("Number of mixtures:", x$n_mixtures, "\n")
   cat("Number of parameters in latent factor distribution:", x$nfac_param, "\n")

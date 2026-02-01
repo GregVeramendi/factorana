@@ -116,11 +116,28 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
         param_names <- c(param_names, "se_residual_var")
       }
 
+      # Add factor mean covariate parameters if specified (for two-stage)
+      factor_covariates <- model_system$factor$factor_covariates
+      if (!is.null(factor_covariates) && length(factor_covariates) > 0) {
+        n_input_factors <- n_factors - 1
+        for (k in seq_len(n_input_factors)) {
+          for (cov_name in factor_covariates) {
+            init_params <- c(init_params, 0.0)
+            param_names <- c(param_names, paste0("factor_mean_", k, "_", cov_name))
+          }
+        }
+        if (verbose) {
+          message(sprintf("Factor mean covariates: %d covariates x %d factors = %d parameters",
+                          length(factor_covariates), n_input_factors,
+                          length(factor_covariates) * n_input_factors))
+        }
+      }
+
       # Add measurement parameters from Stage 1 (only fixed ones)
-      # These are loadings and thresholds (not factor_var or se_ params)
+      # These are loadings and thresholds (not factor_var, se_, factor_mean_, or chol_ params)
       prev_params <- model_system$previous_stage_info$all_param_values
       prev_names <- names(prev_params)
-      meas_idx <- !grepl("^(factor_var|se_|chol_)", prev_names)
+      meas_idx <- !grepl("^(factor_var|se_|chol_|factor_mean_)", prev_names)
       meas_params <- prev_params[meas_idx]
       meas_names <- prev_names[meas_idx]
 
@@ -272,6 +289,35 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
       # Backward compatibility: correlation = TRUE
       init_params <- c(init_params, 0.0)
       param_names <- c(param_names, "factor_corr_1_2")
+    }
+
+    # Add factor mean covariate parameters if specified
+    # These coefficients shift the factor mean: E[f_k | X] = X * gamma_k
+    factor_covariates <- model_system$factor$factor_covariates
+    if (!is.null(factor_covariates) && length(factor_covariates) > 0) {
+      # Determine which factors get mean covariates
+      # For SE models, only input factors get covariates (outcome factor mean is from SE)
+      if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
+        n_factors_with_mean <- n_factors - 1
+      } else {
+        n_factors_with_mean <- n_factors
+      }
+
+      # Add parameters: factor_mean_<factor>_<covariate>
+      # Initialize to 0 (no effect)
+      for (k in seq_len(n_factors_with_mean)) {
+        for (cov_name in factor_covariates) {
+          init_params <- c(init_params, 0.0)
+          param_names <- c(param_names, paste0("factor_mean_", k, "_", cov_name))
+        }
+      }
+
+      if (verbose) {
+        message(sprintf("Factor mean covariates: %d covariates x %d factors = %d parameters",
+                        length(factor_covariates), n_factors_with_mean,
+                        length(factor_covariates) * n_factors_with_mean))
+        message(sprintf("  Covariates: %s", paste(factor_covariates, collapse = ", ")))
+      }
     }
 
     # Add type model parameters if n_types > 1 AND at least one component uses types

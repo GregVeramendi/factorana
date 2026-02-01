@@ -162,8 +162,8 @@ define_model_system <- function(components, factor, previous_stage = NULL, weigh
     # For SE structure Stage 2: only fix measurement parameters, not factor distribution
     if (allow_different_structure) {
       # Identify factor distribution parameters to exclude from fixing
-      # These include: factor_var_*, se_*, chol_* (correlation params)
-      factor_dist_patterns <- c("^factor_var", "^se_", "^chol_")
+      # These include: factor_var_*, se_*, chol_* (correlation params), factor_mean_* (mean covariates)
+      factor_dist_patterns <- c("^factor_var", "^se_", "^chol_", "^factor_mean_")
       factor_dist_params <- unlist(lapply(factor_dist_patterns, function(p) {
         grep(p, all_param_names, value = TRUE)
       }))
