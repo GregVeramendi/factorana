@@ -320,6 +320,23 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
       }
     }
 
+    # Add SE covariate parameters if specified (for SE_linear/SE_quadratic)
+    # These coefficients directly affect the outcome factor: f_k = ... + beta * X + epsilon
+    se_covariates <- model_system$factor$se_covariates
+    if (!is.null(se_covariates) && length(se_covariates) > 0) {
+      # Add parameters: se_cov_<covariate>
+      # Initialize to 0 (no effect)
+      for (cov_name in se_covariates) {
+        init_params <- c(init_params, 0.0)
+        param_names <- c(param_names, paste0("se_cov_", cov_name))
+      }
+
+      if (verbose) {
+        message(sprintf("SE covariates: %d parameters", length(se_covariates)))
+        message(sprintf("  Covariates: %s", paste(se_covariates, collapse = ", ")))
+      }
+    }
+
     # Add type model parameters if n_types > 1 AND at least one component uses types
     # Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
     # (n_types - 1) intercepts + (n_types - 1) * n_factors loadings (type 1 is reference)

@@ -200,6 +200,68 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         }
     }
 
+    // Set up SE covariates if specified (for SE_linear/SE_quadratic)
+    // These directly affect the outcome factor: f_k = ... + beta * X + epsilon
+    if (factor_model.containsElementNamed("se_covariates") &&
+        !Rf_isNull(factor_model["se_covariates"])) {
+        CharacterVector se_cov_names = factor_model["se_covariates"];
+        int n_cov = se_cov_names.size();
+        if (n_cov > 0) {
+            // Find column indices for SE covariates
+            std::vector<int> se_cov_indices(n_cov);
+            for (int j = 0; j < n_cov; j++) {
+                std::string cov_name = as<std::string>(se_cov_names[j]);
+                int idx = -1;
+                for (int k = 0; k < col_names.size(); k++) {
+                    if (std::string(col_names[k]) == cov_name) {
+                        idx = k;
+                        break;
+                    }
+                }
+                if (idx == -1) {
+                    Rcpp::stop("SE covariate '" + cov_name + "' not found in data");
+                }
+                se_cov_indices[j] = idx;
+            }
+
+            // Extract covariate values and compute means
+            std::vector<double> cov_means(n_cov, 0.0);
+            for (int i = 0; i < n_obs; i++) {
+                for (int j = 0; j < n_cov; j++) {
+                    cov_means[j] += data_mat(i, se_cov_indices[j]);
+                }
+            }
+            for (int j = 0; j < n_cov; j++) {
+                cov_means[j] /= static_cast<double>(n_obs);
+            }
+
+            // Extract, demean, and check variance
+            std::vector<std::vector<double>> se_covariate_data(n_obs, std::vector<double>(n_cov));
+            std::vector<double> cov_var(n_cov, 0.0);
+            for (int i = 0; i < n_obs; i++) {
+                for (int j = 0; j < n_cov; j++) {
+                    double demeaned = data_mat(i, se_cov_indices[j]) - cov_means[j];
+                    se_covariate_data[i][j] = demeaned;
+                    cov_var[j] += demeaned * demeaned;
+                }
+            }
+
+            // Check for near-zero variance (constant covariates)
+            for (int j = 0; j < n_cov; j++) {
+                cov_var[j] /= static_cast<double>(n_obs);
+                if (cov_var[j] < 1e-10) {
+                    std::string cov_name = as<std::string>(se_cov_names[j]);
+                    Rcpp::stop("SE covariate '" + cov_name + "' has near-zero variance " +
+                              "(variance = " + std::to_string(cov_var[j]) + "). " +
+                              "This covariate is constant or near-constant and its coefficient " +
+                              "is not identified. Remove it from se_covariates.");
+                }
+            }
+
+            fm->SetSECovariates(se_covariate_data);
+        }
+    }
+
     // Track which factors are identified via fixed non-zero loadings
     // A factor is identified if at least one component has loading_normalization != NA and != 0
     std::vector<bool> factor_identified(n_fac, false);
@@ -496,6 +558,16 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
                 n_factors_with_mean = n_fac;
             }
             param_offset += n_factors_with_mean * n_cov;
+        }
+    }
+
+    // Add SE covariate parameters offset if specified
+    if (factor_model.containsElementNamed("se_covariates") &&
+        !Rf_isNull(factor_model["se_covariates"])) {
+        CharacterVector se_cov_names = factor_model["se_covariates"];
+        int n_se_cov = se_cov_names.size();
+        if (n_se_cov > 0) {
+            param_offset += n_se_cov;
         }
     }
 

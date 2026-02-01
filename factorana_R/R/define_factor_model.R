@@ -23,6 +23,11 @@
 #'   has no effect since it becomes zero after demeaning.
 #'   For SE_linear/SE_quadratic structures, covariates only affect input factor means
 #'   (not the outcome factor which is determined by the structural equation).
+#' @param se_covariates Character vector. Names of covariates that directly affect the
+#'   outcome factor in SE_linear/SE_quadratic models. When specified, the structural
+#'   equation becomes f_k = intercept + sum(alpha_j * f_j) + sum(beta_m * X_m) + epsilon.
+#'   Only valid for factor_structure = "SE_linear" or "SE_quadratic".
+#'   All covariates are automatically demeaned internally for identification.
 #'
 #' @return An object of class "factor_model"
 #' @export
@@ -30,7 +35,8 @@ define_factor_model <- function(n_factors,
                                 n_types = 1,
                                 factor_structure = "independent",
                                 n_mixtures = 1,
-                                factor_covariates = NULL) {
+                                factor_covariates = NULL,
+                                se_covariates = NULL) {
 
   # ---- 1. Input validation ----
   # Check all arguments are the correct type and within supported range.
@@ -85,6 +91,34 @@ define_factor_model <- function(n_factors,
     }
   }
 
+  # Validate se_covariates
+  if (!is.null(se_covariates)) {
+    if (!factor_structure %in% c("SE_linear", "SE_quadratic")) {
+      stop("se_covariates is only valid for factor_structure = 'SE_linear' or 'SE_quadratic'")
+    }
+    if (!is.character(se_covariates)) {
+      stop("se_covariates must be a character vector of covariate names")
+    }
+    if (length(se_covariates) == 0) {
+      se_covariates <- NULL
+    } else {
+      # Remove intercept/constant terms (become zero after demeaning)
+      intercept_names <- c("intercept", "constant", "Intercept", "Constant", "(Intercept)", "1")
+      intercept_in_covs <- se_covariates %in% intercept_names
+      if (any(intercept_in_covs)) {
+        removed <- se_covariates[intercept_in_covs]
+        se_covariates <- se_covariates[!intercept_in_covs]
+        message("Removing intercept/constant from se_covariates: ",
+                paste(removed, collapse = ", "), ". ",
+                "SE covariates are automatically demeaned, ",
+                "so a constant term becomes zero (unidentified coefficient).")
+        if (length(se_covariates) == 0) {
+          se_covariates <- NULL
+        }
+      }
+    }
+  }
+
   # Compute number of factor mean parameters
   # For each covariate, we estimate one coefficient per factor
   # For SE models, only input factors have mean parameters (outcome factor mean
@@ -134,6 +168,10 @@ define_factor_model <- function(n_factors,
     nse_param <- 0L
   }
 
+  # Compute number of SE covariate parameters (one coefficient per covariate)
+  n_se_cov <- if (!is.null(se_covariates)) length(se_covariates) else 0L
+  n_se_covariate_param <- as.integer(n_se_cov)
+
   # ---- 4. Compute total number of parameters for factor distribution ----
   # Combines variances/covariances with mixture-related parameters and SE parameters.
 
@@ -141,7 +179,8 @@ define_factor_model <- function(n_factors,
                              (n_mixtures - 1L) * n_factors +
                              (n_mixtures - 1L) +
                              nse_param +
-                             n_factor_mean_param)
+                             n_factor_mean_param +
+                             n_se_covariate_param)
 
   # ---- 5. Compute type model parameter count ----
   # For n_types > 1, the type probability model has:
@@ -165,6 +204,9 @@ define_factor_model <- function(n_factors,
     factor_covariates = factor_covariates,
     n_factor_covariates = n_factor_cov,
     n_factor_mean_param = n_factor_mean_param,
+    se_covariates = se_covariates,
+    n_se_covariates = n_se_cov,
+    n_se_covariate_param = n_se_covariate_param,
     params = rep(0.0, nfac_param)
   )
 

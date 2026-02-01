@@ -84,6 +84,13 @@ private:
     std::vector<int> factor_mean_covariate_idx; // Column indices in data for each covariate
     std::vector<std::vector<double>> factor_mean_covariate_data;  // [iobs][icov] covariate values
 
+    // SE (structural equation) covariates: f_k = intercept + Σ α_j * f_j + Σ β_m * X_m + ε
+    // Allows covariates to directly affect the outcome factor in SE models
+    bool use_se_covariates;                     // Whether SE covariates are enabled
+    int n_se_covariates;                        // Number of covariates in SE
+    int se_covariate_param_start;               // Starting index for SE covariate params
+    std::vector<std::vector<double>> se_covariate_data;  // [iobs][icov] covariate values (demeaned)
+
     // Parameter organization
     std::vector<int> param_model_start;  // Starting index for each model's parameters
     std::vector<int> param_model_count;  // Number of parameters per model
@@ -139,6 +146,11 @@ public:
     // covariate_data: pre-processed (demeaned) covariate matrix [nobs x n_covariates]
     // The demeaning and variance checking should be done in R before calling this.
     void SetFactorMeanCovariates(const std::vector<std::vector<double>>& covariate_data);
+
+    // Set up SE covariates: f_k = intercept + Σ α_j * f_j + Σ β_m * X_m + ε
+    // covariate_data: pre-processed (demeaned) covariate matrix [nobs x n_covariates]
+    // Only valid for SE_LINEAR and SE_QUADRATIC factor structures.
+    void SetSECovariates(const std::vector<std::vector<double>>& covariate_data);
 
     // Set which parameters are fixed
     void SetParameterConstraints(const std::vector<bool>& fixed);

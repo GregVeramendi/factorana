@@ -15,7 +15,8 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
       n_input_factors(0), n_outcome_factors(0), se_param_start(-1), nse_param(0),
       nquad_points(n_quad), use_weights(false), use_adaptive(false), adapt_threshold(0.3),
       use_factor_mean_covariates(false), n_factor_mean_covariates(0), n_factors_with_mean(0),
-      factor_mean_param_start(-1)
+      factor_mean_param_start(-1),
+      use_se_covariates(false), n_se_covariates(0), se_covariate_param_start(-1)
 {
     data.resize(nobs * nvar);
 
@@ -55,7 +56,8 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
       n_input_factors(0), n_outcome_factors(0), se_param_start(-1), nse_param(0),
       nquad_points(n_quad), use_weights(false), use_adaptive(false), adapt_threshold(0.3),
       use_factor_mean_covariates(false), n_factor_mean_covariates(0), n_factors_with_mean(0),
-      factor_mean_param_start(-1)
+      factor_mean_param_start(-1),
+      use_se_covariates(false), n_se_covariates(0), se_covariate_param_start(-1)
 {
     data.resize(nobs * nvar);
 
@@ -339,6 +341,40 @@ void FactorModel::SetFactorMeanCovariates(const std::vector<std::vector<double>>
     use_factor_mean_covariates = true;
 }
 
+void FactorModel::SetSECovariates(const std::vector<std::vector<double>>& covariate_data)
+{
+    // Only valid for SE models
+    if (factor_structure != FactorStructure::SE_LINEAR &&
+        factor_structure != FactorStructure::SE_QUADRATIC) {
+        throw std::runtime_error("SE covariates are only valid for SE_LINEAR and SE_QUADRATIC factor structures");
+    }
+
+    // Validate input dimensions
+    if (covariate_data.size() != nobs) {
+        throw std::runtime_error("SE covariate data has wrong number of observations: expected " +
+                                 std::to_string(nobs) + " but got " + std::to_string(covariate_data.size()));
+    }
+
+    if (covariate_data.empty() || covariate_data[0].empty()) {
+        use_se_covariates = false;
+        return;
+    }
+
+    n_se_covariates = static_cast<int>(covariate_data[0].size());
+
+    // SE covariate parameters come after all other factor-level parameters
+    // Order: [input_factor_vars | se_params | factor_mean_params | se_covariate_params | model_params]
+    se_covariate_param_start = nparam;  // Current nparam is where SE cov params start
+
+    // Store the pre-processed (demeaned) covariate data
+    se_covariate_data = covariate_data;
+
+    // Update total parameter count
+    nparam += n_se_covariates;
+
+    use_se_covariates = true;
+}
+
 void FactorModel::SetParameterConstraints(const std::vector<bool>& fixed)
 {
     if (fixed.size() != nparam) {
@@ -600,6 +636,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     double se_intercept = 0.0;
     std::vector<double> se_linear_coef(n_input_factors, 0.0);
     std::vector<double> se_quadratic_coef(n_input_factors, 0.0);  // For SE_QUADRATIC
+    std::vector<double> se_covariate_coef;  // Coefficients for SE covariates
     double se_residual_var = 1.0;
     double sigma_eps = 1.0;  // sqrt of residual variance
 
@@ -632,6 +669,14 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
         se_residual_var = std::fabs(param[GetSEResidualVarIndex()]);  // Enforce positivity
         sigma_eps = std::sqrt(se_residual_var);
+
+        // SE covariate coefficients (if enabled)
+        if (use_se_covariates) {
+            se_covariate_coef.resize(n_se_covariates);
+            for (int j = 0; j < n_se_covariates; j++) {
+                se_covariate_coef[j] = param[se_covariate_param_start + j];
+            }
+        }
 
         // Outcome factor variance is derived from SE equation (not a free parameter)
         // Var(f_k) = sum(se_linear_j^2 * Var(f_j)) + se_residual_var
@@ -725,7 +770,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     // This gives us: faster likelihood/gradient from precomputation, fast Hessian from inline
     // NOTE: Cannot use precomputed tables when factor_mean_covariates is enabled because
     // factor_mean varies per observation and tables are precomputed with factor_mean = 0
-    bool use_precomputed_tables = !use_adaptive && (iflag < 3) && !use_factor_mean_covariates;
+    bool use_precomputed_tables = !use_adaptive && (iflag < 3) && !use_factor_mean_covariates && !use_se_covariates;
 
     std::vector<std::vector<double>> fac_val_table;
     std::vector<double> probilk_table;
@@ -921,6 +966,12 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                         // SE_QUADRATIC: add quadratic terms
                         if (factor_structure == FactorStructure::SE_QUADRATIC) {
                             f_outcome += se_quadratic_coef[j] * fac_val[j] * fac_val[j];
+                        }
+                    }
+                    // Add SE covariate contributions
+                    if (use_se_covariates) {
+                        for (int m = 0; m < n_se_covariates; m++) {
+                            f_outcome += se_covariate_coef[m] * se_covariate_data[iobs][m];
                         }
                     }
                     fac_val[nfac - 1] = f_outcome;
@@ -1146,6 +1197,14 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                             double x_eps = x_node_fac[nfac - 1];
                             grad_this_type[GetSEResidualVarIndex()] += dL_dfk * x_eps / (2.0 * sigma_eps);
 
+                            // SE covariate gradients: ∂L/∂β_m = ∂L/∂f_k * X_m
+                            if (use_se_covariates) {
+                                for (int m = 0; m < n_se_covariates; m++) {
+                                    int param_idx = se_covariate_param_start + m;
+                                    grad_this_type[param_idx] += dL_dfk * se_covariate_data[iobs][m];
+                                }
+                            }
+
                         } else if (fac_corr && nfac == 2) {
                             // Correlated 2-factor model: use Cholesky derivatives
                             // Use pre-computed sigma_fac and x_node_fac
@@ -1307,6 +1366,16 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                 // ∂²L/∂σ²_i∂(se_residual_var) = (∂²L/∂f_i∂f_k)(∂f_i/∂σ²_i)(∂f_k/∂σ²_ε) + (∂²L/∂f_k²)(∂f_k/∂σ²_i)(∂f_k/∂σ²_ε)
                                 hess_this_type[i * nparam + se_res_idx] +=
                                     d2L_dfidfk * df_dsigma2[i] * dfk_dres_var + d2L_dfkdfk * dfk_dvar_i * dfk_dres_var;
+
+                                // ∂²L/∂σ²_i∂β_m = (∂²L/∂f_i∂f_k)(∂f_i/∂σ²_i) * X_m + (∂²L/∂f_k²)(∂f_k/∂σ²_i) * X_m
+                                if (use_se_covariates) {
+                                    for (int m = 0; m < n_se_covariates; m++) {
+                                        int se_cov_idx = se_covariate_param_start + m;
+                                        double X_m = se_covariate_data[iobs][m];
+                                        hess_this_type[i * nparam + se_cov_idx] +=
+                                            d2L_dfidfk * df_dsigma2[i] * X_m + d2L_dfkdfk * dfk_dvar_i * X_m;
+                                    }
+                                }
                             }
 
                             // ===== SE parameter terms =====
@@ -1382,6 +1451,65 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                             hess_this_type[se_res_idx * nparam + se_res_idx] +=
                                 d2L_dfkdfk * dfk_dres_var * dfk_dres_var + dL_dfk * d2fk_dres_var2;
 
+                            // ===== SE covariate terms =====
+                            if (use_se_covariates) {
+                                // SE intercept × SE covariate cross-terms
+                                for (int m = 0; m < n_se_covariates; m++) {
+                                    int se_cov_idx = se_covariate_param_start + m;
+                                    double X_m = se_covariate_data[iobs][m];
+                                    // ∂²L/∂(se_intercept)∂β_m = (∂²L/∂f_k²) * 1 * X_m
+                                    hess_this_type[se_int_idx * nparam + se_cov_idx] += d2L_dfkdfk * X_m;
+                                }
+
+                                // SE linear × SE covariate cross-terms
+                                for (int j = 0; j < n_input_factors; j++) {
+                                    int se_lin_idx = GetSELinearIndex(j);
+                                    for (int m = 0; m < n_se_covariates; m++) {
+                                        int se_cov_idx = se_covariate_param_start + m;
+                                        double X_m = se_covariate_data[iobs][m];
+                                        // ∂²L/∂(se_linear_j)∂β_m = (∂²L/∂f_k²) * f_j * X_m
+                                        hess_this_type[se_lin_idx * nparam + se_cov_idx] += d2L_dfkdfk * fac_val[j] * X_m;
+                                    }
+                                }
+
+                                // SE_QUADRATIC: SE quadratic × SE covariate cross-terms
+                                if (factor_structure == FactorStructure::SE_QUADRATIC) {
+                                    for (int j = 0; j < n_input_factors; j++) {
+                                        int se_quad_idx = GetSEQuadraticIndex(j);
+                                        for (int m = 0; m < n_se_covariates; m++) {
+                                            int se_cov_idx = se_covariate_param_start + m;
+                                            double X_m = se_covariate_data[iobs][m];
+                                            // ∂²L/∂(se_quadratic_j)∂β_m = (∂²L/∂f_k²) * f_j² * X_m
+                                            hess_this_type[se_quad_idx * nparam + se_cov_idx] += d2L_dfkdfk * fac_val[j] * fac_val[j] * X_m;
+                                        }
+                                    }
+                                }
+
+                                // SE residual var × SE covariate cross-terms
+                                for (int m = 0; m < n_se_covariates; m++) {
+                                    int se_cov_idx = se_covariate_param_start + m;
+                                    double X_m = se_covariate_data[iobs][m];
+                                    // ∂²L/∂(se_residual_var)∂β_m = (∂²L/∂f_k²) * (∂f_k/∂σ²_ε) * X_m
+                                    hess_this_type[se_res_idx * nparam + se_cov_idx] += d2L_dfkdfk * dfk_dres_var * X_m;
+                                }
+
+                                // SE covariate × SE covariate terms
+                                for (int m = 0; m < n_se_covariates; m++) {
+                                    int se_cov_m = se_covariate_param_start + m;
+                                    double X_m = se_covariate_data[iobs][m];
+
+                                    // Diagonal: (∂²L/∂f_k²) * X_m * X_m
+                                    hess_this_type[se_cov_m * nparam + se_cov_m] += d2L_dfkdfk * X_m * X_m;
+
+                                    // Cross-terms with other SE covariates
+                                    for (int n = m + 1; n < n_se_covariates; n++) {
+                                        int se_cov_n = se_covariate_param_start + n;
+                                        double X_n = se_covariate_data[iobs][n];
+                                        hess_this_type[se_cov_m * nparam + se_cov_n] += d2L_dfkdfk * X_m * X_n;
+                                    }
+                                }
+                            }
+
                             // ===== Cross-terms with model parameters =====
                             for (int iparam = 0; iparam < base_param_count_hess; iparam++) {
                                 int param_idx = firstpar + iparam;
@@ -1415,6 +1543,16 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                 }
 
                                 hess_this_type[se_res_idx * nparam + param_idx] += d2L_dfk_dparam * dfk_dres_var;
+
+                                // SE covariate × model param
+                                if (use_se_covariates) {
+                                    for (int m = 0; m < n_se_covariates; m++) {
+                                        int se_cov_idx = se_covariate_param_start + m;
+                                        double X_m = se_covariate_data[iobs][m];
+                                        // ∂²L/∂β_m∂(model_param) = (∂²L/∂f_k∂param) * X_m
+                                        hess_this_type[se_cov_idx * nparam + param_idx] += d2L_dfk_dparam * X_m;
+                                    }
+                                }
                             }
 
                             // ===== Model param × model param =====

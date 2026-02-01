@@ -197,6 +197,16 @@ build_parameter_metadata <- function(model_system) {
     }
   }
 
+  # Add SE covariate parameters if specified (for SE_linear/SE_quadratic)
+  se_covariates <- model_system$factor$se_covariates
+  if (!is.null(se_covariates) && length(se_covariates) > 0) {
+    for (cov_name in se_covariates) {
+      param_names <- c(param_names, sprintf("se_cov_%s", cov_name))
+      param_types <- c(param_types, "se_covariate")
+      component_id <- c(component_id, 0)  # 0 = factor model
+    }
+  }
+
   # Add type model parameters if n_types > 1 and at least one component uses types
   # Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
   # (n_types - 1) intercepts + (n_types - 1) * n_factors loadings (type 1 is reference)
