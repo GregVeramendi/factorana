@@ -659,7 +659,6 @@ test_that("3-type 2-factor model parameter recovery with full 2nd order outcomes
   expect_true(is.na(get_est("T6_type_2_intercept")))
   expect_true(is.na(get_est("T6_type_3_intercept")))
 
-  # Check that convergence was achieved
-
-  expect_true(result$convergence == 0 || result$convergence == 1)
+  # Check that convergence was achieved (0 = success in nlminb)
+  expect_equal(result$convergence, 0)
 })

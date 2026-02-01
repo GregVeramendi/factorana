@@ -79,6 +79,8 @@ test_that("Fixed coefficients work in linear model", {
     verbose = FALSE
   )
 
+  # Check convergence
+  expect_equal(result$convergence, 0)
   expect_true(!is.null(result))
   expect_true(!is.null(result$estimates))
 
@@ -134,6 +136,8 @@ test_that("Fixed coefficients work in probit model", {
     verbose = FALSE
   )
 
+  # Check convergence
+  expect_equal(result$convergence, 0)
   expect_true(!is.null(result))
 
   # Verify parameter count includes all params (fixed ones at their fixed values)
@@ -185,6 +189,8 @@ test_that("Multiple fixed coefficients work", {
     verbose = FALSE
   )
 
+  # Check convergence
+  expect_equal(result$convergence, 0)
   expect_true(!is.null(result))
 
   # Verify parameter count includes all params (fixed ones at their fixed values)
@@ -248,6 +254,8 @@ test_that("Fixed coefficients with choice for multinomial logit", {
     verbose = FALSE
   )
 
+  # Check convergence
+  expect_equal(result$convergence, 0)
   expect_true(!is.null(result))
 
   # Verify parameter count includes all params (fixed ones at their fixed values)

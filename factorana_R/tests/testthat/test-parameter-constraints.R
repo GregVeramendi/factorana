@@ -34,7 +34,8 @@ test_that("Parameter constraints work correctly", {
     verbose = FALSE
   )
 
-  # Test that estimation completed successfully
+  # Test that estimation converged successfully
+  expect_equal(result$convergence, 0)
   expect_true(!is.null(result))
   expect_true(!is.null(result$loglik))
   expect_true(!is.null(result$estimates))
@@ -89,6 +90,7 @@ test_that("Free parameter optimization works", {
   )
 
   # Check convergence
+  expect_equal(result$convergence, 0)
   expect_true(!is.null(result$loglik))
 
   # Check parameters are reasonable

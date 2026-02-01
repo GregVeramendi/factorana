@@ -73,9 +73,9 @@ cat("Factor model:\n")
 print(Factor)
 cat("\n")
 
-# Define model components
-# Y1 and Y2 load on f_1 (input factor)
-# Y3 and Y4 load on f_2 (outcome factor)
+# Define model components with SIMPLE STRUCTURE (no cross-loadings)
+# Y1 and Y2 load ONLY on f_1 (input factor)
+# Y3 and Y4 load ONLY on f_2 (outcome factor)
 comp1 <- define_model_component(
   name = "Y1",
   data = dat,
@@ -84,7 +84,7 @@ comp1 <- define_model_component(
   covariates = NULL,
   model_type = "linear",
   intercept = FALSE,
-  loading_normalization = c(1, NA_real_)  # Fix loading on f_1 to 1, NA for f_2
+  loading_normalization = c(1, 0)  # Fix loading on f_1 to 1, f_2 to 0
 )
 
 comp2 <- define_model_component(
@@ -95,7 +95,7 @@ comp2 <- define_model_component(
   covariates = NULL,
   model_type = "linear",
   intercept = FALSE,
-  loading_normalization = c(NA_real_, NA_real_)  # Free loading on f_1
+  loading_normalization = c(NA_real_, 0)  # Free loading on f_1, f_2 fixed to 0
 )
 
 comp3 <- define_model_component(
@@ -106,7 +106,7 @@ comp3 <- define_model_component(
   covariates = NULL,
   model_type = "linear",
   intercept = FALSE,
-  loading_normalization = c(NA_real_, 1)  # Fix loading on f_2 to 1
+  loading_normalization = c(0, 1)  # f_1 fixed to 0, f_2 fixed to 1
 )
 
 comp4 <- define_model_component(
@@ -117,7 +117,7 @@ comp4 <- define_model_component(
   covariates = NULL,
   model_type = "linear",
   intercept = FALSE,
-  loading_normalization = NULL  # All free
+  loading_normalization = c(0, NA_real_)  # f_1 fixed to 0, free loading on f_2
 )
 
 model_system <- define_model_system(
@@ -358,16 +358,34 @@ cat(sprintf("  %-25s %12.4f %12.4f %12.4f\n", "Y4_loading_2", true_loading_Y4, e
 
 cat("\n")
 
-# Check if key parameters are within 2 SEs of true values
-beta_in_ci <- abs(est_beta - true_se_beta) < 2 * se_beta
-linear_in_ci <- abs(est_lin - true_se_linear) < 2 * se_lin
+# Check convergence first (0 = success in nlminb)
+converged <- (result_est$convergence == 0)
+cat("Convergence status:", result_est$convergence, "(0 = success)\n")
+
+# Check that SEs are reasonable (not absurdly large)
+max_reasonable_se <- 10
+se_beta_ok <- !is.na(se_beta) && se_beta < max_reasonable_se
+se_lin_ok <- !is.na(se_lin) && se_lin < max_reasonable_se
+cat("SE for beta reasonable (< 10):", se_beta_ok, "(", round(se_beta, 4), ")\n")
+cat("SE for linear reasonable (< 10):", se_lin_ok, "(", round(se_lin, 4), ")\n")
+
+# Check if key parameters are within 2 SEs of true values (only meaningful if SEs are reasonable)
+beta_in_ci <- se_beta_ok && abs(est_beta - true_se_beta) < 2 * se_beta
+linear_in_ci <- se_lin_ok && abs(est_lin - true_se_linear) < 2 * se_lin
 cat("SE covariate (beta) within 2 SEs of true:", beta_in_ci, "\n")
 cat("SE linear (alpha_1) within 2 SEs of true:", linear_in_ci, "\n")
 
-if (beta_in_ci && linear_in_ci) {
+# All checks must pass
+all_passed <- converged && se_beta_ok && se_lin_ok && beta_in_ci && linear_in_ci
+if (all_passed) {
   cat("PARAMETER RECOVERY: PASSED\n")
 } else {
-  cat("PARAMETER RECOVERY: CHECK MANUALLY\n")
+  cat("PARAMETER RECOVERY: FAILED\n")
+  if (!converged) cat("  - Model did not converge\n")
+  if (!se_beta_ok) cat("  - SE for beta is unreasonable\n")
+  if (!se_lin_ok) cat("  - SE for linear is unreasonable\n")
+  if (se_beta_ok && !beta_in_ci) cat("  - Beta estimate not within 2 SEs of true\n")
+  if (se_lin_ok && !linear_in_ci) cat("  - Linear estimate not within 2 SEs of true\n")
 }
 
 cat("\n========================================\n")
