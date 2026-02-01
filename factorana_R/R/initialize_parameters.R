@@ -116,6 +116,19 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
         param_names <- c(param_names, "se_residual_var")
       }
 
+      # Add SE covariate parameters if specified (for two-stage SE_linear/SE_quadratic)
+      se_covariates <- model_system$factor$se_covariates
+      if (!is.null(se_covariates) && length(se_covariates) > 0) {
+        for (cov_name in se_covariates) {
+          init_params <- c(init_params, 0.0)
+          param_names <- c(param_names, paste0("se_cov_", cov_name))
+        }
+        if (verbose) {
+          message(sprintf("SE covariates (two-stage): %d parameters", length(se_covariates)))
+          message(sprintf("  Covariates: %s", paste(se_covariates, collapse = ", ")))
+        }
+      }
+
       # Add factor mean covariate parameters if specified (for two-stage)
       factor_covariates <- model_system$factor$factor_covariates
       if (!is.null(factor_covariates) && length(factor_covariates) > 0) {
