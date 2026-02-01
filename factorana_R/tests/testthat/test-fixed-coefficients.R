@@ -114,11 +114,11 @@ test_that("Fixed coefficients work in probit model", {
   mc <- define_model_component(
     name = "Y", data = dat, outcome = "Y", factor = fm,
     covariates = c("intercept", "x1"), model_type = "probit",
-    loading_normalization = NA_real_, evaluation_indicator = "eval"
+    loading_normalization = 1, evaluation_indicator = "eval"  # Fix loading for identification
   )
 
   # Count parameters before fixing
-  # Probit: fac_var(1) + intercept(1) + x1(1) + loading(1) = 4
+  # Probit: fac_var(1) + intercept(1) + x1(1) = 3 (loading fixed to 1)
   ms_before <- define_model_system(components = list(mc), factor = fm)
   n_params_before <- sum(sapply(ms_before$components, function(c) c$nparam_model)) + fm$n_factors
 
