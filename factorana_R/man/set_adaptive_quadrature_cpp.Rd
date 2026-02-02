@@ -9,7 +9,7 @@ set_adaptive_quadrature_cpp(
   factor_scores,
   factor_ses,
   factor_vars,
-  threshold = 0.3,
+  threshold = 0.5,
   max_quad = 16L,
   verbose = TRUE
 )
@@ -23,7 +23,7 @@ set_adaptive_quadrature_cpp(
 
 \item{factor_vars}{Vector (n_factors) of factor variances from previous stage}
 
-\item{threshold}{Threshold for determining quadrature points (default 0.3)}
+\item{threshold}{Threshold for determining quadrature points (default 0.5, matching legacy)}
 
 \item{max_quad}{Maximum quadrature points per factor (default 16)}
 

@@ -9,7 +9,9 @@ estimate_factorscores_rcpp(
   data,
   control = NULL,
   parallel = FALSE,
-  verbose = TRUE
+  verbose = TRUE,
+  include_prior = FALSE,
+  id_var = NULL
 )
 }
 \arguments{
@@ -23,11 +25,24 @@ estimate_factorscores_rcpp(
 When TRUE, uses the num_cores setting from control.}
 
 \item{verbose}{Whether to print progress (default TRUE)}
+
+\item{include_prior}{Whether to include the factor prior in likelihood/SE
+computation (default FALSE). When FALSE, matches legacy C++ behavior where
+SEs are based only on observation likelihood. When TRUE, includes the prior
+contribution to the Hessian, resulting in smaller SEs.}
+
+\item{id_var}{Optional character string specifying the name of an ID variable
+in data. If provided, this variable is included in the output data frame for
+easier merging with other datasets. The ID values are taken from the original
+data in the order observations were processed. Note: The ID column must be
+numeric (not character) since data is converted to a numeric matrix. For
+character IDs, use the obs_id column to merge with your original data.}
 }
 \value{
 A data frame with columns:
 \itemize{
 \item \code{obs_id} - Observation index (1-based)
+\item \code{<id_var>} - ID variable values (if id_var was specified)
 \item \code{factor_1, factor_2, ...} - Estimated factor scores
 \item \code{se_factor_1, se_factor_2, ...} - Standard errors
 \item \code{converged} - Whether optimization converged for this observation
@@ -52,7 +67,10 @@ where:
 }
 
 Standard errors are computed from the diagonal of the inverse Hessian
-of the log-posterior at the mode.
+of the log-posterior at the mode. By default (include_prior=FALSE), the SE
+is based only on the observation likelihood Hessian, matching the legacy
+C++ implementation. Set include_prior=TRUE to include the prior's Hessian
+contribution (-1/sigma^2) which produces smaller SEs.
 
 When parallel=TRUE, observations are distributed across cores using
 doParallel/foreach, with each worker processing a subset of observations.

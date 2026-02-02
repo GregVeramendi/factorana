@@ -1,15 +1,11 @@
 
 # ------- Helper function: initialize parameters for a single model component ---------
 
-#' Initialize parameters for a single model component
-#'
-#' Runs regression without factors and sets initial parameter values
-#'
-#' @param mc A model_component object
-#'
-#' @return a list of initialized parameters
-
-initialize_parameters <- function(mc) {
+# Internal: Initialize parameters for a single model component
+# Runs regression without factors and sets initial parameter values
+# @param mc A model_component object
+# @return a list of initialized parameters
+init_single_component <- function(mc) {
   df0 <- as.data.frame(mc$data)
 
   # ---- 1. Apply evaluation indicator & drop missing outcomes ----
@@ -91,9 +87,6 @@ initialize_parameters <- function(mc) {
 
   } else if (model_type == "logit") {
     # (If this is truly binary logit, glm(binomial(link="logit")) is more typical.)
-    if (!requireNamespace("nnet", quietly = TRUE)) {
-      stop("Package 'nnet' is required for multinomial logit initialization.")
-    }
     fit <- nnet::multinom(y ~ ., data = df, trace = FALSE)
     coefs <- coef(fit)
     out <- list(
@@ -240,7 +233,6 @@ compute_se_for_component <- function(mc) {
     fit <- stats::glm(y ~ ., data = df, family = binomial(link = "probit"))
     sevec <- summary(fit)$coefficients[, "Std. Error"]
   } else if (mt == "logit") {
-    if (!requireNamespace("nnet", quietly = TRUE)) stop("Need 'nnet' for multinomial logit SEs.")
     fit <- nnet::multinom(y ~ ., data = df, trace = FALSE)
     seobj <- summary(fit)$standard.errors
     sevec <- if (is.matrix(seobj)) seobj[1, ] else as.numeric(seobj)
@@ -354,10 +346,10 @@ write_meas_par <- function(values, ses, path = file.path("results","meas_par.txt
 
 # ---- generic: flatten to key-value rows -----------------------------------
 
-#define an S3 generic
-#When you call as_kv(obj), R will look at class(obj) and dispatch to as_kv.<class>(obj)
+#' Convert object to key-value format (internal)
+#' @param x Object to convert
+#' @param ... Additional arguments
 #' @keywords internal
-#' @export
 as_kv <- function(x, ...) UseMethod("as_kv")
 
 
@@ -366,8 +358,8 @@ as_kv <- function(x, ...) UseMethod("as_kv")
 
 # ---- estimation_control ----------------------------------------------------
 
-#' @keywords internal
-#' @export
+#' @rdname as_kv
+#' @exportS3Method
 as_kv.estimation_control <- function(x, ...) {
   # adjust keys to whatever your estimation_control actually stores in future if change
   keys   <- c("n_quad_points", "num_cores")
@@ -383,8 +375,8 @@ as_kv.estimation_control <- function(x, ...) {
 
 # ---- factor_model ----------------------------------------------------------
 
-#' @keywords internal
-#' @export
+#' @rdname as_kv
+#' @exportS3Method
 as_kv.factor_model <- function(x, ...) {
   keys <- c("n_factors","n_types","correlation","n_mixtures","nfac_param")
   vals <- c(.to_chr(x$n_factors),
@@ -403,8 +395,8 @@ as_kv.factor_model <- function(x, ...) {
 
 # ---- model_component -------------------------------------------------------
 
-#' @keywords internal
-#' @export
+#' @rdname as_kv
+#' @exportS3Method
 as_kv.model_component <- function(x, ...) {
   comp <- if (!is.null(x$name) && nzchar(x$name) && !is.na(x$name)) x$name else ""
   rows <- list(
@@ -432,9 +424,8 @@ as_kv.model_component <- function(x, ...) {
 
 # ---- model_system aggregator + writer -------------------------------------
 
-#' Return KV rows for a model_system (system-level + all components)
-#' @keywords internal
-#' @export
+#' @rdname as_kv
+#' @exportS3Method
 as_kv.model_system <- function(x, ...) {
   stopifnot(inherits(x, "model_system"))
   comps <- x$components

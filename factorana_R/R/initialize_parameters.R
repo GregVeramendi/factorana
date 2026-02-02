@@ -708,10 +708,6 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
 
       } else {
         # Multinomial logit
-        if (!requireNamespace("nnet", quietly = TRUE)) {
-          stop("nnet package required for multinomial logit initialization. Install with: install.packages('nnet')")
-        }
-
         # Prepare factor scores if using them for loading estimation
         loading_init_by_choice <- NULL
         if (use_factor_scores && n_free_loadings > 0) {
@@ -864,10 +860,6 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
 
     } else if (comp$model_type == "oprobit") {
       # Ordered probit - optionally include factor scores to estimate loadings
-      if (!requireNamespace("MASS", quietly = TRUE)) {
-        stop("MASS package required for ordered probit initialization. Install with: install.packages('MASS')")
-      }
-
       loading_init <- rep(0.5, n_free_loadings)  # Default loading initialization
 
       # For ordered probit, intercept is not identified (absorbed into thresholds)

@@ -9,7 +9,8 @@ define_model_system(
   factor,
   previous_stage = NULL,
   weights = NULL,
-  equality_constraints = NULL
+  equality_constraints = NULL,
+  free_params = NULL
 )
 }
 \arguments{
@@ -34,6 +35,13 @@ The first parameter in each group is the "primary" (freely estimated), and all
 other parameters in the group are set equal to the primary.
 Example: \code{list(c("Y1_loading_1", "Y2_loading_2"), c("Y1_sigma", "Y2_sigma"))}
 This is useful for measurement invariance constraints in longitudinal models.}
+
+\item{free_params}{Optional. A character vector of parameter names from previous_stage
+that should remain FREE (not fixed) in the current stage. This allows selectively
+freeing specific parameters while keeping others fixed. Commonly used to free
+factor variances while keeping measurement loadings/thresholds fixed.
+Example: \code{c("factor_var_1", "factor_var_2")} to free factor variances.
+Only used when previous_stage is provided.}
 }
 \value{
 An object of class "model_system". A list of model_component objects and one factor_model object.

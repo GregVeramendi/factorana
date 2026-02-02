@@ -1,17 +1,8 @@
 ## Makevars for factorana
 
-## Suppress warnings from Eigen headers (works on both GCC and Clang)
+## Suppress warnings from Eigen headers
 PKG_CPPFLAGS = -DEIGEN_PERMANENTLY_DISABLE_STUPID_WARNINGS
 
-## Use O2 for optimization, suppress Eigen-related warnings
-PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) -O2 -Wno-unused-but-set-variable -Wno-ignored-attributes
-
-## OS-specific libraries
-## On macOS: link against Accelerate framework for optimized math
-## On Linux: just use standard libs (could add -lopenblas if available)
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Darwin)
-    PKG_LIBS = $(SHLIB_OPENMP_LDFLAGS) -framework Accelerate
-else
-    PKG_LIBS = $(SHLIB_OPENMP_LDFLAGS)
-endif
+## Standard compilation flags
+PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS)
+PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS)

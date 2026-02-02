@@ -15,8 +15,12 @@ define_model_component(
   intercept = TRUE,
   num_choices = 2,
   nrank = NULL,
+  exclude_chosen = TRUE,
+  rankshare_var = NULL,
   loading_normalization = NULL,
-  factor_spec = c("linear", "quadratic", "interactions", "full")
+  factor_spec = c("linear", "quadratic", "interactions", "full"),
+  use_types = FALSE,
+  skip_collinearity_check = FALSE
 )
 }
 \arguments{
@@ -40,11 +44,20 @@ define_model_component(
 
 \item{nrank}{Integer (optional). Rank for exploded multinomial logit.}
 
+\item{exclude_chosen}{Logical. For exploded logit, whether to exclude already-chosen
+alternatives from later ranks (default TRUE). Set to FALSE for exploded nested logit
+where the same nest can be chosen multiple times.}
+
+\item{rankshare_var}{Character (optional). Column name (or prefix) for rank-share
+correction variables. These provide rank-and-choice-specific adjustments to the
+linear predictor. Data layout: (num_choices-1) * nrank columns, accessed as
+rankshare_var + (num_choices-1)*irank + icat for irank=0..nrank-1, icat=0..num_choices-2.}
+
 \item{loading_normalization}{Numeric vector of length \code{n_factors} (optional).
 Component-specific loading constraints. Overrides factor model normalization.
 \itemize{
-\item \code{NA} → loading is free (estimated).
-\item numeric value → loading is fixed at that value (e.g. \code{1} for identification).
+\item \code{NA} --> loading is free (estimated).
+\item numeric value --> loading is fixed at that value (e.g. \code{1} for identification).
 If NULL, uses the factor model's default normalization.
 }}
 
@@ -56,6 +69,16 @@ If NULL, uses the factor model's default normalization.
 \item \code{"full"}: Linear + quadratic + interaction terms
 Note: Interaction terms require n_factors >= 2.
 }}
+
+\item{use_types}{Logical. Whether this component uses type-specific intercepts
+when n_types > 1 in the factor model. Default FALSE. When TRUE and n_types > 1,
+the component will have (n_types - 1) type-specific intercept parameters that
+shift the linear predictor for each non-reference type. This allows types to
+affect outcome models while keeping measurement models type-invariant.}
+
+\item{skip_collinearity_check}{Logical. If TRUE, skip the multicollinearity check
+on the design matrix. Useful when many coefficients will be fixed via fix_coefficient()
+after component creation, which resolves the collinearity. Default FALSE.}
 }
 \value{
 An object of class "model_component". A list representing the model component

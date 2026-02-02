@@ -1028,8 +1028,8 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
         if (obsCat < 0 || obsCat >= numchoice) {
             if (numrank == 1) {
                 // For standard logit, invalid choice is an error
-                std::cerr << "ERROR: Invalid multinomial choice " << int(rank_outcome)
-                          << " (must be 1 to " << numchoice << ")" << std::endl;
+                Rf_warning("Invalid multinomial choice %d (must be 1 to %d)",
+                           int(rank_outcome), numchoice);
                 modEval[0] = 1e-100;
                 return;
             }

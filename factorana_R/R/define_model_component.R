@@ -19,8 +19,8 @@
 #'   rankshare_var + (num_choices-1)*irank + icat for irank=0..nrank-1, icat=0..num_choices-2.
 #' @param loading_normalization Numeric vector of length `n_factors` (optional).
 #'   Component-specific loading constraints. Overrides factor model normalization.
-#'   - `NA` → loading is free (estimated).
-#'   - numeric value → loading is fixed at that value (e.g. `1` for identification).
+#'   - `NA` --> loading is free (estimated).
+#'   - numeric value --> loading is fixed at that value (e.g. `1` for identification).
 #'   If NULL, uses the factor model's default normalization.
 #' @param factor_spec Character. Specification for factor terms in linear predictor.
 #'   - `"linear"` (default): Only linear factor terms (lambda * f)
@@ -254,7 +254,7 @@ define_model_component <- function(name,
   idx <- rep(TRUE, nrow(data))
 
   # ---- 7. Ordered probit handling ----
-  # Convert numeric or unordered factor outcomes to ordered factor with ≥3 categories
+  # Convert numeric or unordered factor outcomes to ordered factor with >= 3 categories
   if (model_type == "oprobit") {
     y_sub <- data[[outcome]]
 
@@ -272,7 +272,7 @@ define_model_component <- function(name,
     }
 
     if (nlevels(y_sub) < 3L)
-      stop("Ordered probit requires an outcome with ≥ 3 ordered categories.")
+      stop("Ordered probit requires an outcome with >= 3 ordered categories.")
 
     data[[outcome]] <- y_sub
   }
@@ -515,20 +515,27 @@ define_model_component <- function(name,
 # ---- S3 methods: getters and printers ----
 
 
-#' @export
-get_component_name <- function(x, ...) UseMethod("get_component_name") #this is the S3 generic
+#' Get component name (internal)
+#' @param x Object to extract name from
+#' @param ... Additional arguments
+#' @keywords internal
+get_component_name <- function(x, ...) UseMethod("get_component_name")
 
-#' @export
+#' @rdname get_component_name
+#' @exportS3Method
 get_component_name.model_component <- function(x, ...) {
   nm <- x$name
   if (is.null(nm) || is.na(nm) || !nzchar(nm)) NA_character_ else nm
 }
 
-# Getter for factor (S3 generic + method)
-#' @export
-get_factor <- function(x, ...) UseMethod("get_factor") #S3 generic
+#' Get factor from component (internal)
+#' @param x Object to extract factor from
+#' @param ... Additional arguments
+#' @keywords internal
+get_factor <- function(x, ...) UseMethod("get_factor")
 
-#' @export
+#' @rdname get_factor
+#' @exportS3Method
 get_factor.model_component <- function(x, ...) {
   return(x$factor)
 }

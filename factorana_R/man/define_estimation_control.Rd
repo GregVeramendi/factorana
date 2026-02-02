@@ -9,7 +9,7 @@ define_estimation_control(
   num_cores = 1,
   cluster_type = "auto",
   adaptive_integration = FALSE,
-  adapt_int_thresh = 0.3
+  adapt_int_thresh = 0.5
 )
 }
 \arguments{
@@ -26,10 +26,11 @@ define_estimation_control(
 (default = FALSE). When TRUE, the number of quadrature points per observation is determined
 based on the standard error of factor scores from a previous estimation stage.}
 
-\item{adapt_int_thresh}{Numeric. Threshold for adaptive integration (default = 0.3).
+\item{adapt_int_thresh}{Numeric. Threshold for adaptive integration (default = 0.5).
 Smaller values use more integration points. The formula is:
 \code{n_quad_obs = 1 + 2 * floor(factor_se / factor_var / adapt_int_thresh)}.
-When factor_se is small relative to factor variance, fewer quadrature points are used.}
+When factor_se is small relative to factor variance, fewer quadrature points are used.
+Legacy code default is 0.5.}
 }
 \value{
 An object of class estimation_control containing control settings

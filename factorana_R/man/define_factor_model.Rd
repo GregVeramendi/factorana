@@ -8,7 +8,9 @@ define_factor_model(
   n_factors,
   n_types = 1,
   factor_structure = "independent",
-  n_mixtures = 1
+  n_mixtures = 1,
+  factor_covariates = NULL,
+  se_covariates = NULL
 )
 }
 \arguments{
@@ -25,6 +27,23 @@ define_factor_model(
 }}
 
 \item{n_mixtures}{Integer. Number of discrete mixtures (default = 1, allowed: 1-3)}
+
+\item{factor_covariates}{Character vector. Names of covariates that shift factor means.
+When specified, the factor distribution becomes f_i ~ N((X_i - mean(X)) * gamma, Sigma)
+where X_i is the covariate vector for observation i and gamma is a matrix of coefficients
+(one column per factor). This allows factor means to vary by observed characteristics.
+The covariates must be present in the data passed to \code{estimate_model_rcpp()}.
+\strong{Note:} All covariates are automatically demeaned internally to ensure the overall
+factor mean is zero (required for identification). Including an intercept/constant
+has no effect since it becomes zero after demeaning.
+For SE_linear/SE_quadratic structures, covariates only affect input factor means
+(not the outcome factor which is determined by the structural equation).}
+
+\item{se_covariates}{Character vector. Names of covariates that directly affect the
+outcome factor in SE_linear/SE_quadratic models. When specified, the structural
+equation becomes f_k = intercept + sum(alpha_j * f_j) + sum(beta_m * X_m) + epsilon.
+Only valid for factor_structure = "SE_linear" or "SE_quadratic".
+All covariates are automatically demeaned internally for identification.}
 }
 \value{
 An object of class "factor_model"

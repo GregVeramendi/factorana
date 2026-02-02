@@ -15,10 +15,12 @@ test_that("Parallelization: Roy model with 1, 2, and 4 cores produces identical 
   skip_on_cran()
   # Skip when tests run in parallel (timing-based speedup test is unreliable under load)
   # This test should be run standalone: devtools::test(filter = "parallelization")
+  # Also skip when CRAN check limits cores (even with NOT_CRAN=true)
   skip_if(
     identical(Sys.getenv("TESTTHAT_PARALLEL"), "TRUE") ||
     parallel::detectCores() < 4 ||
-    isTRUE(getOption("testthat.parallel")),
+    isTRUE(getOption("testthat.parallel")) ||
+    nzchar(Sys.getenv("_R_CHECK_LIMIT_CORES_")),
     "Skipping parallelization timing test (run standalone with: devtools::test(filter='parallelization'))"
   )
 

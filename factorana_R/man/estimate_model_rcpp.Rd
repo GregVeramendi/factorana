@@ -12,7 +12,12 @@ estimate_model_rcpp(
   optimizer = "nlminb",
   parallel = TRUE,
   verbose = TRUE,
-  max_restarts = 5
+  max_restarts = 5,
+  factor_scores = NULL,
+  factor_ses = NULL,
+  factor_vars = NULL,
+  init_factor_scores = NULL,
+  checkpoint_file = NULL
 )
 }
 \arguments{
@@ -38,6 +43,27 @@ estimate_model_rcpp(
 
 \item{max_restarts}{Maximum number of eigenvector-based restarts for escaping
 saddle points (default 5). Set to 0 to disable.}
+
+\item{factor_scores}{Matrix (n_obs x n_factors) of factor score estimates from
+a previous stage. Used for adaptive quadrature. (default NULL)}
+
+\item{factor_ses}{Matrix (n_obs x n_factors) of factor score standard errors
+from a previous stage. Used for adaptive quadrature. (default NULL)}
+
+\item{factor_vars}{Named numeric vector of factor variances from a previous
+stage. Used for adaptive quadrature. (default NULL)}
+
+\item{init_factor_scores}{Matrix (n_obs x n_factors) of factor scores to use
+for initializing factor loadings. When provided, loadings are estimated by
+treating factor scores as regressors, giving better starting values than
+the default (0.5). Useful for two-stage estimation where Stage 1 factor
+scores can improve Stage 2 initialization. (default NULL)}
+
+\item{checkpoint_file}{Path to file for saving checkpoint parameters during
+optimization. When specified, parameters are saved each time the Hessian is
+evaluated at a point with improved likelihood. Useful for long-running
+estimations that may need to be restarted. The file contains parameter names
+and values as CSV with metadata headers. (default NULL = no checkpointing)}
 }
 \value{
 List with parameter estimates, standard errors, log-likelihood, etc.

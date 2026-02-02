@@ -10,7 +10,8 @@ evaluate_factorscore_likelihood_cpp(
   factor_values,
   model_params,
   compute_gradient = FALSE,
-  compute_hessian = FALSE
+  compute_hessian = FALSE,
+  include_prior = TRUE
 )
 }
 \arguments{
@@ -25,6 +26,9 @@ evaluate_factorscore_likelihood_cpp(
 \item{compute_gradient}{Whether to compute gradient (default FALSE)}
 
 \item{compute_hessian}{Whether to compute Hessian (default FALSE)}
+
+\item{include_prior}{Whether to include factor prior in likelihood (default TRUE).
+Set to FALSE to match legacy C++ behavior (observation likelihood only).}
 }
 \value{
 List with log-likelihood, gradient (if requested), and Hessian (if requested)
