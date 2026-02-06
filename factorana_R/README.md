@@ -415,7 +415,7 @@ For large-scale two-stage estimation, adaptive integration dramatically reduces 
 - **Medium SE**: Fewer points with importance sampling correction
 - **Large SE** (factor poorly identified): Full quadrature at prior mean
 
-**Formula:** `n_quad_obs = 1 + 2 × floor(factor_se / factor_variance / threshold)`
+**Formula:** `n_quad_obs = 1 + 2 × floor(factor_se / factor_sd / threshold)`
 
 <details>
 <summary><b>Click to expand adaptive integration example</b></summary>
@@ -527,69 +527,6 @@ result <- estimate_model_rcpp(ms, data, control = ctrl, verbose = TRUE)
 - Weights must be positive (warning if any are ≤ 0)
 - Weights cannot contain NA values
 - Each observation's log-likelihood contribution is multiplied by its weight
-
----
-
-## Checkpointing (Long-Running Estimations)
-
-For estimations that may take hours or days, the `checkpoint_file` parameter saves parameters periodically so you can restart from the last checkpoint if needed.
-
-<details>
-<summary><b>Click to expand checkpointing example</b></summary>
-
-```r
-library(factorana)
-
-# Run estimation with checkpointing enabled
-result <- estimate_model_rcpp(
-  model_system = ms,
-  data = dat,
-  control = control,
-  checkpoint_file = "my_checkpoint.txt"  # Parameters saved here
-)
-```
-
-**How it works:**
-- Parameters are saved each time the Hessian is evaluated at a point with improved likelihood
-- This "smart" approach only saves when the likelihood actually improves, not every iteration
-- The checkpoint file contains a header with metadata plus parameter names/values in CSV format
-
-**Example checkpoint file:**
-```
-# Checkpoint saved: 2026-01-22 16:18:33
-# Log-likelihood: -502.64076359
-# Iteration: 8
-
-"parameter","value"
-"factor_var_1",0.718778794640373
-"m1_intercept",-0.00617248432231106
-"m1_sigma",0.607418329076786
-...
-```
-
-**Restarting from a checkpoint:**
-
-```r
-# Read checkpoint file (comment.char skips the header lines)
-checkpoint <- read.csv("my_checkpoint.txt", comment.char = "#")
-init_params <- setNames(checkpoint$value, checkpoint$parameter)
-
-# Resume estimation from checkpoint
-result <- estimate_model_rcpp(
-  model_system = ms,
-  data = dat,
-  init_params = init_params,  # Start from checkpoint parameters
-  control = control,
-  checkpoint_file = "my_checkpoint.txt"  # Continue saving checkpoints
-)
-```
-
-</details>
-
-**Key points:**
-- The checkpoint file is overwritten each time a better point is found
-- If estimation is interrupted, the file contains the last best parameters
-- Use `comment.char = "#"` when reading to skip metadata header lines
 
 ---
 
@@ -741,9 +678,9 @@ More detailed explanations within functions.
   - See "Adaptive Integration" section for usage
 - `adapt_int_thresh` (numeric): Threshold for adaptive integration (default: 0.3)
   - Smaller values → more integration points
-  - Formula: `n_quad_obs = 1 + 2 × floor(factor_se / factor_var / threshold)`
+  - Formula: `n_quad_obs = 1 + 2 × floor(factor_se / factor_sd / threshold)`
 
-### estimate_model_rcpp(model_system, data, init_params = NULL, control = NULL, optimizer = "nlminb", parallel = TRUE, verbose = TRUE, checkpoint_file = NULL)
+### estimate_model_rcpp(model_system, data, init_params = NULL, control = NULL, optimizer = "nlminb", parallel = TRUE, verbose = TRUE)
 - Main estimation function using C++ backend with R-level parallelization
 - **Parameters**:
   - `model_system`: Output from `define_model_system()`
@@ -757,10 +694,6 @@ More detailed explanations within functions.
     - `"trust"`: Trust region (experimental)
   - `parallel`: Enable parallelization when `num_cores > 1` (default: TRUE)
   - `verbose`: Print progress messages (default: TRUE)
-  - `checkpoint_file`: Path to save checkpoint parameters during optimization (default: NULL)
-    - Saves parameters each time Hessian is evaluated at improved likelihood
-    - Useful for restarting long-running estimations
-    - See "Checkpointing" section for usage
 - **Returns**: List with
   - `estimates`: Parameter estimates
   - `std_errors`: Standard errors (from Hessian)
@@ -1010,7 +943,7 @@ Model structural relationships between latent factors at different time points w
 library(factorana)
 
 set.seed(123)
-n <- 1000
+n <- 2000
 
 # True parameters for SE_linear model: f2 = alpha_1*f1 + epsilon
 true_var_f1 <- 1.0          # Variance of factor at age 10

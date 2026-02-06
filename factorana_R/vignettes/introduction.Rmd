@@ -1,0 +1,249 @@
+---
+title: "Introduction to factorana"
+author: "Greg Veramendi"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Introduction to factorana}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+## Overview
+
+The **factorana** package provides a flexible framework for estimating factor models with multiple latent variables. It supports:
+
+- Linear, probit, ordered probit, and multinomial logit model components
+- Multiple latent factors with flexible loading normalization
+- Multi-stage (sequential) estimation with fixed early-stage parameters
+- Analytical gradients and Hessians for fast convergence
+- Parallel estimation for large datasets
+
+## Installation
+
+Install the package from GitHub:
+
+```{r eval=FALSE}
+devtools::install_github("GregVeramendi/factorana", subdir = "factorana_R")
+```
+
+## Quick Start: Roy Model Example
+
+This example demonstrates a Roy selection model with unobserved ability (latent factor), sector choice, test scores, and wages.
+
+### Data Generation
+
+```{r eval=FALSE}
+library(factorana)
+
+# Generate Roy model data
+set.seed(108)
+n <- 10000
+
+# Covariates
+x1 <- rnorm(n)  # Affects wages
+x2 <- rnorm(n)  # Affects wages and sector choice
+f <- rnorm(n)   # Latent ability (unobserved)
+
+# Test scores (measure ability with error)
+T1 <- 2.0 + 1.0*f + rnorm(n, 0, 0.5)
+T2 <- 1.5 + 1.2*f + rnorm(n, 0, 0.6)
+T3 <- 1.0 + 0.8*f + rnorm(n, 0, 0.4)
+
+# Potential wages in each sector
+wage0 <- 2.0 + 0.5*x1 + 0.3*x2 + 0.5*f + rnorm(n, 0, 0.6)
+wage1 <- 2.5 + 0.6*x1 + 1.0*f + rnorm(n, 0, 0.7)
+
+# Sector choice (high ability -> more likely sector 1)
+z_sector <- 0.0 + 0.4*x2 + 0.8*f
+sector <- as.numeric(runif(n) < pnorm(z_sector))
+
+# Observed wage (only see wage in chosen sector)
+wage <- ifelse(sector == 1, wage1, wage0)
+
+# Create dataset with evaluation indicators
+dat <- data.frame(
+  intercept = 1,
+  x1 = x1, x2 = x2,
+  T1 = T1, T2 = T2, T3 = T3,
+  wage = wage,
+  sector = sector,
+  eval_tests = 1,           # Always observe test scores
+  eval_wage0 = 1 - sector,  # Observe wage0 when sector=0
+  eval_wage1 = sector,      # Observe wage1 when sector=1
+  eval_sector = 1           # Always observe sector choice
+)
+```
+
+### Model Specification
+
+```{r eval=FALSE}
+# Define factor model (1 latent ability factor)
+fm <- define_factor_model(n_factors = 1, n_types = 1)
+
+# Define model components
+# Test 1: Normalize loading to 1.0 for identification
+mc_T1 <- define_model_component(
+  name = "T1", data = dat, outcome = "T1", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1.0,
+  evaluation_indicator = "eval_tests"
+)
+
+# Tests 2 and 3: Free loadings
+mc_T2 <- define_model_component(
+  name = "T2", data = dat, outcome = "T2", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval_tests"
+)
+mc_T3 <- define_model_component(
+  name = "T3", data = dat, outcome = "T3", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval_tests"
+)
+
+# Wage in sector 0: Ability effect (free loading)
+mc_wage0 <- define_model_component(
+  name = "wage0", data = dat, outcome = "wage", factor = fm,
+  covariates = c("intercept", "x1", "x2"), model_type = "linear",
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval_wage0"
+)
+
+# Wage in sector 1: Ability matters (free loading)
+mc_wage1 <- define_model_component(
+  name = "wage1", data = dat, outcome = "wage", factor = fm,
+  covariates = c("intercept", "x1"), model_type = "linear",
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval_wage1"
+)
+
+# Sector choice: Probit model
+mc_sector <- define_model_component(
+  name = "sector", data = dat, outcome = "sector", factor = fm,
+  covariates = c("intercept", "x2"), model_type = "probit",
+  loading_normalization = NA_real_,
+  evaluation_indicator = "eval_sector"
+)
+
+# Define model system
+ms <- define_model_system(
+  components = list(mc_T1, mc_T2, mc_T3, mc_wage0, mc_wage1, mc_sector),
+  factor = fm
+)
+```
+
+### Estimation
+
+```{r eval=FALSE}
+# Define estimation control
+ctrl <- define_estimation_control(n_quad_points = 16, num_cores = 1)
+
+# Estimate the model
+result <- estimate_model_rcpp(
+  model_system = ms,
+  data = dat,
+  init_params = NULL,  # Automatic initialization (recommended)
+  control = ctrl,
+  parallel = FALSE,
+  optimizer = "nlminb",
+  verbose = TRUE
+)
+
+# View results
+print(result)
+```
+
+## Key Concepts
+
+### Loading Normalization
+
+Factor loadings require normalization for identification. Use `loading_normalization` in `define_model_component()`:
+
+- `1.0` - Fixed at 1.0 (use for scale identification)
+- `NA_real_` - Free parameter (estimated)
+- `0` - Fixed at 0 (no factor effect on this component)
+
+### Evaluation Indicators
+
+Use `evaluation_indicator` to specify which observations contribute to a component's likelihood. This is useful for:
+
+- Partial observability (e.g., wages only observed in chosen sector)
+- Panel data with varying observation patterns
+- Treatment/control group differences
+
+### Parallel Estimation
+
+For large datasets, use parallel estimation:
+
+```{r eval=FALSE}
+ctrl <- define_estimation_control(n_quad_points = 16, num_cores = 4)
+result <- estimate_model_rcpp(
+  model_system = ms,
+  data = dat,
+  control = ctrl,
+  parallel = TRUE
+)
+```
+
+## Two-Stage Estimation
+
+For complex models, estimate in stages. First estimate the measurement system, then add structural equations:
+
+```{r eval=FALSE}
+# Stage 1: Estimate measurement system
+ms_stage1 <- define_model_system(
+  components = list(mc_T1, mc_T2, mc_T3),
+  factor = fm
+)
+result_stage1 <- estimate_model_rcpp(ms_stage1, dat, control = ctrl)
+
+# Stage 2: Fix stage 1 parameters, add structural equations
+ms_stage2 <- define_model_system(
+  components = list(mc_wage0, mc_wage1, mc_sector),
+  factor = fm,
+  previous_stage = result_stage1  # Fix stage 1 parameters
+)
+result_stage2 <- estimate_model_rcpp(ms_stage2, dat, control = ctrl)
+```
+
+## Additional Features
+
+### Fixing Coefficients
+
+Constrain regression coefficients to specific values:
+
+```{r eval=FALSE}
+mc <- fix_coefficient(mc, covariate = "intercept", value = 0.0)
+```
+
+### Structural Equation Models
+
+Model causal relationships between factors:
+
+```{r eval=FALSE}
+fm <- define_factor_model(n_factors = 2, factor_structure = "SE_linear")
+```
+
+### Correlated Factors
+
+Allow correlation between two factors:
+
+```{r eval=FALSE}
+fm <- define_factor_model(n_factors = 2, factor_structure = "correlation")
+```
+
+## Getting Help
+
+For more examples and detailed documentation, see:
+
+- Package documentation: `?factorana`
+- GitHub repository: https://github.com/GregVeramendi/factorana

@@ -67,6 +67,7 @@ test_that("correlated two-factor model initializes correctly", {
 
 test_that("correlated two-factor linear model converges and recovers correlation", {
   isolate_test()
+  skip_on_cran()
   set.seed(42)
   n <- 300
 
@@ -174,6 +175,7 @@ test_that("correlated two-factor linear model converges and recovers correlation
 
 test_that("correlated two-factor model recovers factor variances with sufficient quadrature", {
   isolate_test()
+  skip_on_cran()
   set.seed(123)
   n <- 500
 
@@ -294,6 +296,7 @@ test_that("uncorrelated model (factor_structure = 'independent') has no correlat
 
 test_that("negative correlation is recovered correctly", {
   isolate_test()
+  skip_on_cran()
   set.seed(456)
   n <- 300
 

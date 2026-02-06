@@ -1,0 +1,25 @@
+# R generated docs (from vignettes)
+/doc/
+/Meta/
+
+# Build artifacts
+*.tar.gz
+*.Rcheck/
+
+# Development files
+*.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# Claude-specific documentation (internal notes)
+TESTING.md
+OPTIMIZATION_ANALYSIS.md
+DEBUG_HESSIAN_PERFORMANCE.md
+ISSUES.md
+OPTIMIZER_CONVERGENCE.md
+PLAN_fixed_parameters.md
+
+# Temporary files
+fd_test.R
+model_config.csv

@@ -63,6 +63,7 @@ test_that("multi-factor loadings work with normalization (probit)", {
 
 test_that("two-factor CFA with ordered probit converges and recovers parameters", {
   isolate_test()
+  skip_on_cran()
   skip_if_not_installed("MASS")
 
   # Generate data with known two-factor structure
@@ -306,6 +307,7 @@ test_that("two-factor CFA with ordered probit converges and recovers parameters"
 
 test_that("two-factor CFA with ordered probit and covariates converges and recovers parameters", {
   isolate_test()
+  skip_on_cran()
   skip_if_not_installed("MASS")
 
   # Generate data with known two-factor structure
@@ -502,6 +504,7 @@ test_that("two-factor CFA with ordered probit and covariates converges and recov
 
 test_that("two-factor CFA with 3 linear measures per factor converges and recovers parameters", {
   isolate_test()
+  skip_on_cran()
   # Generate data with known two-factor structure
   # 3 linear measures per factor with intercept + covariate
   set.seed(456)
@@ -667,6 +670,7 @@ test_that("two-factor CFA with 3 linear measures per factor converges and recove
 
 test_that("three-factor CFA with 3 linear measures per factor converges and recovers parameters", {
   isolate_test()
+  skip_on_cran()
   # Generate data with known three-factor structure
   # 3 linear measures per factor with intercept + covariate
   set.seed(789)
