@@ -386,16 +386,31 @@ define_model_component <- function(name,
       }
     } else {
       # Standard logit: validate single outcome column
+      # C++ expects 1-indexed outcomes (1, 2, ..., K) - NOT 0-indexed
       unique_vals <- sort(unique(na.omit(y)))
-      if (!all(unique_vals %in% 0:(max(unique_vals)))) {
-        stop("Outcome for logit must be integers 0,...,K.")
+      min_val <- min(unique_vals)
+      max_val <- max(unique_vals)
+
+      # Check outcomes are 1, 2, ..., K (contiguous 1-indexed integers)
+      if (min_val < 1) {
+        stop("Logit outcomes must be 1-indexed (1, 2, ..., K). Found minimum value: ", min_val,
+             "\n  If your data uses 0/1 coding, add 1 to convert: data$outcome <- data$outcome + 1")
       }
+      if (!all(unique_vals == seq(min_val, max_val))) {
+        stop("Logit outcomes must be contiguous integers. Found: ", paste(unique_vals, collapse = ", "))
+      }
+
       n_unique <- length(unique_vals)
       if (n_unique > 50L) {
         stop("Logit outcome has too many unique values (", n_unique, "). Maximum supported: 50.")
       }
       if (num_choices != n_unique) {
         stop("num_choices (", num_choices, ") does not match detected unique outcome values (", n_unique, ").")
+      }
+      # Validate that outcomes start at 1 (for proper C++ indexing)
+      if (min_val != 1) {
+        stop("Logit outcomes must start at 1. Found minimum: ", min_val,
+             "\n  Recode your outcomes to use 1, 2, ..., ", n_unique)
       }
     }
   }

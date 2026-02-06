@@ -77,6 +77,12 @@ define_model_system <- function(components, factor, previous_stage = NULL, weigh
     }
   }
 
+  # Validate: mixtures and factor_covariates are mutually exclusive
+  if (factor$n_mixtures > 1 && !is.null(factor$factor_covariates)) {
+    stop("Mixture models (n_mixtures > 1) cannot be combined with factor_covariates. ",
+         "These features are mutually exclusive.")
+  }
+
   # Validate equality_constraints parameter
   if (!is.null(equality_constraints)) {
     if (!is.list(equality_constraints)) {

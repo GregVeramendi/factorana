@@ -41,6 +41,11 @@ private:
     bool fac_corr;                     // Whether factors are correlated (legacy, for backward compat)
     FactorStructure factor_structure;  // Factor dependency structure
 
+    // Mixture model parameters (for nmix > 1)
+    // For SE models: mixtures only apply to input factors (nfac - 1)
+    int n_factors_for_mixture;         // Number of factors with mixture distribution
+    int n_variance_per_mixture;        // Number of variance params per mixture component
+
     // Structural equation (SE) model parameters
     // For SE_LINEAR: f_k = se_intercept + se_linear[j] * f_j + epsilon
     // Integration is over input factors and residual epsilon
@@ -226,9 +231,38 @@ private:
     void ExtractFreeHessian(const std::vector<double>& full_hess,
                            std::vector<double>& free_hess);
 
-    // Helper: Get factor parameter indices
+    // Helper: Get factor parameter indices for mixture models
+    // Parameter layout for nmix mixtures, nfac_mix factors per mixture:
+    // [var_m0_f0, var_m0_f1, ..., var_m1_f0, var_m1_f1, ..., var_mN_f0, ...]  -- nmix * nfac_mix variances
+    // [mean_m0_f0, mean_m0_f1, ..., mean_mN-2_f0, mean_mN-2_f1, ...]          -- (nmix-1) * nfac_mix means
+    // [logwt_m0, logwt_m1, ..., logwt_mN-2]                                   -- (nmix-1) log-weights
+    //
+    // For SE models: nfac_mix = nfac - 1 (input factors only)
+    // For other models: nfac_mix = nfac
+
+    // Get variance parameter index for mixture imix (0-based), factor ifac (0-based)
     int GetFactorVarianceIndex(int imix, int ifac);
+
+    // Get mean parameter index for mixture imix (0-based, imix < nmix-1), factor ifac (0-based)
+    // Returns -1 if imix == nmix-1 (last mixture mean is derived from constraint)
     int GetFactorMeanIndex(int imix, int ifac);
+
+    // Get log-weight parameter index for mixture imix (0-based, imix < nmix-1)
+    // Returns -1 if imix == nmix-1 (last mixture weight is reference)
+    int GetMixtureLogWeightIndex(int imix);
+
+    // Compute mixture weights from log-weight parameters using softmax
+    // w_m = exp(fw_m) / (1 + sum_{j<nmix-1} exp(fw_j)) for m < nmix-1
+    // w_{nmix-1} = 1 / (1 + sum_{j<nmix-1} exp(fw_j))
+    void ComputeMixtureWeights(std::vector<double>& weights);
+
+    // Compute mixture means from parameters and constraint E[f] = 0
+    // For m < nmix-1: mean[m][k] = param[GetFactorMeanIndex(m, k)]
+    // For m = nmix-1: mean[m][k] = -sum_{j<nmix-1}(w_j * mean[j][k]) / w_{nmix-1}
+    void ComputeMixtureMeans(const std::vector<double>& weights,
+                             std::vector<std::vector<double>>& means);
+
+    // Legacy function - kept for backward compatibility
     int GetMixtureWeightIndex(int imix);
 
     // Helper: Get type model parameter indices

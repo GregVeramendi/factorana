@@ -174,9 +174,22 @@ define_factor_model <- function(n_factors,
 
   # ---- 4. Compute total number of parameters for factor distribution ----
   # Combines variances/covariances with mixture-related parameters and SE parameters.
+  #
+  # Parameter structure for mixtures (nmix > 1):
+  # - f_nvariance * nmix variances (one per factor per mixture)
+  # - (nmix - 1) * n_factors_for_mixture means (for non-reference mixtures)
+  # - (nmix - 1) log-weights (for non-reference mixtures)
+  #
+  # For SE models, mixture means only apply to input factors (n_factors - 1)
+  # since the outcome factor is determined by the structural equation.
+  n_factors_for_mixture <- if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
+    n_factors - 1L
+  } else {
+    n_factors
+  }
 
   nfac_param <- as.integer(f_nvariance * n_mixtures +
-                             (n_mixtures - 1L) * n_factors +
+                             (n_mixtures - 1L) * n_factors_for_mixture +
                              (n_mixtures - 1L) +
                              nse_param +
                              n_factor_mean_param +

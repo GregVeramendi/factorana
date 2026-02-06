@@ -118,6 +118,8 @@ cleanup_parallel_workers <- function(signal = "TERM", verbose = TRUE, list_only 
 # Build parameter metadata from model system
 build_parameter_metadata <- function(model_system) {
   n_factors <- model_system$factor$n_factors
+  n_mixtures <- model_system$factor$n_mixtures
+  if (is.null(n_mixtures)) n_mixtures <- 1L
 
   # Initialize vectors
   param_names <- character(0)
@@ -128,13 +130,43 @@ build_parameter_metadata <- function(model_system) {
   factor_structure <- model_system$factor$factor_structure
   if (is.null(factor_structure)) factor_structure <- "independent"
 
+  # Determine number of factors with variance parameters
+  if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
+    n_factors_for_mixture <- n_factors - 1L  # Only input factors
+  } else {
+    n_factors_for_mixture <- n_factors
+  }
+
   if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
     # SE models: only first (n_factors - 1) have variance parameters
     n_input_factors <- n_factors - 1
-    for (k in seq_len(n_input_factors)) {
-      param_names <- c(param_names, sprintf("factor_var_%d", k))
-      param_types <- c(param_types, "factor_var")
-      component_id <- c(component_id, 0)  # 0 = factor model
+    for (imix in seq_len(n_mixtures)) {
+      for (k in seq_len(n_input_factors)) {
+        if (n_mixtures == 1) {
+          param_names <- c(param_names, sprintf("factor_var_%d", k))
+        } else {
+          param_names <- c(param_names, sprintf("mix%d_factor_var_%d", imix, k))
+        }
+        param_types <- c(param_types, "factor_var")
+        component_id <- c(component_id, 0)  # 0 = factor model
+      }
+    }
+
+    # Mixture means (for non-reference mixtures only)
+    if (n_mixtures > 1) {
+      for (imix in seq_len(n_mixtures - 1)) {
+        for (k in seq_len(n_input_factors)) {
+          param_names <- c(param_names, sprintf("mix%d_factor_mean_%d", imix, k))
+          param_types <- c(param_types, "factor_mean_mix")
+          component_id <- c(component_id, 0)
+        }
+      }
+      # Mixture log-weights (for non-reference mixtures)
+      for (imix in seq_len(n_mixtures - 1)) {
+        param_names <- c(param_names, sprintf("mix%d_logweight", imix))
+        param_types <- c(param_types, "mix_logweight")
+        component_id <- c(component_id, 0)
+      }
     }
 
     # SE intercept
@@ -165,10 +197,33 @@ build_parameter_metadata <- function(model_system) {
 
   } else {
     # Standard case: all n_factors have variance parameters
-    for (k in seq_len(n_factors)) {
-      param_names <- c(param_names, sprintf("factor_var_%d", k))
-      param_types <- c(param_types, "factor_var")
-      component_id <- c(component_id, 0)  # 0 = factor model
+    for (imix in seq_len(n_mixtures)) {
+      for (k in seq_len(n_factors)) {
+        if (n_mixtures == 1) {
+          param_names <- c(param_names, sprintf("factor_var_%d", k))
+        } else {
+          param_names <- c(param_names, sprintf("mix%d_factor_var_%d", imix, k))
+        }
+        param_types <- c(param_types, "factor_var")
+        component_id <- c(component_id, 0)  # 0 = factor model
+      }
+    }
+
+    # Mixture means (for non-reference mixtures only)
+    if (n_mixtures > 1) {
+      for (imix in seq_len(n_mixtures - 1)) {
+        for (k in seq_len(n_factors)) {
+          param_names <- c(param_names, sprintf("mix%d_factor_mean_%d", imix, k))
+          param_types <- c(param_types, "factor_mean_mix")
+          component_id <- c(component_id, 0)
+        }
+      }
+      # Mixture log-weights (for non-reference mixtures)
+      for (imix in seq_len(n_mixtures - 1)) {
+        param_names <- c(param_names, sprintf("mix%d_logweight", imix))
+        param_types <- c(param_types, "mix_logweight")
+        component_id <- c(component_id, 0)
+      }
     }
   }
 
@@ -494,26 +549,39 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
     # Fix non-identified factor variances
     if (param_type == "factor_var") {
       # For factor variances, check identification
-      # Only the first n_factors parameters are factor variances
-      factor_idx <- i
-      if (factor_idx <= length(factor_variance_identified)) {
-        if (verbose) {
-          message(sprintf("  Constraint check: param %d (factor_var) -> factor_idx=%d, identified=%s",
-                          i, factor_idx, factor_variance_identified[factor_idx]))
-        }
-        if (!factor_variance_identified[factor_idx]) {
-          param_fixed[i] <- TRUE
-          lower_bounds[i] <- init_params[i]
-          upper_bounds[i] <- init_params[i]
+      # Extract factor index from parameter name (e.g., "factor_var_1" or "mix1_factor_var_1")
+      param_name <- param_metadata$names[i]
+      factor_idx_match <- regmatches(param_name, regexpr("factor_var_(\\d+)$", param_name))
+      if (length(factor_idx_match) > 0) {
+        factor_idx <- as.integer(sub("factor_var_", "", factor_idx_match))
+        if (factor_idx <= length(factor_variance_identified)) {
           if (verbose) {
-            message(sprintf("    -> FIXED at %.6f", init_params[i]))
+            message(sprintf("  Constraint check: param %d (%s) -> factor_idx=%d, identified=%s",
+                            i, param_name, factor_idx, factor_variance_identified[factor_idx]))
           }
-        } else {
-          # Set lower bound for free factor variances to prevent numerical issues
-          # (division by sqrt(factor_var) in gradient/Hessian chain rule)
-          lower_bounds[i] <- 0.01
+          if (!factor_variance_identified[factor_idx]) {
+            param_fixed[i] <- TRUE
+            lower_bounds[i] <- init_params[i]
+            upper_bounds[i] <- init_params[i]
+            if (verbose) {
+              message(sprintf("    -> FIXED at %.6f", init_params[i]))
+            }
+          } else {
+            # Set lower bound for free factor variances to prevent numerical issues
+            # (division by sqrt(factor_var) in gradient/Hessian chain rule)
+            lower_bounds[i] <- 0.01
+          }
         }
       }
+    }
+
+    # Mixture log-weights: no special constraints (softmax handles the range)
+    # Mixture means: no special constraints
+
+    # Factor mean mixture parameters: set reasonable bounds
+    if (param_type == "factor_mean_mix") {
+      # Means can be any real number, but large values may cause numerical issues
+      # No bounds needed - the constraint E[f]=0 is handled by the last mixture's mean
     }
 
     # Set bounds for factor correlation parameters

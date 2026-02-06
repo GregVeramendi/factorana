@@ -516,29 +516,48 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
     int param_offset = 0;
 
     // Handle factor structure-specific parameter counts
+    // For mixture models (n_mixtures > 1), parameter layout is:
+    // - nmix * n_variance_per_mixture variances
+    // - (nmix-1) * n_factors_for_mixture mixture means (for non-reference mixtures)
+    // - (nmix-1) log-weights (for non-reference mixtures)
+    // - SE params (if SE model)
+    int n_factors_for_mixture = n_fac;  // Default: all factors have mixture
+    if (fac_struct == FactorStructure::SE_LINEAR || fac_struct == FactorStructure::SE_QUADRATIC) {
+        n_factors_for_mixture = n_fac - 1;  // Only input factors for SE models
+    }
+
     if (fac_struct == FactorStructure::SE_LINEAR) {
         // SE_linear: (n_fac - 1) input factor variances + intercept + (n_fac-1) linear + residual var
         int n_input_factors = n_fac - 1;
-        param_offset = n_input_factors;  // Input factor variances
+        param_offset = n_input_factors * n_mixtures;  // Input factor variances (per mixture)
+        param_offset += (n_mixtures - 1) * n_input_factors;  // Mixture means
+        param_offset += (n_mixtures - 1);  // Mixture log-weights
         param_offset += 1;  // SE intercept
         param_offset += n_input_factors;  // SE linear coefficients
         param_offset += 1;  // SE residual variance
     } else if (fac_struct == FactorStructure::SE_QUADRATIC) {
         // SE_quadratic: (n_fac - 1) input factor variances + intercept + (n_fac-1) linear + (n_fac-1) quadratic + residual var
         int n_input_factors = n_fac - 1;
-        param_offset = n_input_factors;  // Input factor variances
+        param_offset = n_input_factors * n_mixtures;  // Input factor variances (per mixture)
+        param_offset += (n_mixtures - 1) * n_input_factors;  // Mixture means
+        param_offset += (n_mixtures - 1);  // Mixture log-weights
         param_offset += 1;  // SE intercept
         param_offset += n_input_factors;  // SE linear coefficients
         param_offset += n_input_factors;  // SE quadratic coefficients
         param_offset += 1;  // SE residual variance
     } else if (fac_struct == FactorStructure::CORRELATION && n_fac == 2) {
-        // Correlated 2-factor: 2 variances + 1 correlation
-        param_offset = n_fac + 1;
+        // Correlated 2-factor: (2 variances + 1 correlation) * nmix + mixture params
+        int n_var_per_mix = n_fac * (n_fac + 1) / 2;  // variances + correlation
+        param_offset = n_var_per_mix * n_mixtures;
+        param_offset += (n_mixtures - 1) * n_fac;  // Mixture means
+        param_offset += (n_mixtures - 1);  // Mixture log-weights
     } else {
-        // Independent factors or backward compatibility
-        param_offset = n_fac;  // Factor variances
+        // Independent factors
+        param_offset = n_fac * n_mixtures;  // Factor variances (per mixture)
+        param_offset += (n_mixtures - 1) * n_fac;  // Mixture means
+        param_offset += (n_mixtures - 1);  // Mixture log-weights
         // Add correlation parameter offset if present (backward compatibility)
-        if (correlation && n_fac == 2) {
+        if (correlation && n_fac == 2 && n_mixtures == 1) {
             param_offset += 1;
         }
     }
@@ -802,13 +821,39 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         // Build parameter name to index mapping
         std::map<std::string, int> param_name_to_idx;
 
+        // Determine n_factors_for_mixture for parameter naming
+        int n_factors_for_mixture_eq = n_fac;
+        if (fac_struct == FactorStructure::SE_LINEAR || fac_struct == FactorStructure::SE_QUADRATIC) {
+            n_factors_for_mixture_eq = n_fac - 1;
+        }
+
         // Factor-level parameters
+        // Naming convention matches R: mix{m}_factor_var_{k}, mix{m}_factor_mean_{k}, mix{m}_logweight
+        // where m is 1-indexed for mixtures (mix1, mix2, ...) and k is 1-indexed for factors
         int idx = 0;
         if (fac_struct == FactorStructure::SE_LINEAR || fac_struct == FactorStructure::SE_QUADRATIC) {
-            // SE models: factor_var_1...(n_fac-1), se_intercept, se_linear_1..., [se_quadratic_1...], se_residual_var
-            for (int k = 0; k < n_fac - 1; k++) {
-                param_name_to_idx["factor_var_" + std::to_string(k + 1)] = idx++;
+            // SE models: variances for all mixtures, then mixture means, then log-weights, then SE params
+            for (int m = 0; m < n_mixtures; m++) {
+                for (int k = 0; k < n_fac - 1; k++) {
+                    if (n_mixtures == 1) {
+                        param_name_to_idx["factor_var_" + std::to_string(k + 1)] = idx++;
+                    } else {
+                        // mix1_factor_var_1, mix1_factor_var_2, ... (1-indexed)
+                        param_name_to_idx["mix" + std::to_string(m + 1) + "_factor_var_" + std::to_string(k + 1)] = idx++;
+                    }
+                }
             }
+            // Mixture means: mix{m}_factor_mean_{k} for m < nmix-1
+            for (int m = 0; m < n_mixtures - 1; m++) {
+                for (int k = 0; k < n_fac - 1; k++) {
+                    param_name_to_idx["mix" + std::to_string(m + 1) + "_factor_mean_" + std::to_string(k + 1)] = idx++;
+                }
+            }
+            // Mixture log-weights: mix{m}_logweight for m < nmix-1
+            for (int m = 0; m < n_mixtures - 1; m++) {
+                param_name_to_idx["mix" + std::to_string(m + 1) + "_logweight"] = idx++;
+            }
+            // SE parameters
             param_name_to_idx["se_intercept"] = idx++;
             for (int k = 0; k < n_fac - 1; k++) {
                 param_name_to_idx["se_linear_" + std::to_string(k + 1)] = idx++;
@@ -821,19 +866,55 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             param_name_to_idx["se_residual_var"] = idx++;
         } else if (fac_struct == FactorStructure::CORRELATION) {
             // Correlation: factor variances then correlation parameters
-            for (int k = 0; k < n_fac; k++) {
-                param_name_to_idx["factor_var_" + std::to_string(k + 1)] = idx++;
-            }
-            // Add correlation parameters
-            for (int j = 0; j < n_fac - 1; j++) {
-                for (int k = j + 1; k < n_fac; k++) {
-                    param_name_to_idx["factor_corr_" + std::to_string(j + 1) + "_" + std::to_string(k + 1)] = idx++;
+            for (int m = 0; m < n_mixtures; m++) {
+                for (int k = 0; k < n_fac; k++) {
+                    if (n_mixtures == 1) {
+                        param_name_to_idx["factor_var_" + std::to_string(k + 1)] = idx++;
+                    } else {
+                        param_name_to_idx["mix" + std::to_string(m + 1) + "_factor_var_" + std::to_string(k + 1)] = idx++;
+                    }
+                }
+                // Add correlation parameters for this mixture
+                for (int j = 0; j < n_fac - 1; j++) {
+                    for (int k = j + 1; k < n_fac; k++) {
+                        if (n_mixtures == 1) {
+                            param_name_to_idx["factor_corr_" + std::to_string(j + 1) + "_" + std::to_string(k + 1)] = idx++;
+                        } else {
+                            param_name_to_idx["mix" + std::to_string(m + 1) + "_factor_corr_" + std::to_string(j + 1) + "_" + std::to_string(k + 1)] = idx++;
+                        }
+                    }
                 }
             }
+            // Mixture means
+            for (int m = 0; m < n_mixtures - 1; m++) {
+                for (int k = 0; k < n_fac; k++) {
+                    param_name_to_idx["mix" + std::to_string(m + 1) + "_factor_mean_" + std::to_string(k + 1)] = idx++;
+                }
+            }
+            // Mixture log-weights
+            for (int m = 0; m < n_mixtures - 1; m++) {
+                param_name_to_idx["mix" + std::to_string(m + 1) + "_logweight"] = idx++;
+            }
         } else {
-            // Independent: just factor variances
-            for (int k = 0; k < n_fac; k++) {
-                param_name_to_idx["factor_var_" + std::to_string(k + 1)] = idx++;
+            // Independent: factor variances per mixture, then mixture means, then log-weights
+            for (int m = 0; m < n_mixtures; m++) {
+                for (int k = 0; k < n_fac; k++) {
+                    if (n_mixtures == 1) {
+                        param_name_to_idx["factor_var_" + std::to_string(k + 1)] = idx++;
+                    } else {
+                        param_name_to_idx["mix" + std::to_string(m + 1) + "_factor_var_" + std::to_string(k + 1)] = idx++;
+                    }
+                }
+            }
+            // Mixture means
+            for (int m = 0; m < n_mixtures - 1; m++) {
+                for (int k = 0; k < n_fac; k++) {
+                    param_name_to_idx["mix" + std::to_string(m + 1) + "_factor_mean_" + std::to_string(k + 1)] = idx++;
+                }
+            }
+            // Mixture log-weights
+            for (int m = 0; m < n_mixtures - 1; m++) {
+                param_name_to_idx["mix" + std::to_string(m + 1) + "_logweight"] = idx++;
             }
         }
 

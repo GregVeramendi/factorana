@@ -214,9 +214,51 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
       }
     }
 
-    # Initialize factor variances to 1.0
-    init_params <- rep(1.0, n_factors)
-    param_names <- paste0("factor_var_", seq_len(n_factors))
+    # Get mixture count
+    n_mixtures <- model_system$factor$n_mixtures
+    if (is.null(n_mixtures)) n_mixtures <- 1L
+
+    # Initialize factor variances to 1.0 (one per factor per mixture)
+    # For nmix > 1, we have variances for each mixture component
+    init_params <- rep(1.0, n_factors * n_mixtures)
+    param_names <- character(0)
+    for (imix in seq_len(n_mixtures)) {
+      for (ifac in seq_len(n_factors)) {
+        param_names <- c(param_names,
+                         if (n_mixtures == 1) paste0("factor_var_", ifac)
+                         else paste0("mix", imix, "_factor_var_", ifac))
+      }
+    }
+
+    # Add mixture means for nmix > 1 (for non-reference mixtures only)
+    # Mean constraint: Σ w_m * μ_m = 0, so last mixture mean is derived
+    if (n_mixtures > 1) {
+      for (imix in seq_len(n_mixtures - 1)) {
+        for (ifac in seq_len(n_factors)) {
+          # Initialize means to spread around 0: mix1 positive, mix2 negative, etc.
+          # This helps separation of mixture components
+          init_mean <- if (imix == 1) 0.5 else if (imix == 2) -0.5 else 0.0
+          init_params <- c(init_params, init_mean)
+          param_names <- c(param_names, paste0("mix", imix, "_factor_mean_", ifac))
+        }
+      }
+
+      # Add mixture log-weights for non-reference mixtures
+      # Using softmax: w_m = exp(fw_m) / (1 + Σ exp(fw_j))
+      # Initialize to 0 for equal weights (all w_m = 1/nmix)
+      for (imix in seq_len(n_mixtures - 1)) {
+        init_params <- c(init_params, 0.0)  # log-weight = 0 -> equal weights
+        param_names <- c(param_names, paste0("mix", imix, "_logweight"))
+      }
+
+      if (verbose) {
+        message(sprintf("Mixture of normals: %d components", n_mixtures))
+        message(sprintf("  %d variance params + %d mean params + %d log-weight params",
+                        n_factors * n_mixtures,
+                        n_factors * (n_mixtures - 1),
+                        n_mixtures - 1))
+      }
+    }
 
     # Add structure-specific parameters based on factor_structure
     factor_structure <- model_system$factor$factor_structure
@@ -224,17 +266,49 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
 
     if (factor_structure == "SE_linear") {
       # SE_linear: f_k = alpha + alpha_1*f_1 + ... + epsilon
-      # For SE_linear, only first (n_factors - 1) variances are estimated
-      # Remove last factor variance and add SE parameters instead
-      init_params <- init_params[1:(n_factors - 1)]
-      param_names <- param_names[1:(n_factors - 1)]
-
-      # Update factor_variance_fixed (only applies to input factors)
-      factor_variance_fixed <- factor_variance_fixed[1:(n_factors - 1)]
-
-      # SE parameters: intercept, linear coefficients, residual variance
+      # For SE_linear, only input factors (n_factors - 1) have variance parameters
+      # Mixtures apply to input factors; epsilon is always single normal
       n_input_factors <- n_factors - 1
 
+      # For SE models, we need to rebuild init_params/param_names to only include input factors
+      # Current state: nmix * n_factors variances + (nmix-1)*n_factors means + (nmix-1) log-weights
+      # Target state: nmix * n_input_factors variances + (nmix-1)*n_input_factors means + (nmix-1) log-weights + SE params
+      init_params_new <- numeric(0)
+      param_names_new <- character(0)
+
+      # Input factor variances (one per input factor per mixture)
+      for (imix in seq_len(n_mixtures)) {
+        for (ifac in seq_len(n_input_factors)) {
+          init_params_new <- c(init_params_new, 1.0)
+          param_names_new <- c(param_names_new,
+                               if (n_mixtures == 1) paste0("factor_var_", ifac)
+                               else paste0("mix", imix, "_factor_var_", ifac))
+        }
+      }
+
+      # Input factor means (for non-reference mixtures)
+      if (n_mixtures > 1) {
+        for (imix in seq_len(n_mixtures - 1)) {
+          for (ifac in seq_len(n_input_factors)) {
+            init_mean <- if (imix == 1) 0.5 else if (imix == 2) -0.5 else 0.0
+            init_params_new <- c(init_params_new, init_mean)
+            param_names_new <- c(param_names_new, paste0("mix", imix, "_factor_mean_", ifac))
+          }
+        }
+        # Mixture log-weights
+        for (imix in seq_len(n_mixtures - 1)) {
+          init_params_new <- c(init_params_new, 0.0)
+          param_names_new <- c(param_names_new, paste0("mix", imix, "_logweight"))
+        }
+      }
+
+      init_params <- init_params_new
+      param_names <- param_names_new
+
+      # Update factor_variance_fixed (only applies to input factors)
+      factor_variance_fixed <- factor_variance_fixed[1:n_input_factors]
+
+      # SE parameters: intercept, linear coefficients, residual variance
       # SE intercept (initialize to 0)
       init_params <- c(init_params, 0.0)
       param_names <- c(param_names, "se_intercept")
@@ -257,16 +331,45 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
     } else if (factor_structure == "SE_quadratic") {
       # SE_quadratic: f_k = alpha + alpha_1*f_1 + alpha_q1*f_1^2 + ... + epsilon
       # Similar to SE_linear but with quadratic terms added
-      # Remove last factor variance and add SE parameters instead
-      init_params <- init_params[1:(n_factors - 1)]
-      param_names <- param_names[1:(n_factors - 1)]
-
-      # Update factor_variance_fixed (only applies to input factors)
-      factor_variance_fixed <- factor_variance_fixed[1:(n_factors - 1)]
-
-      # SE parameters: intercept, linear coefficients, quadratic coefficients, residual variance
       n_input_factors <- n_factors - 1
 
+      # Rebuild init_params/param_names for SE_quadratic (same as SE_linear)
+      init_params_new <- numeric(0)
+      param_names_new <- character(0)
+
+      # Input factor variances (one per input factor per mixture)
+      for (imix in seq_len(n_mixtures)) {
+        for (ifac in seq_len(n_input_factors)) {
+          init_params_new <- c(init_params_new, 1.0)
+          param_names_new <- c(param_names_new,
+                               if (n_mixtures == 1) paste0("factor_var_", ifac)
+                               else paste0("mix", imix, "_factor_var_", ifac))
+        }
+      }
+
+      # Input factor means (for non-reference mixtures)
+      if (n_mixtures > 1) {
+        for (imix in seq_len(n_mixtures - 1)) {
+          for (ifac in seq_len(n_input_factors)) {
+            init_mean <- if (imix == 1) 0.5 else if (imix == 2) -0.5 else 0.0
+            init_params_new <- c(init_params_new, init_mean)
+            param_names_new <- c(param_names_new, paste0("mix", imix, "_factor_mean_", ifac))
+          }
+        }
+        # Mixture log-weights
+        for (imix in seq_len(n_mixtures - 1)) {
+          init_params_new <- c(init_params_new, 0.0)
+          param_names_new <- c(param_names_new, paste0("mix", imix, "_logweight"))
+        }
+      }
+
+      init_params <- init_params_new
+      param_names <- param_names_new
+
+      # Update factor_variance_fixed (only applies to input factors)
+      factor_variance_fixed <- factor_variance_fixed[1:n_input_factors]
+
+      # SE parameters: intercept, linear coefficients, quadratic coefficients, residual variance
       # SE intercept (initialize to 0)
       init_params <- c(init_params, 0.0)
       param_names <- c(param_names, "se_intercept")
@@ -628,6 +731,10 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
         # Binary logit - optionally include factor scores to estimate loadings
         loading_init <- rep(0.5, n_free_loadings)  # Default loading initialization
 
+        # Convert 1/2 coded outcomes to 0/1 for glm (which expects 0/1)
+        # The model uses 1-indexed outcomes (1, 2, ..., K) but glm needs 0/1
+        outcome_01 <- outcome - 1  # Convert 1/2 to 0/1
+
         if (use_factor_scores && n_free_loadings > 0) {
           # Get factor scores for FREE loadings only
           free_factor_idx <- which(is.na(comp$loading_normalization))
@@ -644,7 +751,7 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
             X_full <- fs_subset
           }
 
-          fit <- glm(outcome ~ X_full - 1, family = binomial(link = "logit"))
+          fit <- glm(outcome_01 ~ X_full - 1, family = binomial(link = "logit"))
           all_coefs <- coef(fit)
 
           # Split coefficients
@@ -653,7 +760,7 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
           loading_init <- all_coefs[(n_x + 1):length(all_coefs)]
           names(loading_init) <- NULL
         } else {
-          fit <- glm(outcome ~ X - 1, family = binomial(link = "logit"))
+          fit <- glm(outcome_01 ~ X - 1, family = binomial(link = "logit"))
           coefs <- coef(fit)
         }
 

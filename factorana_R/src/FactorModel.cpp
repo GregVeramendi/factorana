@@ -1,10 +1,10 @@
 #include "FactorModel.h"
 #include "distributions.h"
 #include "gauss_hermite.h"
+#include <R.h>
 #include <cmath>
 #include <stdexcept>
 #include <algorithm>
-#include <iostream>
 #include <set>
 
 FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
@@ -13,6 +13,7 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
       nmix(n_mix), fac_corr(correlated),
       factor_structure(correlated ? FactorStructure::CORRELATION : FactorStructure::INDEPENDENT),
       n_input_factors(0), n_outcome_factors(0), se_param_start(-1), nse_param(0),
+      n_factors_for_mixture(n_fac), n_variance_per_mixture(n_fac),
       nquad_points(n_quad), use_weights(false), use_adaptive(false), adapt_threshold(0.3),
       use_factor_mean_covariates(false), n_factor_mean_covariates(0), n_factors_with_mean(0),
       factor_mean_param_start(-1),
@@ -21,13 +22,20 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
     data.resize(nobs * nvar);
 
     // Initialize with factor parameters
-    // For single mixture: nfac factor variances
-    nparam = nfac;  // Start with factor variances
+    // For nmix mixtures: nmix * nfac factor variances
+    nparam = nfac * nmix;  // Start with factor variances
 
     // Add correlation parameters if correlated factors
     // For 2-factor correlated model: 1 correlation parameter
     if (fac_corr && nfac == 2) {
-        nparam += 1;  // Add factor_corr_1_2
+        n_variance_per_mixture = nfac + 1;
+        nparam = nfac + 1;  // Reset - correlation not supported with mixtures
+    }
+
+    // Mixture parameters: means and log-weights for non-reference mixtures
+    if (nmix > 1 && !fac_corr) {
+        nparam += (nmix - 1) * nfac;  // mixture means
+        nparam += (nmix - 1);          // mixture log-weights
     }
 
     // Compute type model parameters
@@ -54,6 +62,7 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
       nmix(n_mix), fac_corr(fac_struct == FactorStructure::CORRELATION),
       factor_structure(fac_struct),
       n_input_factors(0), n_outcome_factors(0), se_param_start(-1), nse_param(0),
+      n_factors_for_mixture(n_fac), n_variance_per_mixture(n_fac),
       nquad_points(n_quad), use_weights(false), use_adaptive(false), adapt_threshold(0.3),
       use_factor_mean_covariates(false), n_factor_mean_covariates(0), n_factors_with_mean(0),
       factor_mean_param_start(-1),
@@ -65,35 +74,67 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
     if (factor_structure == FactorStructure::SE_LINEAR) {
         // For SE models: input factors have variance parameters, outcome factors don't
         // Integration is over (f_1, ..., f_{k-1}, epsilon_k)
+        // Mixtures only apply to input factors
         n_input_factors = nfac - 1;
         n_outcome_factors = 1;
+        n_factors_for_mixture = n_input_factors;
+        n_variance_per_mixture = n_input_factors;
 
-        // Factor variance parameters: only for input factors
-        nparam = n_input_factors;
+        // Factor variance parameters: only for input factors (per mixture)
+        nparam = n_input_factors * nmix;
+
+        // Mixture parameters: means and log-weights for non-reference mixtures
+        if (nmix > 1) {
+            nparam += (nmix - 1) * n_input_factors;  // mixture means
+            nparam += (nmix - 1);                     // mixture log-weights
+        }
 
         // SE parameters: intercept + n_input_factors linear coefficients + residual variance
         se_param_start = nparam;
         nse_param = 1 + n_input_factors + 1;  // intercept + linear coefs + residual var
         nparam += nse_param;
+
     } else if (factor_structure == FactorStructure::SE_QUADRATIC) {
         // SE_QUADRATIC: f_k = alpha + alpha_1*f_1 + alpha_q1*f_1^2 + ... + epsilon
         // Integration is over (f_1, ..., f_{k-1}, epsilon_k)
+        // Mixtures only apply to input factors
         n_input_factors = nfac - 1;
         n_outcome_factors = 1;
+        n_factors_for_mixture = n_input_factors;
+        n_variance_per_mixture = n_input_factors;
 
-        // Factor variance parameters: only for input factors
-        nparam = n_input_factors;
+        // Factor variance parameters: only for input factors (per mixture)
+        nparam = n_input_factors * nmix;
+
+        // Mixture parameters: means and log-weights for non-reference mixtures
+        if (nmix > 1) {
+            nparam += (nmix - 1) * n_input_factors;  // mixture means
+            nparam += (nmix - 1);                     // mixture log-weights
+        }
 
         // SE parameters: intercept + linear coefs + quadratic coefs + residual variance
         se_param_start = nparam;
         nse_param = 1 + n_input_factors + n_input_factors + 1;  // intercept + linear + quadratic + residual var
         nparam += nse_param;
+
     } else if (factor_structure == FactorStructure::CORRELATION && nfac == 2) {
         // Correlated factors: nfac variances + 1 correlation
+        // Note: correlation structure not supported with mixtures
+        n_factors_for_mixture = nfac;
+        n_variance_per_mixture = nfac + 1;  // variances + correlation
         nparam = nfac + 1;
+
     } else {
-        // Independent factors: nfac variances
-        nparam = nfac;
+        // Independent factors: nfac variances (per mixture)
+        n_factors_for_mixture = nfac;
+        n_variance_per_mixture = nfac;
+        nparam = nfac * nmix;
+
+        // Mixture parameters: means and log-weights for non-reference mixtures
+        if (nmix > 1) {
+            nparam += (nmix - 1) * nfac;  // mixture means
+            nparam += (nmix - 1);          // mixture log-weights
+        }
     }
 
     // Compute type model parameters
@@ -622,11 +663,11 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     MapFreeToFull(free_params);
 
     // ===== STEP 2: Extract factor parameters from param vector =====
-    // Parameter organization depends on factor_structure:
-    //   INDEPENDENT: [factor_vars (nfac) | model_params]
-    //   CORRELATION: [factor_vars (nfac) | factor_corr (1) | model_params]
-    //   SE_LINEAR:   [input_factor_vars (nfac-1) | se_intercept | se_linear (nfac-1) | se_residual_var | model_params]
-    //   SE_QUADRATIC: [input_factor_vars (nfac-1) | se_intercept | se_linear (nfac-1) | se_quadratic (nfac-1) | se_residual_var | model_params]
+    // Parameter organization depends on factor_structure and nmix:
+    //   For nmix > 1: [variances (nmix*nfac_mix) | means ((nmix-1)*nfac_mix) | logweights (nmix-1) | structure_params | model_params]
+    //   INDEPENDENT: nfac_mix = nfac
+    //   SE_LINEAR/SE_QUADRATIC: nfac_mix = nfac-1 (input factors only), + SE params
+    //   CORRELATION: nfac_mix = nfac (not supported with mixtures)
 
     // Factor correlation (for 2-factor correlated models)
     double rho = 0.0;
@@ -643,15 +684,33 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     // Number of integration dimensions (for SE models: input factors + residuals)
     int n_integ_dims = nfac;  // Default: one dimension per factor
 
-    // Extract factor variances and structure-specific parameters
-    std::vector<double> factor_var(nfac, 1.0);  // Initialize all to 1.0
+    // ===== STEP 2a: Compute mixture weights and means =====
+    std::vector<double> mix_weights(nmix);
+    std::vector<std::vector<double>> mix_means(nmix);
+    std::vector<std::vector<double>> mix_sigmas(nmix);  // sqrt of variances per mixture
+
+    ComputeMixtureWeights(mix_weights);
+    ComputeMixtureMeans(mix_weights, mix_means);
+
+    // ===== STEP 2b: Extract variances for each mixture =====
+    for (int imix = 0; imix < nmix; imix++) {
+        mix_sigmas[imix].resize(n_factors_for_mixture);
+        for (int k = 0; k < n_factors_for_mixture; k++) {
+            double var_k = std::fabs(param[GetFactorVarianceIndex(imix, k)]);
+            mix_sigmas[imix][k] = std::sqrt(var_k);
+        }
+    }
+
+    // For single mixture (backward compatibility), use first mixture's parameters
+    std::vector<double> factor_var(nfac, 1.0);  // Default variances for all factors
+    std::vector<double> factor_mean(nfac, 0.0);  // Default means for all factors
 
     if (factor_structure == FactorStructure::SE_LINEAR ||
         factor_structure == FactorStructure::SE_QUADRATIC) {
         // SE models: only input factors have variance parameters
-        // param[0..n_input_factors-1] = input factor variances
+        // For nmix=1, use GetFactorVarianceIndex; for nmix>1, handled in mixture loop
         for (int ifac = 0; ifac < n_input_factors; ifac++) {
-            factor_var[ifac] = std::fabs(param[ifac]);  // Enforce positivity
+            factor_var[ifac] = std::fabs(param[GetFactorVarianceIndex(0, ifac)]);
         }
 
         // SE parameters: intercept, linear coefficients, [quadratic coefficients], residual variance
@@ -679,14 +738,13 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         }
 
         // Outcome factor variance is derived from SE equation (not a free parameter)
-        // Var(f_k) = sum(se_linear_j^2 * Var(f_j)) + se_residual_var
-        // But for integration, we integrate over epsilon, so we use sigma_eps for the last dimension
         factor_var[nfac - 1] = se_residual_var;  // For integration weighting
 
     } else if (factor_structure == FactorStructure::CORRELATION && nfac == 2) {
         // Correlated factors: all nfac variances + 1 correlation
+        // Note: mixtures not supported with correlation structure
         for (int ifac = 0; ifac < nfac; ifac++) {
-            factor_var[ifac] = std::fabs(param[ifac]);  // Enforce positivity
+            factor_var[ifac] = std::fabs(param[ifac]);
         }
         rho = param[nfac];  // Correlation parameter
         // Clamp to valid range to prevent numerical issues
@@ -695,14 +753,11 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         sqrt_1_minus_rho2 = std::sqrt(1.0 - rho * rho);
 
     } else {
-        // INDEPENDENT: all nfac variances
+        // INDEPENDENT: all nfac variances (use first mixture for single-mixture compatibility)
         for (int ifac = 0; ifac < nfac; ifac++) {
-            factor_var[ifac] = std::fabs(param[ifac]);  // Enforce positivity
+            factor_var[ifac] = std::fabs(param[GetFactorVarianceIndex(0, ifac)]);
         }
     }
-
-    // Factor means (0 for single mixture)
-    std::vector<double> factor_mean(nfac, 0.0);
 
     // ===== STEP 3: Initialize outputs =====
     logLkhd = 0.0;
@@ -768,9 +823,11 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     // OPTIMIZATION: Precompute integration point tables for likelihood/gradient only
     // For Hessian (iflag==3), inline computation is faster due to better cache locality
     // This gives us: faster likelihood/gradient from precomputation, fast Hessian from inline
-    // NOTE: Cannot use precomputed tables when factor_mean_covariates is enabled because
-    // factor_mean varies per observation and tables are precomputed with factor_mean = 0
-    bool use_precomputed_tables = !use_adaptive && (iflag < 3) && !use_factor_mean_covariates && !use_se_covariates;
+    // NOTE: Cannot use precomputed tables when:
+    // - factor_mean_covariates is enabled (factor_mean varies per observation)
+    // - use_se_covariates is enabled
+    // - nmix > 1 (each mixture has different sigma/mean, would need tables per mixture)
+    bool use_precomputed_tables = !use_adaptive && (iflag < 3) && !use_factor_mean_covariates && !use_se_covariates && (nmix == 1);
 
     std::vector<std::vector<double>> fac_val_table;
     std::vector<double> probilk_table;
@@ -892,6 +949,75 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         }
 
         // ===== STEP 6: Multi-dimensional integration over factors =====
+        // For mixtures (nmix > 1), loop over mixture components
+        // L = sum_m w_m * L_m where L_m is likelihood for mixture m
+
+        // Model parameter indexing (needed for mixture Hessians)
+        int first_model_param = (models.size() > 0) ? param_model_start[0] : nparam;
+        int n_model_params = nparam - first_model_param;
+
+        // Storage for per-mixture likelihoods and gradients (needed for mixture param derivatives)
+        std::vector<double> mix_L(nmix, 0.0);  // L_m for each mixture
+        std::vector<std::vector<double>> mix_dL_dmean;  // dL_m/d(factor_mean_k) for each mixture
+        std::vector<std::vector<double>> mix_dL_dsigma;  // dL_m/d(sigma^2_k) for each mixture (for variance-weight cross)
+        std::vector<std::vector<double>> mix_dL_dbeta;  // dL_m/d(beta_j) for each mixture (for weight-beta cross Hessian)
+        if (nmix > 1 && iflag >= 2) {
+            mix_dL_dmean.resize(nmix, std::vector<double>(n_factors_for_mixture, 0.0));
+            mix_dL_dsigma.resize(nmix, std::vector<double>(n_factors_for_mixture, 0.0));
+        }
+        if (nmix > 1 && iflag == 3) {
+            mix_dL_dbeta.resize(nmix, std::vector<double>(n_model_params, 0.0));
+        }
+
+        // For mixture Hessians: accumulate d²L_m/d(f_k1)d(f_k2) for each mixture
+        // This is the factor-factor Hessian needed for mean-mean and cross-Hessian terms
+        // Storage: mix_d2L_dfdf[imix][k1 * n_factors_for_mixture + k2]
+        std::vector<std::vector<double>> mix_d2L_dfdf;
+        // For variance-mean/variance-weight cross Hessians: accumulate d²L_m/d(σ²_k1)d(f_k2)
+        // = d²L_m/d(f_k1)d(f_k2) * df_k1/d(σ²_k1) = d2L_dfdf * x_k1/(2*sigma_k1)
+        // Storage: mix_d2L_dsigma_df[imix][k1 * n_factors_for_mixture + k2]
+        std::vector<std::vector<double>> mix_d2L_dsigma_df;
+        // For mean × model_param and weight × model_param cross-Hessians:
+        // accumulate d²L_m/d(f_k)d(beta_j) for each mixture
+        // Storage: mix_d2L_df_dbeta[imix][k * n_model_params + (param_idx - first_model_param)]
+        std::vector<std::vector<double>> mix_d2L_df_dbeta;
+
+        if (nmix > 1 && iflag == 3 && factor_structure == FactorStructure::INDEPENDENT) {
+            int nfac_sq = n_factors_for_mixture * n_factors_for_mixture;
+            int n_df_dbeta = n_factors_for_mixture * n_model_params;
+            // IMPORTANT: Use assign() to force zero-initialization even when size unchanged
+            // resize() only zeros new elements, not existing ones!
+            mix_d2L_dfdf.resize(nmix);
+            mix_d2L_dsigma_df.resize(nmix);
+            mix_d2L_df_dbeta.resize(nmix);
+            for (int m = 0; m < nmix; m++) {
+                mix_d2L_dfdf[m].assign(nfac_sq, 0.0);
+                mix_d2L_dsigma_df[m].assign(nfac_sq, 0.0);
+                mix_d2L_df_dbeta[m].assign(n_df_dbeta, 0.0);
+            }
+        }
+
+        for (int imix = 0; imix < nmix; imix++) {
+            double mix_weight = mix_weights[imix];
+
+            // Set sigma_fac and factor_mean for this mixture component
+            // For SE models: only input factors have mixture distribution
+            if (nmix > 1) {
+                for (int k = 0; k < n_factors_for_mixture; k++) {
+                    sigma_fac[k] = mix_sigmas[imix][k];
+                    // Factor means from mixture (add to any covariate-based means)
+                    if (!use_factor_mean_covariates) {
+                        factor_mean[k] = mix_means[imix][k];
+                    } else {
+                        // With covariates: factor_mean already has covariate contribution
+                        // Add mixture mean on top (mixture mean is relative to overall mean=0)
+                        // Actually, with covariates, we typically don't use mixture means
+                        // For now, just use mixture mean directly (covariates shift mean, mixture adds offset)
+                        factor_mean[k] = mix_means[imix][k];  // Covariate effect applied separately
+                    }
+                }
+            }
+
         // Determine per-observation integration settings
         // OPTIMIZATION: obs_nq and fac_center are pre-allocated outside the observation loop
         int nint_points;
@@ -915,6 +1041,16 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 fac_spread[ifac] = sigma_fac[ifac];  // Full SD for standard integration
             }
         }
+
+        // Accumulators for this mixture component
+        double mixprob = 0.0;
+        std::vector<double> mixgrad(nparam, 0.0);
+        std::vector<double> mixhess;
+        if (iflag == 3) mixhess.resize(nparam * nparam, 0.0);
+
+        // For mixture mean gradients: accumulate dL_m/d(mean_k) = Σ w_q * L_q * d(log L_q)/df_k
+        // This is the "raw" gradient w.r.t. factor mean (df/d(mean) = 1)
+        std::vector<double> mix_dL_df(n_factors_for_mixture, 0.0);
 
         // Use "odometer" method: facint tracks indices for each dimension
         // OPTIMIZATION: facint is pre-allocated outside the observation loop, just reset to 0
@@ -1084,6 +1220,23 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             // Likelihood product for this type (declared outside loop for ntyp=1 optimization)
             double prob_this_type = 1.0;
 
+            // For mixture Hessians: accumulate factor-factor log-likelihood Hessian and gradient
+            // directly from modHess/modEval. This avoids numerical issues when extracting from
+            // variance Hessian (which fails when df/dsigma² is near zero).
+            // d2logL_dfdf[k1*n_factors_for_mixture+k2] = d²(log L)/d(f_{k1})d(f_{k2})
+            // dlogL_df[k] = d(log L)/d(f_k)
+            std::vector<double> d2logL_dfdf;
+            std::vector<double> dlogL_df;
+            // For factor × model_param LOG-Hessian at this integration point
+            // d2logL_df_dbeta_thisintpt[k * n_model_params + (param - first_model_param)]
+            std::vector<double> d2logL_df_dbeta_thisintpt;
+            if (nmix > 1 && iflag == 3 && factor_structure == FactorStructure::INDEPENDENT && ntyp == 1) {
+                int nfac_sq = n_factors_for_mixture * n_factors_for_mixture;
+                d2logL_dfdf.resize(nfac_sq, 0.0);
+                dlogL_df.resize(n_factors_for_mixture, 0.0);
+                d2logL_df_dbeta_thisintpt.resize(n_factors_for_mixture * n_model_params, 0.0);
+            }
+
             // Loop over types
             for (int ityp = 0; ityp < ntyp; ityp++) {
                 double type_prob = type_probs[ityp];
@@ -1218,9 +1371,15 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                             grad_this_type[2] += dL_df2 * df2_drho;
                         } else {
                             // Independent factors: use pre-computed df_dsigma2
+                            // For mixtures: accumulate to the correct variance parameter index
                             for (int ifac = 0; ifac < nfac; ifac++) {
-                                grad_this_type[ifac] += modEval[ifac + 1] * df_dsigma2[ifac];
+                                // For factors with mixture distribution, use mixture-specific index
+                                int var_idx = (nmix > 1 && ifac < n_factors_for_mixture) ?
+                                    GetFactorVarianceIndex(imix, ifac) : ifac;
+                                grad_this_type[var_idx] += modEval[ifac + 1] * df_dsigma2[ifac];
                             }
+                            // Note: Mixture mean and log-weight gradients are computed separately in STEP 11d
+                            // DO NOT add them to grad_this_type here to avoid double-counting
                         }
 
                         // Gradients w.r.t. factor mean covariate parameters
@@ -1621,26 +1780,71 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                             // This matches the legacy TMinLkhd.cc structure for better performance
 
                             // 1. Factor × Factor terms (with chain rule and diagonal second derivative)
+                            // For mixture models: variance indices are mixture-specific
                             for (int i = 0; i < nfac; i++) {
+                                // Get the correct parameter index for this factor's variance
+                                // For nmix=1: var_idx_i = i
+                                // For nmix>1: var_idx_i = GetFactorVarianceIndex(imix, i)
+                                int var_idx_i = (nmix > 1 && i < n_factors_for_mixture)
+                                              ? GetFactorVarianceIndex(imix, i) : i;
+
                                 for (int j = i; j < nfac; j++) {
+                                    int var_idx_j = (nmix > 1 && j < n_factors_for_mixture)
+                                                  ? GetFactorVarianceIndex(imix, j) : j;
+
                                     int modhess_idx = i * nDimModHess + j;
-                                    int full_idx = i * nparam + j;
+                                    int full_idx = var_idx_i * nparam + var_idx_j;
                                     double chain_factor = df_dsigma2[i] * df_dsigma2[j];
                                     hess_this_type[full_idx] += modHess[modhess_idx] * chain_factor;
                                     // Diagonal second derivative term
                                     if (i == j) {
                                         hess_this_type[full_idx] += modEval[i + 1] * d2f_dsigma2_sq[i];
                                     }
+
+                                    // For mixture Hessians: accumulate factor-factor log-likelihood Hessian
+                                    // directly from modHess (without df/dsigma² factors)
+                                    if (nmix > 1 && ntyp == 1 && i < n_factors_for_mixture && j < n_factors_for_mixture) {
+                                        int ff_idx = i * n_factors_for_mixture + j;
+                                        d2logL_dfdf[ff_idx] += modHess[modhess_idx];
+                                        if (i != j) {
+                                            // Symmetric entry
+                                            int ff_idx_sym = j * n_factors_for_mixture + i;
+                                            d2logL_dfdf[ff_idx_sym] += modHess[modhess_idx];
+                                        }
+                                    }
+                                }
+                            }
+
+                            // For mixture Hessians: accumulate factor gradient dlogL/df_k from modEval
+                            if (nmix > 1 && ntyp == 1) {
+                                for (int k = 0; k < n_factors_for_mixture; k++) {
+                                    dlogL_df[k] += modEval[k + 1];  // modEval[k+1] = d(log L_model)/df_k
                                 }
                             }
 
                             // 2. Factor × Model param terms (with chain rule on factor side only)
                             for (int i = 0; i < nfac; i++) {
+                                // Use mixture-specific variance index
+                                int var_idx_i = (nmix > 1 && i < n_factors_for_mixture)
+                                              ? GetFactorVarianceIndex(imix, i) : i;
+
                                 for (int jparam = 0; jparam < base_param_count_hess; jparam++) {
                                     int j = nfac + jparam;
                                     int modhess_idx = i * nDimModHess + j;
-                                    int full_idx = i * nparam + (firstpar + jparam);
+                                    int full_idx = var_idx_i * nparam + (firstpar + jparam);
                                     hess_this_type[full_idx] += modHess[modhess_idx] * df_dsigma2[i];
+                                }
+                            }
+
+                            // For mixture Hessians: accumulate d²logL/df_k d(beta_j) for RAW conversion later
+                            // Used for mean × beta and weight × beta cross-Hessians in STEP 11e
+                            if (nmix > 1 && ntyp == 1 && factor_structure == FactorStructure::INDEPENDENT) {
+                                for (int k = 0; k < n_factors_for_mixture; k++) {
+                                    for (int jparam = 0; jparam < base_param_count_hess; jparam++) {
+                                        int modhess_idx = k * nDimModHess + (nfac + jparam);
+                                        int storage_idx = k * n_model_params + (firstpar + jparam - first_model_param);
+                                        d2logL_df_dbeta_thisintpt[storage_idx] += modHess[modhess_idx];
+                                    }
                                 }
                             }
 
@@ -2162,10 +2366,13 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             // OPTIMIZATION: For ntyp=1, use grad_this_type/hess_this_type directly
             // instead of going through type_weighted_* intermediates. This combines
             // two O(nparam²) loops into one for the Hessian.
+            //
+            // For mixtures: accumulate into mixprob/mixgrad/mixhess first
+            // then weight by mix_weight when accumulating to total
             if (ntyp == 1) {
                 // For ntyp=1, prob_this_type is the likelihood at this quad point
                 // (type_prob = 1.0 for single type)
-                totalprob += quad_weight * prob_this_type;
+                mixprob += quad_weight * prob_this_type;
 
                 if (iflag >= 2) {
                     // grad_this_type = d(log L)/dθ, so raw gradient = L * grad = prob_this_type * grad_this_type
@@ -2173,7 +2380,26 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     double combined_weight = quad_weight * prob_this_type;
                     for (size_t gi = 0; gi < gradparlist.size(); gi++) {
                         int ipar = gradparlist[gi];
-                        totalgrad[ipar] += combined_weight * grad_this_type[ipar];
+                        mixgrad[ipar] += combined_weight * grad_this_type[ipar];
+                    }
+
+                    // For mixture mean gradients: accumulate dL_m/d(f_k)
+                    // d(log L)/df_k = grad_this_type[var_idx] / df_dsigma2[k] for independent factors
+                    // where var_idx = GetFactorVarianceIndex(imix, k) is the variance param index
+                    // dL/df_k = L * d(log L)/df_k
+                    // Only needed when nmix > 1
+                    if (nmix > 1 && factor_structure == FactorStructure::INDEPENDENT) {
+                        for (int k = 0; k < n_factors_for_mixture; k++) {
+                            // df_dsigma2[k] = x_node / (2*sigma), non-zero when x_node != 0
+                            // Avoid division by zero: if x_node = 0, then df/dsigma2 = 0
+                            // and grad_this_type[k] contribution from df/dsigma2 is also 0
+                            if (std::fabs(df_dsigma2[k]) > 1e-12) {
+                                // Use mixture-specific variance index to get the correct gradient
+                                int var_idx = GetFactorVarianceIndex(imix, k);
+                                double dlogL_dfk = grad_this_type[var_idx] / df_dsigma2[k];
+                                mix_dL_df[k] += combined_weight * dlogL_dfk;
+                            }
+                        }
                     }
                 }
 
@@ -2186,20 +2412,74 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                         for (int fj = fi; fj < nparam_free; fj++) {
                             int j = freeparlist[fj];
                             int idx = i * nparam + j;
-                            totalhess[idx] += combined_weight *
+                            mixhess[idx] += combined_weight *
                                 (hess_this_type[idx] + grad_this_type[i] * grad_this_type[j]);
                         }
+                    }
+
+                    // For mixture Hessians: convert factor-factor log-likelihood Hessian to raw Hessian
+                    // and accumulate into mix_d2L_dfdf and mix_d2L_dsigma_df.
+                    // d2logL_dfdf was accumulated directly from modHess during the model loop.
+                    // Raw Hessian: d²L/d(f_k1)d(f_k2) = L * (d²(log L)/df df + dlogL/df * dlogL/df')
+                    if (nmix > 1 && factor_structure == FactorStructure::INDEPENDENT) {
+                        for (int k1 = 0; k1 < n_factors_for_mixture; k1++) {
+                            for (int k2 = k1; k2 < n_factors_for_mixture; k2++) {
+                                int ff_idx = k1 * n_factors_for_mixture + k2;
+
+                                // Convert log-likelihood Hessian to raw Hessian
+                                // d²L/df df = L * (d²logL/df df + dlogL/df_k1 * dlogL/df_k2)
+                                double d2L_df_df = prob_this_type *
+                                    (d2logL_dfdf[ff_idx] + dlogL_df[k1] * dlogL_df[k2]);
+
+                                // Accumulate into mix_d2L_dfdf (weighted by quadrature weight)
+                                mix_d2L_dfdf[imix][ff_idx] += quad_weight * d2L_df_df;
+
+                                // Accumulate into mix_d2L_dsigma_df for variance-mean cross Hessian
+                                // d²L/(d(σ²_k1) d(f_k2)) = d²L/(df_k1 df_k2) * df_k1/d(σ²_k1)
+                                //                       = d2L_df_df * df_dsigma2[k1]
+                                mix_d2L_dsigma_df[imix][ff_idx] += quad_weight * d2L_df_df * df_dsigma2[k1];
+
+                                // Symmetric entry
+                                if (k1 != k2) {
+                                    int ff_idx_sym = k2 * n_factors_for_mixture + k1;
+                                    mix_d2L_dfdf[imix][ff_idx_sym] += quad_weight * d2L_df_df;
+                                    // For variance-mean cross: d²L/(d(σ²_k2) d(f_k1)) = d2L_df_df * df_dsigma2[k2]
+                                    mix_d2L_dsigma_df[imix][ff_idx_sym] += quad_weight * d2L_df_df * df_dsigma2[k2];
+                                }
+                            }
+                        }
+
+                        // Convert factor × model_param LOG-Hessian to RAW Hessian and accumulate
+                        // d²L/df_k d(param_j) = L * (d²logL/df_k d(param_j) + dlogL/df_k * dlogL/d(param_j))
+                        // Where dlogL/df_k and dlogL/d(param_j) are TOTALS from all models
+                        for (int k = 0; k < n_factors_for_mixture; k++) {
+                            for (int j = 0; j < n_model_params; j++) {
+                                int storage_idx = k * n_model_params + j;
+                                int param_idx = first_model_param + j;
+                                // Convert log-Hessian to raw Hessian
+                                double d2L_df_dbeta = prob_this_type *
+                                    (d2logL_df_dbeta_thisintpt[storage_idx] +
+                                     dlogL_df[k] * grad_this_type[param_idx]);
+                                // Accumulate weighted by quadrature weight
+                                mix_d2L_df_dbeta[imix][storage_idx] += quad_weight * d2L_df_dbeta;
+                            }
+                        }
+
+                        // Reset accumulators for next integration point
+                        std::fill(d2logL_dfdf.begin(), d2logL_dfdf.end(), 0.0);
+                        std::fill(dlogL_df.begin(), dlogL_df.end(), 0.0);
+                        std::fill(d2logL_df_dbeta_thisintpt.begin(), d2logL_df_dbeta_thisintpt.end(), 0.0);
                     }
                 }
             } else {
                 // ntyp > 1: Use type_weighted_* which already accumulated across types
-                totalprob += quad_weight * type_weighted_prob;
+                mixprob += quad_weight * type_weighted_prob;
 
                 if (iflag >= 2) {
                     // Accumulate for all params that need gradients (free + tied)
                     for (size_t gi = 0; gi < gradparlist.size(); gi++) {
                         int ipar = gradparlist[gi];
-                        totalgrad[ipar] += quad_weight * type_weighted_grad[ipar];
+                        mixgrad[ipar] += quad_weight * type_weighted_grad[ipar];
                     }
                 }
 
@@ -2209,7 +2489,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                         for (int fj = fi; fj < nparam_free; fj++) {
                             int j = freeparlist[fj];
                             int idx = i * nparam + j;
-                            totalhess[idx] += quad_weight * type_weighted_hess[idx];
+                            mixhess[idx] += quad_weight * type_weighted_hess[idx];
                         }
                     }
                 }
@@ -2221,6 +2501,504 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     facint[ifac]++;
                     if (facint[ifac] < obs_nq[ifac]) break;
                     facint[ifac] = 0;
+                }
+            }
+        }  // End integration point loop
+
+        // ===== STEP 11b: Accumulate mixture contribution =====
+        // Weight this mixture's contribution by mix_weight
+        // Note: For nmix=1, mix_weight=1 so this is equivalent to old code
+        totalprob += mix_weight * mixprob;
+
+        if (iflag >= 2) {
+            // Mixture gradient contribution
+            // d/dθ[Σ_m w_m L_m] = Σ_m [dw_m/dθ * L_m + w_m * dL_m/dθ]
+            // For now, just accumulate w_m * dL_m/dθ
+            // Gradient w.r.t. mixture weights/means handled separately below
+            for (size_t gi = 0; gi < gradparlist.size(); gi++) {
+                int ipar = gradparlist[gi];
+                totalgrad[ipar] += mix_weight * mixgrad[ipar];
+            }
+        }
+
+        if (iflag == 3) {
+            // Mixture Hessian contribution
+            for (int fi = 0; fi < nparam_free; fi++) {
+                int i = freeparlist[fi];
+                for (int fj = fi; fj < nparam_free; fj++) {
+                    int j = freeparlist[fj];
+                    int idx = i * nparam + j;
+                    totalhess[idx] += mix_weight * mixhess[idx];
+                }
+            }
+        }
+
+        // ===== STEP 11c: Store per-mixture values for mixture parameter gradients =====
+        // Store L_m for this mixture (needed for weight parameter gradients)
+        mix_L[imix] = mixprob;
+
+        // Store dL_m/d(mean_k) for this mixture (needed for mean parameter gradients)
+        // dL_m/d(mean_k) = Σ_intpt w_q * L_intpt * d(log L_intpt)/d(f_k) * d(f_k)/d(mean_k)
+        //                = Σ_intpt w_q * L_intpt * d(log L_intpt)/d(f_k) * 1
+        // Store mix_dL_df for this mixture (for mean gradient computation after loop)
+        if (nmix > 1 && iflag >= 2) {
+            for (int k = 0; k < n_factors_for_mixture; k++) {
+                mix_dL_dmean[imix][k] = mix_dL_df[k];
+                // Store dL_m/d(σ²_k) for variance-weight cross Hessian
+                // This is the unweighted variance gradient accumulated in mixgrad
+                int var_idx = GetFactorVarianceIndex(imix, k);
+                mix_dL_dsigma[imix][k] = mixgrad[var_idx];
+            }
+        }
+        // Store dL_m/d(beta_j) for this mixture (for weight-beta cross Hessian)
+        if (nmix > 1 && iflag == 3) {
+            for (int j = 0; j < n_model_params; j++) {
+                int beta_idx = first_model_param + j;
+                mix_dL_dbeta[imix][j] = mixgrad[beta_idx];
+            }
+        }
+
+        }  // End mixture loop
+
+        // ===== STEP 11d: Compute mixture parameter gradients after all mixtures =====
+        // L = Σ_m w_m * L_m
+        //
+        // Gradient w.r.t. log-weight parameters (fw_m for m < nmix-1):
+        // dL/d(fw_m) = Σ_n (dw_n/d(fw_m)) * L_n
+        // Using softmax: dw_m/d(fw_m) = w_m(1 - w_m), dw_n/d(fw_m) = -w_m * w_n for n ≠ m
+        // So dL/d(fw_m) = w_m(1 - w_m) * L_m + Σ_{n≠m} (-w_m * w_n) * L_n
+        //              = w_m * L_m - w_m * (w_m * L_m + Σ_{n≠m} w_n * L_n)
+        //              = w_m * (L_m - L)  where L = totalprob
+        //
+        // Gradient w.r.t. mean parameters (mu_{m,k} for m < nmix-1, k < n_factors_for_mixture):
+        // L_m depends on mean through the factor distribution shift
+        // dL/d(mu_{m,k}) = w_m * dL_m/d(mu_{m,k}) + w_last * dL_last/d(mu_{last,k}) * d(mu_{last,k})/d(mu_{m,k})
+        // where d(mu_{last,k})/d(mu_{m,k}) = -w_m / w_last (from constraint Σ w_m * mu_m = 0)
+        // = w_m * dL_m/d(mu_{m,k}) - w_m * dL_last/d(mu_{last,k})
+        // where dL_m/d(mu_{m,k}) is the derivative of L_m w.r.t. the mixture-specific mean
+        //
+        // Note: We don't have dL_m/d(mu_{m,k}) stored directly. We would need to modify
+        // the integration loop to accumulate this. For now, we'll use the fact that
+        // the mean gradient equals the sum over integration points of w_q * dL_intpt/df_k
+        // This requires re-computing, which is expensive. A proper implementation would
+        // accumulate during the main loop.
+        //
+        // SIMPLIFIED APPROACH: For the initial implementation, we note that:
+        // If we shift the mean for mixture m, factor values shift by the same amount.
+        // dL_m/d(mu_k) = Σ_intpt w_q * L_intpt * d(log L_intpt)/d(f_k)
+        // This is proportional to mixgrad[k] / df_dsigma2, but df_dsigma2 varies.
+        // As a first approximation, we can use the average.
+        if (nmix > 1 && iflag >= 2) {
+            // Log-weight gradients
+            // dL/d(fw_m) = w_m * (L_m - L) + dL/d(mean_last) * d(mean_last)/d(fw_m)
+            //
+            // The second term accounts for the fact that changing mixture weights
+            // also changes the derived mean for the last mixture via constraint:
+            // mean_last = -Σ_j w_j * mean_j / w_last
+            //
+            // d(mean_last_k)/d(fw_m) = -mean_m_k * w_m / w_last  (for independent factors)
+            //
+            // So the additional contribution is:
+            // Σ_k dL/d(mean_last_k) * (-mean_m_k * w_m / w_last)
+            // = -w_m / w_last * Σ_k dL_last/d(f_k) * mean_m_k
+            // = -w_m / w_last * Σ_k mix_dL_dmean[last][k] * mix_means[m][k]
+            //
+            int last_mix = nmix - 1;
+            for (int m = 0; m < nmix - 1; m++) {
+                int logwt_idx = GetMixtureLogWeightIndex(m);
+                // Direct effect: changing weights
+                double dL_dfw = mix_weights[m] * (mix_L[m] - totalprob);
+
+                // Indirect effect: changing mean_last through constraint
+                // Only applies for independent factors
+                //
+                // For 2-mixture softmax with constraint mean_last = -w_m*mean_m/w_last:
+                // d(mean_last)/d(fw_m) = -mean_m * d(w_m/w_last)/d(fw_m)
+                //                      = -mean_m * w_m/w_last  (since d(w_m/w_last)/d(fw_m) = w_m/w_last for 2-mix)
+                //
+                // The indirect effect on L is:
+                // w_last * dL_last/d(mean_last) * d(mean_last)/d(fw_m)
+                // = w_last * mix_dL_dmean[last][k] * (-mean_m * w_m/w_last)
+                // = -w_m * mean_m * mix_dL_dmean[last][k]
+                //
+                if (factor_structure == FactorStructure::INDEPENDENT) {
+                    for (int k = 0; k < n_factors_for_mixture; k++) {
+                        // mix_dL_dmean[last_mix][k] is dL_last/d(mean_last_k)
+                        // mix_means[m][k] is the mean for mixture m, factor k
+                        double indirect = -mix_weights[m] * mix_means[m][k] * mix_dL_dmean[last_mix][k];
+                        dL_dfw += indirect;
+                    }
+                }
+
+                totalgrad[logwt_idx] += dL_dfw;
+            }
+
+            // Mean gradients (for independent factors only for now)
+            // dL/d(mu_{m,k}) = w_m * dL_m/d(mu_k) + w_last * dL_last/d(mu_k) * d(mu_last_k)/d(mu_{m,k})
+            // where d(mu_last_k)/d(mu_{m,k}) = -w_m / w_last (from constraint)
+            // = w_m * (dL_m/d(mu_k) - dL_last/d(mu_k))
+            if (factor_structure == FactorStructure::INDEPENDENT) {
+                int last_mix = nmix - 1;
+                for (int m = 0; m < nmix - 1; m++) {
+                    for (int k = 0; k < n_factors_for_mixture; k++) {
+                        int mean_idx = GetFactorMeanIndex(m, k);
+                        // dL_m/d(mu_k) and dL_last/d(mu_k) are stored in mix_dL_dmean
+                        double dL_dmu = mix_weights[m] * (mix_dL_dmean[m][k] - mix_dL_dmean[last_mix][k]);
+                        totalgrad[mean_idx] += dL_dmu;
+                    }
+                }
+            }
+
+            // ===== STEP 11e: Compute mixture parameter Hessians after all mixtures =====
+            // These are the second derivatives of L = Σ_m w_m * L_m w.r.t. mixture parameters
+            // Using mix_d2L_dfdf (factor-factor Hessian per mixture) accumulated during integration
+            // Only access mix_d2L_df_dbeta when it's been initialized (iflag == 3)
+            // (removing debug output for now)
+            if (iflag == 3 && factor_structure == FactorStructure::INDEPENDENT && ntyp == 1) {
+                int last_mix = nmix - 1;
+
+                // (1) Weight-weight Hessian: d²L/d(fw_m1)d(fw_m2)
+                // From L = Σ_n w_n * L_n, the raw Hessian is:
+                // d²L/d(fw_m)² = Σ_n [d²w_n/d(fw_m)² * L_n + 2 * dw_n/d(fw_m) * dL_n/d(fw_m) + w_n * d²L_n/d(fw_m)²]
+                //
+                // Term 1: Softmax second derivative contribution
+                // For 2-mixture: d²w_0/d(fw_0)² = w_0*(1-w_0)*(1-2*w_0)
+                //                d²w_1/d(fw_0)² = -w_0*(1-w_0)*(1-2*w_0)
+                // So: Σ_n d²w_n/d(fw_0)² * L_n = w_0*(1-w_0)*(1-2*w_0) * (L_0 - L_1)
+                //
+                // Term 2: Cross effect (only last mixture contributes)
+                // 2 * dw_last/d(fw_m) * dL_last/d(fw_m)
+                // = 2 * (-w_last * w_m) * (-exp(fw_m) * Σ_k mix_dL_dmean[last][k] * mean_m_k)
+                // = 2 * w_last * w_m * exp(fw_m) * Σ_k mix_dL_dmean[last][k] * mean_m_k
+                //
+                // Term 3: w_last * d²L_last/d(fw_m)² (through mean_last dependence)
+                for (int m1 = 0; m1 < nmix - 1; m1++) {
+                    int fw_idx1 = GetMixtureLogWeightIndex(m1);
+                    double exp_fw_m1 = std::exp(param[fw_idx1]);
+                    double w_m1 = mix_weights[m1];
+
+                    for (int m2 = m1; m2 < nmix - 1; m2++) {
+                        int fw_idx2 = GetMixtureLogWeightIndex(m2);
+                        double exp_fw_m2 = std::exp(param[fw_idx2]);
+                        double w_m2 = mix_weights[m2];
+                        int hess_idx = fw_idx1 * nparam + fw_idx2;
+
+                        double contrib = 0.0;
+
+                        // Term 1: Softmax second derivative contribution
+                        // For diagonal (m1 == m2):
+                        // d²w_m/d(fw_m)² = w_m * (1-w_m) * (1 - 2*w_m)
+                        // d²w_n/d(fw_m)² = w_n * w_m * (2*w_m - 1) for n != m
+                        // Σ_n d²w_n/d(fw_m)² * L_n computed below
+                        if (m1 == m2) {
+                            // Diagonal: compute Σ_n d²w_n/d(fw_m)² * L_n
+                            double d2w_m_dfw2 = w_m1 * (1.0 - w_m1) * (1.0 - 2.0 * w_m1);
+                            double d2w_last_dfw2 = mix_weights[last_mix] * w_m1 * (2.0 * w_m1 - 1.0);
+
+                            // Contribution from non-last mixtures
+                            contrib += d2w_m_dfw2 * mix_L[m1];
+
+                            // Contribution from other non-last mixtures (n != m, n < last)
+                            for (int n = 0; n < nmix - 1; n++) {
+                                if (n != m1) {
+                                    // d²w_n/d(fw_m)² = w_n * w_m * (2*w_m - 1) for n != m
+                                    double d2w_n_dfw2 = mix_weights[n] * w_m1 * (2.0 * w_m1 - 1.0);
+                                    contrib += d2w_n_dfw2 * mix_L[n];
+                                }
+                            }
+
+                            // Contribution from last mixture
+                            contrib += d2w_last_dfw2 * mix_L[last_mix];
+                        } else {
+                            // Off-diagonal: d²w_m/d(fw_m1)d(fw_m2) terms
+                            // d²w_m1/d(fw_m1)d(fw_m2) = w_m1 * (δ_{m1} - w_m1) * (-w_m2) = -w_m1 * (1-w_m1) * w_m2
+                            // d²w_m2/d(fw_m1)d(fw_m2) = w_m2 * (-w_m1) * (δ_{m2} - w_m2) = -w_m2 * w_m1 * (1-w_m2)
+                            // d²w_last/d(fw_m1)d(fw_m2) = -(-w_last*w_m1) * w_m2 - w_last * (-w_m1*w_m2)
+                            //                          = w_last*w_m1*w_m2 + w_last*w_m1*w_m2 = 2*w_last*w_m1*w_m2
+                            double d2w_m1_dfw12 = -w_m1 * (1.0 - w_m1) * w_m2;
+                            double d2w_m2_dfw12 = -w_m2 * w_m1 * (1.0 - w_m2);
+                            double d2w_last_dfw12 = 2.0 * mix_weights[last_mix] * w_m1 * w_m2;
+
+                            contrib += d2w_m1_dfw12 * mix_L[m1] + d2w_m2_dfw12 * mix_L[m2];
+                            contrib += d2w_last_dfw12 * mix_L[last_mix];
+                        }
+
+                        // Term 2: Cross effect (2 * dw_last/d(fw_m) * dL_last/d(fw_m))
+                        // dw_last/d(fw_m) = -w_last * w_m
+                        // dL_last/d(fw_m) = Σ_k mix_dL_dmean[last][k] * (-exp(fw_m)*mean_m_k)
+                        if (m1 == m2) {
+                            double dw_last_dfw = -mix_weights[last_mix] * w_m1;
+                            double dL_last_dfw = 0.0;
+                            for (int k = 0; k < n_factors_for_mixture; k++) {
+                                dL_last_dfw += mix_dL_dmean[last_mix][k] * (-exp_fw_m1 * mix_means[m1][k]);
+                            }
+                            contrib += 2.0 * dw_last_dfw * dL_last_dfw;
+                        }
+
+                        // Term 3: w_last * d²L_last/d(fw_m1)d(fw_m2) through mean_last
+                        // d²L_last/d(fw_m1)d(fw_m2) = Σ_k1,k2 d²L_last/d(f_k1)d(f_k2) * df_k1/d(fw_m1) * df_k2/d(fw_m2)
+                        //                          + δ_{m1,m2} * Σ_k dL_last/d(f_k) * d²(mean_last_k)/d(fw_m)²
+                        // where df_k/d(fw_m) = d(mean_last_k)/d(fw_m) = -exp(fw_m)*mean_m_k
+                        for (int k1 = 0; k1 < n_factors_for_mixture; k1++) {
+                            double df_k1_dfw_m1 = -exp_fw_m1 * mix_means[m1][k1];
+                            for (int k2 = 0; k2 < n_factors_for_mixture; k2++) {
+                                double df_k2_dfw_m2 = -exp_fw_m2 * mix_means[m2][k2];
+                                int ff_idx = k1 * n_factors_for_mixture + k2;
+                                contrib += mix_weights[last_mix] * mix_d2L_dfdf[last_mix][ff_idx] * df_k1_dfw_m1 * df_k2_dfw_m2;
+                            }
+                        }
+
+                        // Second derivative of mean_last w.r.t. fw_m (only for diagonal)
+                        // d²(mean_last_k)/d(fw_m)² = d(-exp(fw_m)*mean_m_k)/d(fw_m) = -exp(fw_m)*mean_m_k
+                        if (m1 == m2) {
+                            for (int k = 0; k < n_factors_for_mixture; k++) {
+                                double d2_mean_last_dfw2 = -exp_fw_m1 * mix_means[m1][k];
+                                contrib += mix_weights[last_mix] * mix_dL_dmean[last_mix][k] * d2_mean_last_dfw2;
+                            }
+                        }
+
+                        totalhess[hess_idx] += contrib;
+                    }
+                }
+
+                // (2) Mean-mean Hessian: d²L/d(mu_m1_k1)d(mu_m2_k2)
+                // dL/d(mu_m_k) = w_m * (dL_m/d(f_k) - dL_last/d(f_k))
+                // d²L/d(mu_m1_k1)d(mu_m2_k2) =
+                //   δ_{m1,m2} * w_m1 * d²L_m1/d(f_k1)d(f_k2)   [direct: same mixture]
+                // + (w_m1 * w_m2 / w_last) * d²L_last/d(f_k1)d(f_k2)   [indirect: via mean_last]
+                // - δ_{m1,m2} * w_m1 * d²L_last/d(f_k1)d(f_k2) * (-w_m1/w_last)   [cross term]
+                //
+                // Simplifying:
+                // = δ_{m1,m2} * w_m1 * d²L_m1/d(f_k1)d(f_k2)
+                // + (w_m1 * w_m2 / w_last) * d²L_last/d(f_k1)d(f_k2)
+                for (int m1 = 0; m1 < nmix - 1; m1++) {
+                    for (int k1 = 0; k1 < n_factors_for_mixture; k1++) {
+                        int mean_idx1 = GetFactorMeanIndex(m1, k1);
+
+                        for (int m2 = m1; m2 < nmix - 1; m2++) {
+                            for (int k2 = (m1 == m2 ? k1 : 0); k2 < n_factors_for_mixture; k2++) {
+                                int mean_idx2 = GetFactorMeanIndex(m2, k2);
+                                int hess_idx = mean_idx1 * nparam + mean_idx2;
+                                if (mean_idx1 > mean_idx2) {
+                                    hess_idx = mean_idx2 * nparam + mean_idx1;
+                                }
+
+                                int ff_idx = k1 * n_factors_for_mixture + k2;
+                                double contrib = 0.0;
+
+                                // Direct term: same mixture
+                                if (m1 == m2) {
+                                    contrib += mix_weights[m1] * mix_d2L_dfdf[m1][ff_idx];
+                                }
+
+                                // Indirect term: via last mixture's mean constraint
+                                // d(mean_last_k1)/d(mu_m1_k1) = -w_m1/w_last
+                                // d(mean_last_k2)/d(mu_m2_k2) = -w_m2/w_last
+                                contrib += (mix_weights[m1] * mix_weights[m2] / mix_weights[last_mix])
+                                         * mix_d2L_dfdf[last_mix][ff_idx];
+
+                                totalhess[hess_idx] += contrib;
+                            }
+                        }
+                    }
+                }
+
+                // (3) Weight-mean cross Hessian: d²L/d(fw_m)d(mu_n_k)
+                // From dL/d(fw_m) = w_m*(L_m - L) + Σ_j dL_last/df_j * (-w_m * mean_m_j)
+                // and dL/d(mu_n_k) = w_n*(dL_n/d(f_k) - dL_last/d(f_k))
+                //
+                // Taking derivative of dL/d(fw_m) w.r.t. mu_n_k:
+                // Term A (direct): w_m * (dL_m/d(mu_n_k) - dL/d(mu_n_k))
+                // Term B (indirect second-order): Σ_j d²L_last/df_j d(f_k) * (-w_m*mean_m_j) * d(f_k)/d(mu_n_k)
+                // Term C (indirect first-order, m=n only): dL_last/df_k * d(-w_m*mean_m_k)/d(mu_n_k)
+                for (int m = 0; m < nmix - 1; m++) {
+                    int fw_idx = GetMixtureLogWeightIndex(m);
+
+                    for (int n = 0; n < nmix - 1; n++) {
+                        for (int k = 0; k < n_factors_for_mixture; k++) {
+                            int mean_idx = GetFactorMeanIndex(n, k);
+                            int hess_idx = std::min(fw_idx, mean_idx) * nparam + std::max(fw_idx, mean_idx);
+
+                            // Term A: w_m * (dL_m/d(mu_n_k) - dL/d(mu_n_k))
+                            // dL_m/d(mu_n_k) = dL_m/df_k if m=n, else 0
+                            // dL/d(mu_n_k) = w_n * (dL_n/df_k - dL_last/df_k)
+                            double dL_m_dmu_n_k = (m == n) ? mix_dL_dmean[m][k] : 0.0;
+                            double dL_dmu_n_k = mix_weights[n] * (mix_dL_dmean[n][k] - mix_dL_dmean[last_mix][k]);
+                            double direct_contrib = mix_weights[m] * (dL_m_dmu_n_k - dL_dmu_n_k);
+
+                            // Term B: second-order contribution from last mixture
+                            // d(f_k)/d(mu_n_k) affects last mixture: = -w_n/w_last
+                            // d(f_j)/d(fw_m) affects last mixture: = -w_m*mean_m_j / w_last
+                            // Combined with w_last: w_last * (-w_m*mean_m_j/w_last) * (-w_n/w_last)
+                            //                     = w_m * w_n * mean_m_j / w_last
+                            double second_order_contrib = 0.0;
+                            for (int j = 0; j < n_factors_for_mixture; j++) {
+                                int ff_idx = j * n_factors_for_mixture + k;
+                                second_order_contrib += mix_d2L_dfdf[last_mix][ff_idx] *
+                                    (mix_weights[m] * mix_weights[n] / mix_weights[last_mix]) * mix_means[m][j];
+                            }
+
+                            // Term C: first derivative term when m == n
+                            // d(-w_m*mean_m_k)/d(mu_m_k) = -w_m (since mean_m_k is parameter)
+                            // w_last cancels with d(mean_last)/d(mu_n) = -w_n/w_last, giving -w_n
+                            // But we're differentiating w.r.t. mu_n_k, so this only contributes when m=n
+                            double first_order_contrib = 0.0;
+                            if (m == n) {
+                                first_order_contrib = -mix_weights[m] * mix_dL_dmean[last_mix][k];
+                            }
+
+                            totalhess[hess_idx] += direct_contrib + second_order_contrib + first_order_contrib;
+                        }
+                    }
+                }
+
+                // (4) Variance-mean cross Hessian: d²L/d(var_imix_k1)d(mu_m_k2)
+                // mix_d2L_dsigma_df[imix][k1,k2] = d²L_imix/(d(σ²_k1) df_k2) was accumulated during integration
+                // For variance var_imix_k1: only mixture imix contributes (variance only affects its own mixture)
+                // d²L/d(var_imix_k1)d(mu_m_k2) = w_imix * mix_d2L_dsigma_df[imix][k1,k2] * df_k2/d(mu_m_k2)
+                //
+                // df_k2/d(mu_m_k2) depends on which mixture:
+                //   - For imix == m (non-last): df_k2/d(mu_m_k2) = 1
+                //   - For imix == last: df_k2/d(mu_m_k2) = d(mu_last_k2)/d(mu_m_k2) = -w_m/w_last
+                for (int imix = 0; imix < nmix; imix++) {
+                    for (int k1 = 0; k1 < n_factors_for_mixture; k1++) {
+                        int var_idx = GetFactorVarianceIndex(imix, k1);
+
+                        for (int m = 0; m < nmix - 1; m++) {
+                            for (int k2 = 0; k2 < n_factors_for_mixture; k2++) {
+                                int mean_idx = GetFactorMeanIndex(m, k2);
+                                int hess_idx = std::min(var_idx, mean_idx) * nparam + std::max(var_idx, mean_idx);
+                                int ff_idx = k1 * n_factors_for_mixture + k2;
+
+                                double contrib = 0.0;
+                                if (imix == m) {
+                                    // Same mixture: df_k2/d(mu_m_k2) = 1
+                                    contrib = mix_weights[imix] * mix_d2L_dsigma_df[imix][ff_idx];
+                                } else if (imix == last_mix) {
+                                    // Last mixture: df_k2/d(mu_m_k2) = -w_m/w_last
+                                    double df_dmu = -mix_weights[m] / mix_weights[last_mix];
+                                    contrib = mix_weights[imix] * mix_d2L_dsigma_df[imix][ff_idx] * df_dmu;
+                                }
+                                // Other mixtures: variance doesn't affect this mixture, no contribution
+
+                                totalhess[hess_idx] += contrib;
+                            }
+                        }
+                    }
+                }
+
+                // (5) Variance-weight cross Hessian: d²L/d(var_imix_k)d(fw_m)
+                // d²L/d(σ²_imix_k)d(fw_m) = Σ_n [d²w_n/d(fw_m) * dL_n/d(σ²_imix_k) + dw_n/d(fw_m) * d²L_n/(d(σ²_imix_k)d(fw_m))]
+                //
+                // But dL_n/d(σ²_imix_k) = 0 for n != imix (variance only affects its own mixture)
+                // And d²L_n/(d(σ²_imix_k)d(fw_m)) = 0 for n != last (only last mixture has fw_m dependency through mean_last)
+                //
+                // So the terms are:
+                // 1. dw_imix/d(fw_m) * dL_imix/d(σ²_imix_k)  [first-order cross term]
+                // 2. For imix == last: w_last * d²L_last/(d(σ²_k)d(fw_m))  [second-order term through mean_last]
+                for (int imix = 0; imix < nmix; imix++) {
+                    for (int k = 0; k < n_factors_for_mixture; k++) {
+                        int var_idx = GetFactorVarianceIndex(imix, k);
+
+                        for (int m = 0; m < nmix - 1; m++) {
+                            int fw_idx = GetMixtureLogWeightIndex(m);
+                            int hess_idx = std::min(var_idx, fw_idx) * nparam + std::max(var_idx, fw_idx);
+
+                            double contrib = 0.0;
+
+                            // Term 1: First-order cross term: dw_imix/d(fw_m) * dL_imix/d(σ²_k)
+                            // dw_imix/d(fw_m) via softmax:
+                            //   If imix == m: w_m * (1 - w_m)
+                            //   If imix != m and imix < nmix-1: -w_imix * w_m
+                            //   If imix == last: -w_last * w_m
+                            double dw_imix_dfw_m;
+                            if (imix == m) {
+                                dw_imix_dfw_m = mix_weights[m] * (1.0 - mix_weights[m]);
+                            } else {
+                                dw_imix_dfw_m = -mix_weights[imix] * mix_weights[m];
+                            }
+                            contrib += dw_imix_dfw_m * mix_dL_dsigma[imix][k];
+
+                            // Term 2: Second-order term for last mixture through mean_last
+                            // d²L_last/(d(σ²_k)d(fw_m)) = Σ_j d²L_last/(d(σ²_k)df_j) * df_j/d(fw_m)
+                            //   where df_j/d(fw_m) = d(mean_last_j)/d(fw_m) = -exp(fw_m) * mean_m_j
+                            if (imix == last_mix) {
+                                double exp_fw_m = std::exp(param[fw_idx]);
+                                double second_order_contrib = 0.0;
+                                for (int j = 0; j < n_factors_for_mixture; j++) {
+                                    double df_j_dfw_m = -exp_fw_m * mix_means[m][j];
+                                    int sf_idx = k * n_factors_for_mixture + j;
+                                    second_order_contrib += mix_d2L_dsigma_df[last_mix][sf_idx] * df_j_dfw_m;
+                                }
+                                contrib += mix_weights[last_mix] * second_order_contrib;
+                            }
+
+                            totalhess[hess_idx] += contrib;
+                        }
+                    }
+                }
+
+                // (6) Mean × Model param cross-Hessian: d²L/d(mean_m_k)d(beta_j)
+                // Using mix_d2L_df_dbeta[imix][k,j] = d²L_imix/d(f_k)d(beta_j) accumulated during integration
+                //
+                // For mean_m_k (m < last):
+                // dL/d(mean_m_k) = w_m * dL_m/df_k + w_last * dL_last/df_k * (-w_m/w_last)
+                //                = w_m * (dL_m/df_k - dL_last/df_k)
+                //
+                // d²L/d(mean_m_k)d(beta_j) = w_m * (d²L_m/df_k d(beta_j) - d²L_last/df_k d(beta_j))
+                //                          = w_m * (mix_d2L_df_dbeta[m][k,j] - mix_d2L_df_dbeta[last][k,j])
+
+                for (int m = 0; m < nmix - 1; m++) {
+                    for (int k = 0; k < n_factors_for_mixture; k++) {
+                        int mean_idx = GetFactorMeanIndex(m, k);
+
+                        for (int j = 0; j < n_model_params; j++) {
+                            int beta_idx = first_model_param + j;
+                            int hess_idx = std::min(mean_idx, beta_idx) * nparam + std::max(mean_idx, beta_idx);
+                            int storage_idx = k * n_model_params + j;
+
+                            double contrib = mix_weights[m] *
+                                (mix_d2L_df_dbeta[m][storage_idx] - mix_d2L_df_dbeta[last_mix][storage_idx]);
+                            totalhess[hess_idx] += contrib;
+                        }
+                    }
+                }
+
+                // (7) Weight × Model param cross-Hessian: d²L/d(fw_m)d(beta_j)
+                // From gradient: dL/d(fw_m) = w_m * (L_m - L) + Σ_k dL_last/df_k * (-w_m * mean_m_k)
+                //
+                // Taking derivative w.r.t. beta_j:
+                // d²L/d(fw_m)d(beta_j) = w_m * (dL_m/d(beta_j) - dL/d(beta_j))   [Term A: direct]
+                //                      + Σ_k d²L_last/d(f_k)d(beta_j) * (-w_m * mean_m_k)  [Term B: indirect]
+                //
+                // Term A: direct effect from changing weights
+                // Term B: indirect effect from mean_last changing with fw_m
+                for (int m = 0; m < nmix - 1; m++) {
+                    int fw_idx = GetMixtureLogWeightIndex(m);
+
+                    for (int j = 0; j < n_model_params; j++) {
+                        int beta_idx = first_model_param + j;
+                        int hess_idx = std::min(fw_idx, beta_idx) * nparam + std::max(fw_idx, beta_idx);
+
+                        // Term A: w_m * (dL_m/d(beta_j) - dL/d(beta_j))
+                        // dL/d(beta_j) = Σ_n w_n * dL_n/d(beta_j) = totalgrad[beta_idx] (after weighting)
+                        // But totalgrad hasn't been fully accumulated yet at this point in the obs loop
+                        // So we compute: dL/d(beta_j) = Σ_n w_n * mix_dL_dbeta[n][j]
+                        double dL_dbeta = 0.0;
+                        for (int n = 0; n < nmix; n++) {
+                            dL_dbeta += mix_weights[n] * mix_dL_dbeta[n][j];
+                        }
+                        double direct_contrib = mix_weights[m] * (mix_dL_dbeta[m][j] - dL_dbeta);
+
+                        // Term B: Σ_k d²L_last/d(f_k)d(beta_j) * (-w_m * mean_m_k)
+                        double indirect_contrib = 0.0;
+                        for (int k = 0; k < n_factors_for_mixture; k++) {
+                            int storage_idx = k * n_model_params + j;
+                            indirect_contrib += mix_d2L_df_dbeta[last_mix][storage_idx] * (-mix_weights[m] * mix_means[m][k]);
+                        }
+
+                        totalhess[hess_idx] += direct_contrib + indirect_contrib;
+                    }
                 }
             }
         }
@@ -2273,21 +3051,101 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 int FactorModel::GetFactorVarianceIndex(int imix, int ifac)
 {
     // Factor variances come first in parameter vector
-    return imix * nfac + ifac;
+    // Layout: [var_m0_f0, var_m0_f1, ..., var_m0_fK-1, var_m1_f0, ..., var_mN-1_fK-1]
+    // For SE models, only input factors (n_factors_for_mixture) have variances
+    return imix * n_factors_for_mixture + ifac;
 }
 
 int FactorModel::GetFactorMeanIndex(int imix, int ifac)
 {
-    // Factor means come after variances (if nmix > 1)
+    // Factor means come after all variances (if nmix > 1)
+    // Layout: [variances...] [mean_m0_f0, mean_m0_f1, ..., mean_mN-2_fK-1]
+    // Note: imix < nmix-1 (last mixture mean is derived from constraint)
     if (nmix == 1) return -1;  // No means for single mixture
-    return nmix * nfac + imix * nfac + ifac;
+    if (imix >= nmix - 1) return -1;  // Last mixture mean is derived
+    int n_var_params = nmix * n_factors_for_mixture;
+    return n_var_params + imix * n_factors_for_mixture + ifac;
+}
+
+int FactorModel::GetMixtureLogWeightIndex(int imix)
+{
+    // Log-weights come after variances and means (if nmix > 1)
+    // Layout: [variances...] [means...] [logwt_m0, logwt_m1, ..., logwt_mN-2]
+    // Note: imix < nmix-1 (last mixture weight is reference)
+    if (nmix == 1) return -1;  // No weights for single mixture
+    if (imix >= nmix - 1) return -1;  // Last mixture weight is reference
+    int n_var_params = nmix * n_factors_for_mixture;
+    int n_mean_params = (nmix - 1) * n_factors_for_mixture;
+    return n_var_params + n_mean_params + imix;
 }
 
 int FactorModel::GetMixtureWeightIndex(int imix)
 {
-    // Mixture weights come after factor parameters
-    if (nmix == 1) return -1;  // No weights for single mixture
-    return nmix * nfac * 2 + imix;
+    // Legacy function - same as GetMixtureLogWeightIndex
+    return GetMixtureLogWeightIndex(imix);
+}
+
+void FactorModel::ComputeMixtureWeights(std::vector<double>& weights)
+{
+    // Compute mixture weights from log-weight parameters using softmax
+    // w_m = exp(fw_m) / (1 + sum_{j<nmix-1} exp(fw_j)) for m < nmix-1
+    // w_{nmix-1} = 1 / (1 + sum_{j<nmix-1} exp(fw_j))
+    weights.resize(nmix);
+
+    if (nmix == 1) {
+        weights[0] = 1.0;
+        return;
+    }
+
+    double denom = 1.0;  // Start with 1 for reference mixture
+    for (int m = 0; m < nmix - 1; m++) {
+        double log_wt = param[GetMixtureLogWeightIndex(m)];
+        denom += std::exp(log_wt);
+    }
+
+    for (int m = 0; m < nmix - 1; m++) {
+        double log_wt = param[GetMixtureLogWeightIndex(m)];
+        weights[m] = std::exp(log_wt) / denom;
+    }
+    weights[nmix - 1] = 1.0 / denom;  // Reference mixture
+}
+
+void FactorModel::ComputeMixtureMeans(const std::vector<double>& weights,
+                                       std::vector<std::vector<double>>& means)
+{
+    // Compute mixture means from parameters and constraint E[f] = 0
+    // For m < nmix-1: mean[m][k] = param[GetFactorMeanIndex(m, k)]
+    // For m = nmix-1: mean[m][k] = -sum_{j<nmix-1}(w_j * mean[j][k]) / w_{nmix-1}
+    means.resize(nmix);
+    for (int m = 0; m < nmix; m++) {
+        means[m].resize(n_factors_for_mixture);
+    }
+
+    if (nmix == 1) {
+        // Single mixture: means are all 0
+        for (int k = 0; k < n_factors_for_mixture; k++) {
+            means[0][k] = 0.0;
+        }
+        return;
+    }
+
+    // Read means for non-reference mixtures
+    for (int m = 0; m < nmix - 1; m++) {
+        for (int k = 0; k < n_factors_for_mixture; k++) {
+            means[m][k] = param[GetFactorMeanIndex(m, k)];
+        }
+    }
+
+    // Derive last mixture's means from constraint: sum(w_m * mu_m) = 0
+    // mu_last = -sum_{m<nmix-1}(w_m * mu_m) / w_last
+    double w_last = weights[nmix - 1];
+    for (int k = 0; k < n_factors_for_mixture; k++) {
+        double weighted_sum = 0.0;
+        for (int m = 0; m < nmix - 1; m++) {
+            weighted_sum += weights[m] * means[m][k];
+        }
+        means[nmix - 1][k] = -weighted_sum / w_last;
+    }
 }
 
 void FactorModel::SetModelParameters(const std::vector<double>& params)

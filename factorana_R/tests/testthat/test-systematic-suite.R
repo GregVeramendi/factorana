@@ -1795,3 +1795,209 @@ test_that("Test J: Two-stage with multiple outcome types and fixed coefficients"
                 0.8, result$estimates["m2_loading_1"]))
   }
 })
+
+# =============================================================================
+# Test K: Binary Logit Model (num_choices = 2)
+# =============================================================================
+# This test specifically covers the binary logit case which requires special
+# handling for initialization (glm expects 0/1 but model uses 1/2 coding)
+
+test_that("Model K: Binary logit gradient, Hessian, and parameter recovery", {
+  skip_on_cran()
+
+  set.seed(54321)
+  n_obs <- 500
+
+  # True parameters
+  true_factor_var <- 1.0
+  true_beta <- c(0.5, 0.3)  # intercept, x1 coefficient
+  true_loading <- 0.7
+  true_meas_loading <- 0.8
+  true_meas_sigma <- 0.6
+
+  # Generate data
+  factors <- rnorm(n_obs, 0, sqrt(true_factor_var))
+  x1 <- rnorm(n_obs)
+
+  # Linear measurement equation (to identify factor)
+  Y_meas <- true_meas_loading * factors + rnorm(n_obs, 0, true_meas_sigma)
+
+  # Binary logit outcome
+  # P(Y=2) = 1/(1 + exp(-(beta0 + beta1*x1 + lambda*f)))
+  latent <- true_beta[1] + true_beta[2] * x1 + true_loading * factors
+  prob <- 1 / (1 + exp(-latent))
+  # Outcomes must be 1-indexed (1 or 2) for C++ compatibility
+  Y_logit <- rbinom(n_obs, 1, prob) + 1  # 1 or 2 (NOT 0/1)
+
+  dat <- data.frame(
+    Y_meas = Y_meas,
+    Y_logit = Y_logit,
+    x1 = x1,
+    intercept = 1,
+    eval = 1
+  )
+
+  # Define model
+  fm <- define_factor_model(n_factors = 1, n_types = 1)
+
+  # Measurement equation (identifies factor)
+  mc_meas <- define_model_component(
+    name = "meas",
+    data = dat,
+    outcome = "Y_meas",
+    factor = fm,
+    covariates = "intercept",
+    model_type = "linear",
+    loading_normalization = 1.0,
+    evaluation_indicator = "eval"
+  )
+
+  # Binary logit outcome (num_choices = 2)
+  mc_logit <- define_model_component(
+    name = "logit",
+    data = dat,
+    outcome = "Y_logit",
+    factor = fm,
+    covariates = c("intercept", "x1"),
+    model_type = "logit",
+    num_choices = 2,  # Binary logit
+    loading_normalization = NA_real_,
+    evaluation_indicator = "eval"
+  )
+
+  ms <- define_model_system(components = list(mc_meas, mc_logit), factor = fm)
+  control <- define_estimation_control(n_quad_points = 12, num_cores = 1)
+
+  # Test 1: Verify likelihood is finite (not -Inf which was the bug)
+  fm_ptr <- initialize_factor_model_cpp(ms, dat, control$n_quad_points)
+  init_result <- initialize_parameters(ms, dat, verbose = FALSE)
+  init_params <- init_result$init_params
+  result_init <- evaluate_likelihood_cpp(fm_ptr, init_params)
+  expect_true(is.finite(result_init$logLikelihood),
+              info = "Binary logit should produce finite log-likelihood after initialization")
+
+  # Test 2: Full estimation
+  result <- estimate_model_rcpp(
+    model_system = ms,
+    data = dat,
+    init_params = init_params,
+    control = control,
+    optimizer = "nlminb",
+    verbose = FALSE
+  )
+
+  expect_equal(result$convergence, 0)
+  expect_true(is.finite(result$loglik))
+
+  # Test 3: Gradient accuracy
+  fm_ptr2 <- initialize_factor_model_cpp(ms, dat, control$n_quad_points)
+  params <- result$estimates
+  result_eval <- evaluate_likelihood_cpp(fm_ptr2, params, compute_gradient = TRUE, compute_hessian = FALSE)
+  ana_grad <- result_eval$gradient
+
+  # Finite difference gradient
+  eps <- 1e-6
+  fd_grad <- numeric(length(params))
+  for (i in seq_along(params)) {
+    params_plus <- params
+    params_plus[i] <- params_plus[i] + eps
+    ll_plus <- evaluate_loglik_only_cpp(fm_ptr2, params_plus)
+
+    params_minus <- params
+    params_minus[i] <- params_minus[i] - eps
+    ll_minus <- evaluate_loglik_only_cpp(fm_ptr2, params_minus)
+
+    fd_grad[i] <- (ll_plus - ll_minus) / (2 * eps)
+  }
+
+  max_rel_err <- 0
+  for (i in seq_along(params)) {
+    ana <- ana_grad[i]
+    fd <- fd_grad[i]
+    abs_err <- abs(ana - fd)
+    if (abs(ana) < 1e-6 && abs(fd) < 1e-6) {
+      rel_err <- abs_err
+    } else {
+      rel_err <- abs_err / max(abs(ana), abs(fd))
+    }
+    if (!is.na(rel_err) && rel_err > max_rel_err) max_rel_err <- rel_err
+  }
+  expect_lt(max_rel_err, 1e-5, label = sprintf("Gradient max error: %.2e", max_rel_err))
+
+  # Test 4: Hessian accuracy
+  result_hess <- evaluate_likelihood_cpp(fm_ptr2, params, compute_gradient = TRUE, compute_hessian = TRUE)
+  hess_vec <- result_hess$hessian
+  n_params <- length(params)
+
+  # Expand upper triangular to full matrix
+  hess_mat <- matrix(0, n_params, n_params)
+  idx <- 1
+  for (i in 1:n_params) {
+    for (j in i:n_params) {
+      hess_mat[i, j] <- hess_vec[idx]
+      hess_mat[j, i] <- hess_vec[idx]
+      idx <- idx + 1
+    }
+  }
+
+  # FD Hessian (using gradient differences)
+  fd_hess <- matrix(0, n_params, n_params)
+  grad_base <- evaluate_likelihood_cpp(fm_ptr2, params, compute_gradient = TRUE, compute_hessian = FALSE)$gradient
+  for (i in seq_len(n_params)) {
+    params_plus <- params
+    h <- eps * (abs(params[i]) + 1.0)
+    params_plus[i] <- params[i] + h
+    grad_plus <- evaluate_likelihood_cpp(fm_ptr2, params_plus, compute_gradient = TRUE, compute_hessian = FALSE)$gradient
+    fd_hess[i, ] <- (grad_plus - grad_base) / h
+  }
+  # Symmetrize FD Hessian
+  fd_hess <- (fd_hess + t(fd_hess)) / 2
+
+  max_hess_err <- 0
+  for (i in seq_len(n_params)) {
+    for (j in i:n_params) {
+      ana <- hess_mat[i, j]
+      fd <- fd_hess[i, j]
+      abs_err <- abs(ana - fd)
+      if (abs(ana) < 1e-6 && abs(fd) < 1e-6) {
+        rel_err <- abs_err
+      } else {
+        rel_err <- abs_err / max(abs(ana), abs(fd))
+      }
+      if (!is.na(rel_err) && rel_err > max_hess_err) max_hess_err <- rel_err
+    }
+  }
+  expect_lt(max_hess_err, 1e-2, label = sprintf("Hessian max error: %.2e", max_hess_err))
+
+  # Test 5: Parameter recovery (with relaxed tolerance due to finite sample)
+  tolerance <- 0.4
+
+  # Factor variance
+  expect_lt(abs(result$estimates["factor_var_1"] - true_factor_var), tolerance,
+            label = "Factor variance recovery")
+
+  # Logit parameters (binary logit uses logit_intercept, not logit_c1_intercept)
+  expect_lt(abs(result$estimates["logit_intercept"] - true_beta[1]), tolerance,
+            label = "Logit intercept recovery")
+  expect_lt(abs(result$estimates["logit_x1"] - true_beta[2]), tolerance,
+            label = "Logit x1 coefficient recovery")
+  expect_lt(abs(result$estimates["logit_loading_1"] - true_loading), tolerance,
+            label = "Logit loading recovery")
+
+  if (VERBOSE) {
+    cat("\nTest K: Binary logit (num_choices = 2)\n")
+    cat("  Outcome coding: 1/2 (1-indexed, as required by C++)\n")
+    cat(sprintf("  Initial log-likelihood: %.4f (should be finite, not -Inf)\n", result_init$logLikelihood))
+    cat(sprintf("  Final log-likelihood: %.4f\n", result$loglik))
+    cat(sprintf("  Gradient max rel error: %.2e\n", max_rel_err))
+    cat(sprintf("  Hessian max rel error: %.2e\n", max_hess_err))
+    cat(sprintf("  Factor var: true=%.3f, est=%.3f\n",
+                true_factor_var, result$estimates["factor_var_1"]))
+    cat(sprintf("  Logit intercept: true=%.3f, est=%.3f\n",
+                true_beta[1], result$estimates["logit_intercept"]))
+    cat(sprintf("  Logit x1: true=%.3f, est=%.3f\n",
+                true_beta[2], result$estimates["logit_x1"]))
+    cat(sprintf("  Logit loading: true=%.3f, est=%.3f\n",
+                true_loading, result$estimates["logit_loading_1"]))
+  }
+})
