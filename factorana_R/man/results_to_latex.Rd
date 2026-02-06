@@ -48,7 +48,7 @@ A character string containing the LaTeX table code
 Creates a LaTeX table from factorana results, suitable for academic papers.
 }
 \examples{
-\dontrun{
+\donttest{
 # Export to file
 results_to_latex(model1, model2,
                  model_names = c("Baseline", "Extended"),

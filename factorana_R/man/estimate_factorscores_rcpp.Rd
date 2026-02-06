@@ -76,7 +76,7 @@ When parallel=TRUE, observations are distributed across cores using
 doParallel/foreach, with each worker processing a subset of observations.
 }
 \examples{
-\dontrun{
+\donttest{
 # First estimate the model
 result <- estimate_model_rcpp(model_system, data, control)
 

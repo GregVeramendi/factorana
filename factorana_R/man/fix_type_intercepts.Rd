@@ -44,7 +44,7 @@ Fixed type intercepts are stored in the component and used during:
 }
 }
 \examples{
-\dontrun{
+\donttest{
 # Fix all type intercepts to 0 for a component
 mc <- define_model_component(name = "wage", ...)
 mc <- fix_type_intercepts(mc)

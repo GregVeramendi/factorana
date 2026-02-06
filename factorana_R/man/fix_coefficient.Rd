@@ -42,7 +42,7 @@ Note: This function only fixes regression coefficients (betas), not:
 }
 }
 \examples{
-\dontrun{
+\donttest{
 # Fix intercept to 0
 mc <- define_model_component(name = "wage", ...)
 mc <- fix_coefficient(mc, covariate = "intercept", value = 0.0)

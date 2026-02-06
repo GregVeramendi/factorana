@@ -33,8 +33,7 @@ Suggests:
     knitr,
     nloptr,
     rmarkdown,
-    testthat (>= 3.0.0),
-    trustOptim
+    testthat (>= 3.0.0)
 VignetteBuilder: knitr
 SystemRequirements: GNU make
 Config/testthat/edition: 3

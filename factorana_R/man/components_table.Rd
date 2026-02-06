@@ -23,7 +23,7 @@ Creates a table with model components as columns and parameter types as rows.
 This is similar to how SEM/CFA software displays results.
 }
 \examples{
-\dontrun{
+\donttest{
 # Display components table for a Roy model
 components_table(result)
 }
