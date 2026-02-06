@@ -12,13 +12,8 @@
 .RData
 .Ruserdata
 
-# Claude-specific documentation (internal notes)
-TESTING.md
-OPTIMIZATION_ANALYSIS.md
-DEBUG_HESSIAN_PERFORMANCE.md
-ISSUES.md
-OPTIMIZER_CONVERGENCE.md
-PLAN_fixed_parameters.md
+# Claude working notes (internal development documents)
+CLAUDE*.md
 
 # Temporary files
 fd_test.R
