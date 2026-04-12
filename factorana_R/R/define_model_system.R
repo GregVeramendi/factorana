@@ -25,6 +25,16 @@
 #'   Only used when previous_stage is provided.
 #'
 #' @return An object of class "model_system". A list of model_component objects and one factor_model object.
+#' @examples
+#' dat <- data.frame(y1 = rnorm(50), y2 = rnorm(50), intercept = 1)
+#' fm <- define_factor_model(n_factors = 1)
+#' mc1 <- define_model_component("m1", dat, "y1", fm,
+#'   covariates = "intercept", model_type = "linear",
+#'   loading_normalization = 1)
+#' mc2 <- define_model_component("m2", dat, "y2", fm,
+#'   covariates = "intercept", model_type = "linear",
+#'   loading_normalization = NA_real_)
+#' ms <- define_model_system(components = list(mc1, mc2), factor = fm)
 #' @export
 define_model_system <- function(components, factor, previous_stage = NULL, weights = NULL,
                                 equality_constraints = NULL, free_params = NULL) {
@@ -157,6 +167,21 @@ define_model_system <- function(components, factor, previous_stage = NULL, weigh
     prev_components <- prev_ms$components
     for (i in seq_along(prev_components)) {
       prev_components[[i]]$all_params_fixed <- TRUE
+    }
+
+    # Validate: no new component may share a name with a previous-stage component.
+    # Duplicate names cause parameter-matching failures: match() finds the first
+    # occurrence (the fixed Stage 1 copy) and silently skips the second (the user's
+    # free copy), leaving those parameters unfixed and producing wild estimates.
+    prev_names <- vapply(prev_components, function(c) c$name, character(1))
+    new_names <- vapply(components, function(c) c$name, character(1))
+    dup_names <- intersect(prev_names, new_names)
+    if (length(dup_names) > 0) {
+      stop(sprintf(
+        paste0("Component name(s) duplicated between previous_stage and new components: %s. ",
+               "When using previous_stage, only pass NEW components (e.g., the outcome model). ",
+               "The measurement components from Stage 1 are prepended automatically."),
+        paste(dup_names, collapse = ", ")))
     }
 
     # Prepend previous stage components to new components

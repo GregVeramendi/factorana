@@ -30,6 +30,12 @@
 #'   All covariates are automatically demeaned internally for identification.
 #'
 #' @return An object of class "factor_model"
+#' @examples
+#' # Single factor model
+#' fm <- define_factor_model(n_factors = 1)
+#'
+#' # Two-factor structural equation model
+#' fm_se <- define_factor_model(n_factors = 2, factor_structure = "SE_linear")
 #' @export
 define_factor_model <- function(n_factors,
                                 n_types = 1,

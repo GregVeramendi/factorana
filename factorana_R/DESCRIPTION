@@ -1,7 +1,7 @@
 Package: factorana
 Type: Package
 Title: Factor Model Estimation with Latent Variables
-Version: 1.0.2
+Version: 1.1.0
 Authors@R: c(
     person("Greg", "Veramendi", email = "greg.veramendi@gmail.com",
            role = c("aut", "cre")),
@@ -12,14 +12,12 @@ Description: A flexible framework for estimating factor models with multiple
     logit model components. Features include multi-stage estimation, automatic
     parameter initialization, analytical gradients and Hessians, and parallel
     estimation.
-License: GPL-3 + file LICENSE
+License: GPL-3
 Encoding: UTF-8
-RoxygenNote: 7.3.2
+RoxygenNote: 7.3.3
 Roxygen: list(markdown = TRUE)
 Imports:
     Rcpp (>= 1.0.0),
-    doParallel,
-    foreach,
     MASS,
     nnet,
     parallel,
@@ -29,6 +27,8 @@ LinkingTo:
     Rcpp,
     RcppEigen
 Suggests:
+    doParallel,
+    foreach,
     jsonlite,
     knitr,
     nloptr,
@@ -36,5 +36,4 @@ Suggests:
     testthat (>= 3.0.0),
     trustOptim
 VignetteBuilder: knitr
-SystemRequirements: GNU make
 Config/testthat/edition: 3

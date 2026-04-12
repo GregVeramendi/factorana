@@ -13,6 +13,7 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
       nmix(n_mix), fac_corr(correlated),
       factor_structure(correlated ? FactorStructure::CORRELATION : FactorStructure::INDEPENDENT),
       n_input_factors(0), n_outcome_factors(0), se_param_start(-1), nse_param(0),
+      nse_type_intercepts(0),
       n_factors_for_mixture(n_fac), n_variance_per_mixture(n_fac),
       nquad_points(n_quad), use_weights(false), use_adaptive(false), adapt_threshold(0.3),
       use_factor_mean_covariates(false), n_factor_mean_covariates(0), n_factors_with_mean(0),
@@ -62,6 +63,7 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
       nmix(n_mix), fac_corr(fac_struct == FactorStructure::CORRELATION),
       factor_structure(fac_struct),
       n_input_factors(0), n_outcome_factors(0), se_param_start(-1), nse_param(0),
+      nse_type_intercepts(0),
       n_factors_for_mixture(n_fac), n_variance_per_mixture(n_fac),
       nquad_points(n_quad), use_weights(false), use_adaptive(false), adapt_threshold(0.3),
       use_factor_mean_covariates(false), n_factor_mean_covariates(0), n_factors_with_mean(0),
@@ -90,8 +92,10 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
         }
 
         // SE parameters: intercept + n_input_factors linear coefficients + residual variance
+        // When ntyp > 1, also add (ntyp-1) type-specific SE intercepts (between linear and residual var)
         se_param_start = nparam;
-        nse_param = 1 + n_input_factors + 1;  // intercept + linear coefs + residual var
+        nse_type_intercepts = (ntyp > 1) ? (ntyp - 1) : 0;
+        nse_param = 1 + n_input_factors + nse_type_intercepts + 1;  // intercept + linear + type intercepts + residual var
         nparam += nse_param;
 
     } else if (factor_structure == FactorStructure::SE_QUADRATIC) {
@@ -113,8 +117,10 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
         }
 
         // SE parameters: intercept + linear coefs + quadratic coefs + residual variance
+        // When ntyp > 1, also add (ntyp-1) type-specific SE intercepts (between quadratic and residual var)
         se_param_start = nparam;
-        nse_param = 1 + n_input_factors + n_input_factors + 1;  // intercept + linear + quadratic + residual var
+        nse_type_intercepts = (ntyp > 1) ? (ntyp - 1) : 0;
+        nse_param = 1 + n_input_factors + n_input_factors + nse_type_intercepts + 1;  // intercept + linear + quadratic + type intercepts + residual var
         nparam += nse_param;
 
     } else if (factor_structure == FactorStructure::CORRELATION && nfac == 2) {
@@ -250,6 +256,17 @@ void FactorModel::SetAdaptiveQuadrature(const std::vector<std::vector<double>>& 
             double f_se = factor_ses[iobs][ifac];
             double f_var = factor_vars[ifac];
             double f_sd = std::sqrt(f_var);
+
+            // Handle NaN (from R NA) factor scores or SEs: fall back to full
+            // standard quadrature. This occurs for zero-observation individuals
+            // where factor scores are undefined (R returns NA_real_).
+            if (std::isnan(f_score) || std::isnan(f_se)) {
+                obs_nquad[iobs][ifac] = max_quad;
+                obs_fac_center[iobs][ifac] = 0.0;  // Center at prior mean
+                obs_fac_se[iobs][ifac] = f_sd;     // Use full SD as spread
+                needed_nquad.insert(max_quad);
+                continue;
+            }
 
             // Handle SE=0 or very small SE: use standard quadrature
             // SE=0 would cause jacobian=0 in IS correction, making likelihood 0
@@ -678,6 +695,10 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     std::vector<double> se_linear_coef(n_input_factors, 0.0);
     std::vector<double> se_quadratic_coef(n_input_factors, 0.0);  // For SE_QUADRATIC
     std::vector<double> se_covariate_coef;  // Coefficients for SE covariates
+    // Type-specific SE intercepts: se_type_offset[ityp] is the additional intercept
+    // applied to the outcome factor when evaluating under type ityp. Index 0 (reference
+    // type) is always 0; indices 1..ntyp-1 are free parameters when ntyp > 1.
+    std::vector<double> se_type_offset(std::max(ntyp, 1), 0.0);
     double se_residual_var = 1.0;
     double sigma_eps = 1.0;  // sqrt of residual variance
 
@@ -723,6 +744,14 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         if (factor_structure == FactorStructure::SE_QUADRATIC) {
             for (int j = 0; j < n_input_factors; j++) {
                 se_quadratic_coef[j] = param[GetSEQuadraticIndex(j)];
+            }
+        }
+
+        // Type-specific SE intercepts (when ntyp > 1)
+        // se_type_offset[0] stays 0 (reference type); types 2..ntyp read from param vector.
+        if (ntyp > 1 && nse_type_intercepts > 0) {
+            for (int t = 1; t < ntyp; t++) {
+                se_type_offset[t] = param[GetSETypeInterceptIndex(t - 1)];
             }
         }
 
@@ -797,6 +826,17 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     // Pre-allocate working vectors outside the loops for performance
     // These are reused across observations and integration points
     std::vector<double> fac_val(nfac);
+    // Base outcome factor value (SE models, without any type-specific SE intercept shift)
+    // Used to restore fac_val[nfac-1] at the top of each iteration of the type loop.
+    double base_f_outcome = 0.0;
+    // Enable shifting fac_val[nfac-1] by the type-specific SE intercept inside the type loop.
+    // Only active for SE_LINEAR / SE_QUADRATIC with ntyp > 1 and non-adaptive integration.
+    // Adaptive integration uses Stage 1 factor scores directly for the outcome factor, so
+    // the SE equation (and thus type intercepts) does not apply there.
+    const bool se_type_shift_enabled =
+        (nse_type_intercepts > 0) && !use_adaptive &&
+        (factor_structure == FactorStructure::SE_LINEAR ||
+         factor_structure == FactorStructure::SE_QUADRATIC);
     std::vector<double> type_weighted_grad(nparam, 0.0);
     std::vector<double> type_weighted_hess;
     if (iflag == 3) type_weighted_hess.resize(nparam * nparam, 0.0);
@@ -1196,6 +1236,15 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             // For ntyp > 1: L = Σ_t π_t(f) × L_t(y|f) where L_t = Π_m L_m(y_m|f, intercept_t)
             // For ntyp == 1: Standard case (no type mixture)
 
+            // Save the base (reference-type) outcome factor value so we can apply
+            // type-specific SE intercept shifts inside the type loop below without losing
+            // the reference value. Type probabilities are computed using the base outcome
+            // (the user-facing semantic: type is drawn before the residual epsilon and
+            // does not depend on the realized type-specific outcome).
+            if (se_type_shift_enabled) {
+                base_f_outcome = fac_val[nfac - 1];
+            }
+
             // Compute type probabilities (fills pre-allocated type_probs vector)
             // OPTIMIZATION: type_probs is pre-allocated outside the observation loop
             ComputeTypeProbabilities(fac_val, type_probs);
@@ -1240,6 +1289,14 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             // Loop over types
             for (int ityp = 0; ityp < ntyp; ityp++) {
                 double type_prob = type_probs[ityp];
+
+                // Apply type-specific SE intercept shift to the outcome factor.
+                // f_outcome_t = base_f_outcome + se_type_offset[ityp]
+                // where se_type_offset[0] = 0 (reference type). All subsequent
+                // model evaluations inside this type iteration see the shifted outcome.
+                if (se_type_shift_enabled) {
+                    fac_val[nfac - 1] = base_f_outcome + se_type_offset[ityp];
+                }
 
                 // Reset likelihood product for this type
                 prob_this_type = 1.0;
@@ -1333,6 +1390,14 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                             // Gradients w.r.t. SE parameters
                             // ∂L/∂(se_intercept) = ∂L/∂f_k * 1
                             grad_this_type[GetSEInterceptIndex()] += dL_dfk;
+
+                            // ∂L/∂(se_intercept_type_{ityp}) = ∂L/∂f_k * 1
+                            // Only non-reference types have free intercepts. The parameter
+                            // only appears in this type's likelihood, so contributions from
+                            // other types are zero and we only accumulate when ityp > 0.
+                            if (ntyp > 1 && ityp > 0 && nse_type_intercepts > 0) {
+                                grad_this_type[GetSETypeInterceptIndex(ityp - 1)] += dL_dfk;
+                            }
 
                             // ∂L/∂(se_linear_j) = ∂L/∂f_k * f_j
                             for (int j = 0; j < n_input_factors; j++) {
@@ -1609,6 +1674,71 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                             // SE residual var diagonal
                             hess_this_type[se_res_idx * nparam + se_res_idx] +=
                                 d2L_dfkdfk * dfk_dres_var * dfk_dres_var + dL_dfk * d2fk_dres_var2;
+
+                            // ===== Type-specific SE intercept Hessian contributions =====
+                            // se_intercept_type_t enters the likelihood only for its own type
+                            // (ityp == t), so we accumulate its Hessian terms only during
+                            // that type's pass through the loop. Cross-terms between different
+                            // se_intercept_type_t and se_intercept_type_{t'} (t ≠ t') are zero
+                            // because the two parameters never appear in the same likelihood
+                            // term — each type's contribution is additive and separable in its
+                            // own intercept. ∂f_k/∂(se_intercept_type_t) = 1 exactly as for the
+                            // base se_intercept, so the formulas mirror the se_intercept ones.
+                            if (ntyp > 1 && ityp > 0 && nse_type_intercepts > 0) {
+                                int typ_idx = GetSETypeInterceptIndex(ityp - 1);
+                                // Layout invariants (Option A):
+                                //   se_int_idx < se_lin_idx[j] < (se_quad_idx[j]) < typ_idx < se_res_idx
+                                //   factor_var_i < typ_idx for all input-factor variances
+                                //   typ_idx < se_cov params, factor_mean params, and model params
+
+                                // Diagonal: (∂²L/∂f_k²) * 1 * 1
+                                hess_this_type[typ_idx * nparam + typ_idx] += d2L_dfkdfk;
+
+                                // typ_idx × se_intercept (se_int_idx < typ_idx)
+                                hess_this_type[se_int_idx * nparam + typ_idx] += d2L_dfkdfk;
+
+                                // typ_idx × se_linear_j (se_lin_idx < typ_idx)
+                                for (int j = 0; j < n_input_factors; j++) {
+                                    int se_lin_idx_j = GetSELinearIndex(j);
+                                    hess_this_type[se_lin_idx_j * nparam + typ_idx] += d2L_dfkdfk * fac_val[j];
+                                }
+
+                                // typ_idx × se_quadratic_j (SE_QUADRATIC only; se_quad_idx < typ_idx)
+                                if (factor_structure == FactorStructure::SE_QUADRATIC) {
+                                    for (int j = 0; j < n_input_factors; j++) {
+                                        int se_quad_idx_j = GetSEQuadraticIndex(j);
+                                        hess_this_type[se_quad_idx_j * nparam + typ_idx] += d2L_dfkdfk * fac_val[j] * fac_val[j];
+                                    }
+                                }
+
+                                // typ_idx × se_residual_var (typ_idx < se_res_idx)
+                                hess_this_type[typ_idx * nparam + se_res_idx] += d2L_dfkdfk * dfk_dres_var;
+
+                                // typ_idx × factor_var_i (factor_var_i < typ_idx)
+                                // Mirrors the factor_var × se_intercept cross-term (∂f_k/∂se_int_type = 1).
+                                for (int i = 0; i < n_input_factors; i++) {
+                                    double d2L_dfi_dfk = modHess[i * nDimModHess + (nfac - 1)];
+                                    double dfk_dvar_i = dfk_dfj[i] * df_dsigma2[i];
+                                    hess_this_type[i * nparam + typ_idx] +=
+                                        d2L_dfi_dfk * df_dsigma2[i] + d2L_dfkdfk * dfk_dvar_i;
+                                }
+
+                                // typ_idx × SE covariate params (typ_idx < se_cov_idx)
+                                if (use_se_covariates) {
+                                    for (int m = 0; m < n_se_covariates; m++) {
+                                        int se_cov_idx = se_covariate_param_start + m;
+                                        double X_m = se_covariate_data[iobs][m];
+                                        hess_this_type[typ_idx * nparam + se_cov_idx] += d2L_dfkdfk * X_m;
+                                    }
+                                }
+
+                                // typ_idx × model params (typ_idx < firstpar + iparam)
+                                for (int iparam = 0; iparam < base_param_count_hess; iparam++) {
+                                    int param_idx = firstpar + iparam;
+                                    double d2L_dfk_dparam = modHess[(nfac - 1) * nDimModHess + (nfac + iparam)];
+                                    hess_this_type[typ_idx * nparam + param_idx] += d2L_dfk_dparam;
+                                }
+                            }
 
                             // ===== SE covariate terms =====
                             if (use_se_covariates) {

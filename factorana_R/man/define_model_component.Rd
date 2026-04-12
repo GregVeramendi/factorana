@@ -86,3 +86,10 @@ An object of class "model_component". A list representing the model component
 \description{
 Define a model component
 }
+\examples{
+dat <- data.frame(y = rnorm(50), intercept = 1)
+fm <- define_factor_model(n_factors = 1)
+mc <- define_model_component("Y", dat, "y", fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1)
+}

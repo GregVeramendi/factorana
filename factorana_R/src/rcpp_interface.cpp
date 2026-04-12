@@ -280,6 +280,14 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             }
         }
     }
+    // SE_linear / SE_quadratic with n_types > 1 implies types at the structural level
+    // (se_intercept_type_{t}), so the type probability model parameters are needed
+    // even when no measurement component has use_types = TRUE.
+    if (!any_uses_types && n_types > 1 &&
+        (fac_struct == FactorStructure::SE_LINEAR ||
+         fac_struct == FactorStructure::SE_QUADRATIC)) {
+        any_uses_types = true;
+    }
     for (int i = 0; i < components.size(); i++) {
         List comp = components[i];
 
@@ -527,16 +535,19 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
     }
 
     if (fac_struct == FactorStructure::SE_LINEAR) {
-        // SE_linear: (n_fac - 1) input factor variances + intercept + (n_fac-1) linear + residual var
+        // SE_linear: (n_fac - 1) input factor variances + intercept + (n_fac-1) linear + [(n_types-1) type intercepts] + residual var
         int n_input_factors = n_fac - 1;
         param_offset = n_input_factors * n_mixtures;  // Input factor variances (per mixture)
         param_offset += (n_mixtures - 1) * n_input_factors;  // Mixture means
         param_offset += (n_mixtures - 1);  // Mixture log-weights
         param_offset += 1;  // SE intercept
         param_offset += n_input_factors;  // SE linear coefficients
+        if (n_types > 1) {
+            param_offset += (n_types - 1);  // Type-specific SE intercepts
+        }
         param_offset += 1;  // SE residual variance
     } else if (fac_struct == FactorStructure::SE_QUADRATIC) {
-        // SE_quadratic: (n_fac - 1) input factor variances + intercept + (n_fac-1) linear + (n_fac-1) quadratic + residual var
+        // SE_quadratic: (n_fac - 1) input factor variances + intercept + (n_fac-1) linear + (n_fac-1) quadratic + [(n_types-1) type intercepts] + residual var
         int n_input_factors = n_fac - 1;
         param_offset = n_input_factors * n_mixtures;  // Input factor variances (per mixture)
         param_offset += (n_mixtures - 1) * n_input_factors;  // Mixture means
@@ -544,6 +555,9 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         param_offset += 1;  // SE intercept
         param_offset += n_input_factors;  // SE linear coefficients
         param_offset += n_input_factors;  // SE quadratic coefficients
+        if (n_types > 1) {
+            param_offset += (n_types - 1);  // Type-specific SE intercepts
+        }
         param_offset += 1;  // SE residual variance
     } else if (fac_struct == FactorStructure::CORRELATION && n_fac == 2) {
         // Correlated 2-factor: (2 variances + 1 correlation) * nmix + mixture params
@@ -593,6 +607,7 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
     // Add type model parameters offset if n_types > 1 and at least one component uses types
     // Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
     // Parameters: (n_types - 1) intercepts + (n_types - 1) * n_fac loadings
+    int type_param_start = param_offset;  // capture start BEFORE adding type params
     if (n_types > 1 && any_uses_types) {
         param_offset += (n_types - 1) + (n_types - 1) * n_fac;  // Type intercepts + Type loadings
     }
@@ -615,8 +630,77 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             for (int j = 0; j < param_offset; j++) {
                 param_fixed_vec[j] = true;
             }
+
+            // Selectively un-fix parameters listed in free_param_names.
+            // This enables "fix all measurement params but free factor_var"
+            // workflows via define_model_system(free_params = c("factor_var_1")).
+            if (prev_stage_info.containsElementNamed("free_param_names") &&
+                !Rf_isNull(prev_stage_info["free_param_names"])) {
+                CharacterVector free_names = prev_stage_info["free_param_names"];
+                if (free_names.size() > 0) {
+                    // Build a name→index map for factor-level params (indices 0..param_offset-1)
+                    // using the same layout logic as the equality constraint map below.
+                    std::map<std::string, int> fac_name_idx;
+                    int idx = 0;
+                    if (fac_struct == FactorStructure::SE_LINEAR || fac_struct == FactorStructure::SE_QUADRATIC) {
+                        int n_inp = n_fac - 1;
+                        for (int m = 0; m < n_mixtures; m++) {
+                            for (int k = 0; k < n_inp; k++) {
+                                std::string nm = (n_mixtures == 1)
+                                    ? "factor_var_" + std::to_string(k + 1)
+                                    : "mix" + std::to_string(m + 1) + "_factor_var_" + std::to_string(k + 1);
+                                fac_name_idx[nm] = idx++;
+                            }
+                        }
+                        for (int m = 0; m < n_mixtures - 1; m++) {
+                            for (int k = 0; k < n_inp; k++)
+                                fac_name_idx["mix" + std::to_string(m+1) + "_factor_mean_" + std::to_string(k+1)] = idx++;
+                        }
+                        for (int m = 0; m < n_mixtures - 1; m++)
+                            fac_name_idx["mix" + std::to_string(m+1) + "_logweight"] = idx++;
+                        fac_name_idx["se_intercept"] = idx++;
+                        for (int k = 0; k < n_inp; k++)
+                            fac_name_idx["se_linear_" + std::to_string(k+1)] = idx++;
+                        if (fac_struct == FactorStructure::SE_QUADRATIC) {
+                            for (int k = 0; k < n_inp; k++)
+                                fac_name_idx["se_quadratic_" + std::to_string(k+1)] = idx++;
+                        }
+                        if (n_types > 1) {
+                            for (int t = 2; t <= n_types; t++)
+                                fac_name_idx["se_intercept_type_" + std::to_string(t)] = idx++;
+                        }
+                        fac_name_idx["se_residual_var"] = idx++;
+                    } else {
+                        for (int m = 0; m < n_mixtures; m++) {
+                            for (int k = 0; k < n_fac; k++) {
+                                std::string nm = (n_mixtures == 1)
+                                    ? "factor_var_" + std::to_string(k + 1)
+                                    : "mix" + std::to_string(m + 1) + "_factor_var_" + std::to_string(k + 1);
+                                fac_name_idx[nm] = idx++;
+                            }
+                        }
+                        if (fac_struct == FactorStructure::CORRELATION && n_fac == 2) {
+                            fac_name_idx["factor_corr_1_2"] = idx++;
+                        }
+                        for (int m = 0; m < n_mixtures - 1; m++) {
+                            for (int k = 0; k < n_fac; k++)
+                                fac_name_idx["mix" + std::to_string(m+1) + "_factor_mean_" + std::to_string(k+1)] = idx++;
+                        }
+                        for (int m = 0; m < n_mixtures - 1; m++)
+                            fac_name_idx["mix" + std::to_string(m+1) + "_logweight"] = idx++;
+                    }
+
+                    // Un-fix each free_param_name
+                    for (int j = 0; j < free_names.size(); j++) {
+                        std::string fn = std::string(free_names[j]);
+                        auto it = fac_name_idx.find(fn);
+                        if (it != fac_name_idx.end() && it->second < param_offset) {
+                            param_fixed_vec[it->second] = false;
+                        }
+                    }
+                }
+            }
         }
-        // When allow_diff_struct is true, factor-level parameters remain FREE
         // When allow_diff_struct is true, factor-level parameters remain FREE
         // and will use the new factor structure (SE_linear/SE_quadratic)
     }
@@ -809,6 +893,24 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
                 param_fixed_vec[k] = true;
             }
         }
+
+        // Auto-fix type loadings on the outcome factor to 0.
+        // Rationale: type probabilities must be a function of the INPUT factors only —
+        // the outcome factor is a deterministic function of inputs + type, so a loading
+        // on it would create a circular dependency. We silently fix these loadings to 0.
+        // The R side errors if the user explicitly set a non-zero initial value.
+        //
+        // Layout of type params (when n_types > 1 && any_uses_types):
+        //   type_param_start + 0 .. (n_types - 2)                       : type_t_intercept (t = 2..n_types)
+        //   type_param_start + (n_types - 1) + (t-2)*n_fac + (k-1)      : type_t_loading_k
+        if (n_types > 1 && any_uses_types) {
+            int type_loading_block_start = type_param_start + (n_types - 1);
+            int outcome_k0 = n_fac - 1;  // 0-indexed outcome factor
+            for (int t_off = 0; t_off < n_types - 1; t_off++) {
+                int idx = type_loading_block_start + t_off * n_fac + outcome_k0;
+                param_fixed_vec[idx] = true;
+            }
+        }
     }
 
     // Handle equality constraints - mark tied parameters as fixed and build equality mapping
@@ -861,6 +963,12 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             if (fac_struct == FactorStructure::SE_QUADRATIC) {
                 for (int k = 0; k < n_fac - 1; k++) {
                     param_name_to_idx["se_quadratic_" + std::to_string(k + 1)] = idx++;
+                }
+            }
+            // Type-specific SE intercepts (between (quadratic) coefs and se_residual_var)
+            if (n_types > 1) {
+                for (int t = 2; t <= n_types; t++) {
+                    param_name_to_idx["se_intercept_type_" + std::to_string(t)] = idx++;
                 }
             }
             param_name_to_idx["se_residual_var"] = idx++;

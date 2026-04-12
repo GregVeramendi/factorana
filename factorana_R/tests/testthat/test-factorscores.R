@@ -449,3 +449,71 @@ test_that("Factor score estimation works with ordered probit model", {
   expect_gt(coverage_rate, 0.50,
             label = "Ordered probit model coverage rate")
 })
+
+test_that("Zero-observation individuals get NA factor scores and SEs", {
+  skip_on_cran()
+
+  set.seed(99)
+  n <- 50
+  true_f <- rnorm(n)
+
+  # 3 linear measures with an evaluation indicator.
+  # First 5 observations have eval=0 for all items → no data.
+  eval_ind <- rep(1, n)
+  eval_ind[1:5] <- 0
+
+  dat <- data.frame(
+    intercept = 1,
+    y1 = 1.0 * true_f + rnorm(n, 0, 0.5),
+    y2 = 0.8 * true_f + rnorm(n, 0, 0.5),
+    y3 = 0.9 * true_f + rnorm(n, 0, 0.5),
+    eval = eval_ind
+  )
+
+  fm <- define_factor_model(n_factors = 1)
+  mc1 <- define_model_component("m1", dat, "y1", fm, covariates = "intercept",
+                                 model_type = "linear", loading_normalization = 1,
+                                 evaluation_indicator = "eval")
+  mc2 <- define_model_component("m2", dat, "y2", fm, covariates = "intercept",
+                                 model_type = "linear", loading_normalization = NA_real_,
+                                 evaluation_indicator = "eval")
+  mc3 <- define_model_component("m3", dat, "y3", fm, covariates = "intercept",
+                                 model_type = "linear", loading_normalization = NA_real_,
+                                 evaluation_indicator = "eval")
+
+  ms <- define_model_system(components = list(mc1, mc2, mc3), factor = fm)
+  ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+  result <- estimate_model_rcpp(ms, dat, control = ctrl, optimizer = "nlminb",
+                                parallel = FALSE, verbose = FALSE)
+  expect_equal(result$convergence, 0)
+
+  # Estimate factor scores
+  fscores <- estimate_factorscores_rcpp(result, dat, control = ctrl,
+                                         parallel = FALSE, verbose = FALSE,
+                                         include_prior = TRUE)
+
+  # Zero-obs individuals (rows 1-5) should have NA scores and SEs
+  for (i in 1:5) {
+    expect_true(is.na(fscores$factor_1[i]),
+                info = sprintf("Obs %d should have NA factor score", i))
+    expect_true(is.na(fscores$se_factor_1[i]),
+                info = sprintf("Obs %d should have NA SE", i))
+  }
+
+  # Observed individuals (rows 6-50) should have finite scores and SEs
+  for (i in 6:50) {
+    expect_true(is.finite(fscores$factor_1[i]),
+                info = sprintf("Obs %d should have finite factor score", i))
+    expect_true(is.finite(fscores$se_factor_1[i]),
+                info = sprintf("Obs %d should have finite SE", i))
+  }
+
+  # SEs for observed individuals should be bounded by prior SD when include_prior=TRUE
+  # (posterior precision >= prior precision for log-concave likelihoods)
+  prior_sd <- sqrt(result$estimates["factor_var_1"])
+  for (i in 6:50) {
+    expect_lte(fscores$se_factor_1[i], prior_sd * 1.01,  # tiny tolerance for numerics
+               label = sprintf("Obs %d SE (%.4f) vs prior SD (%.4f)",
+                              i, fscores$se_factor_1[i], prior_sd))
+  }
+})

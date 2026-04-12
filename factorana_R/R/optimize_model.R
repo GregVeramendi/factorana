@@ -190,6 +190,18 @@ build_parameter_metadata <- function(model_system) {
       }
     }
 
+    # Type-specific SE intercepts (only when n_types > 1)
+    # Order must match C++ layout in FactorModel.h::GetSETypeInterceptIndex:
+    # between (quadratic) coefs and se_residual_var.
+    .n_types_se <- model_system$factor$n_types
+    if (!is.null(.n_types_se) && .n_types_se > 1L) {
+      for (t in 2:.n_types_se) {
+        param_names <- c(param_names, sprintf("se_intercept_type_%d", t))
+        param_types <- c(param_types, "se_intercept_type")
+        component_id <- c(component_id, 0)
+      }
+    }
+
     # SE residual variance
     param_names <- c(param_names, "se_residual_var")
     param_types <- c(param_types, "se_residual_var")
@@ -267,6 +279,13 @@ build_parameter_metadata <- function(model_system) {
   # (n_types - 1) intercepts + (n_types - 1) * n_factors loadings (type 1 is reference)
   n_types <- model_system$factor$n_types
   any_uses_types <- any(sapply(model_system$components, function(c) isTRUE(c$use_types)))
+  # SE_linear / SE_quadratic with ntyp > 1 implies types at the structural level
+  # (se_intercept_type_{t}), so the type probability model is needed here too.
+  .fs_opt <- model_system$factor$factor_structure
+  if (!is.null(.fs_opt) && .fs_opt %in% c("SE_linear", "SE_quadratic") &&
+      !is.null(n_types) && n_types > 1L) {
+    any_uses_types <- TRUE
+  }
   if (!is.null(n_types) && n_types > 1L && any_uses_types) {
     # Type probability intercepts
     for (t in 2:n_types) {
@@ -599,6 +618,16 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
       lower_bounds[i] <- 0.01
     }
 
+    # Set lower bound for SE residual variance. Without a positive lower bound,
+    # the optimizer can walk into negative territory; historically this was
+    # "patched" in C++ by computing sigma_eps = sqrt(|se_residual_var|), which
+    # makes the likelihood at +x and -x identical but breaks the reported
+    # estimate (negative value shown to user) and the Hessian-based SE at the
+    # boundary. Enforcing a positive lower bound removes both issues.
+    if (param_type == "se_residual_var") {
+      lower_bounds[i] <- 0.01
+    }
+
     # Set lower bounds for ordered probit cutpoints (incremental parameterization)
     # The first cutpoint is unrestricted (can be any value)
     # Subsequent cutpoints are increments and must be positive to ensure ordering
@@ -611,6 +640,45 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
         cutpoint_counter[[comp_key]] <- cutpoint_counter[[comp_key]] + 1
         # Subsequent cutpoints are increments, must be positive
         lower_bounds[i] <- 0.01
+      }
+    }
+
+    # For SE_linear / SE_quadratic factor structures, type probabilities must be a
+    # function of the INPUT factors only — the outcome factor is a deterministic
+    # function of the inputs + residual + type, so letting type loadings depend on
+    # it would create a circular dependency. We enforce this by fixing the type
+    # loading on the outcome factor (factor index = n_factors) to 0 for each
+    # non-reference type, and erroring if the user explicitly set a non-zero init.
+    if (param_type == "type_loading") {
+      fs <- model_system$factor$factor_structure
+      if (!is.null(fs) && fs %in% c("SE_linear", "SE_quadratic")) {
+        pname <- param_metadata$names[i]
+        m <- regmatches(pname, regexec("^type_([0-9]+)_loading_([0-9]+)$", pname))[[1]]
+        if (length(m) >= 3) {
+          k_idx <- as.integer(m[3])
+          if (k_idx == n_factors) {
+            # Threshold: tolerate finite-difference perturbations (~1.5e-8) and
+            # other numerical noise, but reject user-supplied non-zero values.
+            if (abs(init_params[i]) > 1e-6) {
+              stop(sprintf(
+                paste0("Type loading on the outcome factor is not allowed for ",
+                       "SE_linear / SE_quadratic factor structures (parameter %s = %g). ",
+                       "Type probabilities must depend only on input factors; the outcome ",
+                       "factor is a deterministic function of type, so a type loading on ",
+                       "it would create a circular dependency. Leave the initial value at 0 ",
+                       "and it will be fixed automatically."),
+                pname, init_params[i]))
+            }
+            param_fixed[i] <- TRUE
+            lower_bounds[i] <- 0.0
+            upper_bounds[i] <- 0.0
+            if (verbose) {
+              message(sprintf(
+                "  Fixed type loading on outcome factor for SE model: param %d (%s) at 0",
+                i, pname))
+            }
+          }
+        }
       }
     }
 
@@ -980,6 +1048,27 @@ print_adaptive_quadrature_summary <- function(factor_ses, factor_vars, threshold
 #' This is controlled by the \code{max_restarts} parameter.
 #'
 #' @return List with parameter estimates, standard errors, log-likelihood, etc.
+#' @examples
+#' \donttest{
+#' # Simulate a simple one-factor model with two linear indicators
+#' set.seed(1); n <- 100
+#' f <- rnorm(n)
+#' dat <- data.frame(intercept = 1,
+#'   y1 = 1.0 * f + rnorm(n, 0, 0.5),
+#'   y2 = 0.8 * f + rnorm(n, 0, 0.5))
+#' fm <- define_factor_model(n_factors = 1)
+#' mc1 <- define_model_component("m1", dat, "y1", fm,
+#'   covariates = "intercept", model_type = "linear",
+#'   loading_normalization = 1)
+#' mc2 <- define_model_component("m2", dat, "y2", fm,
+#'   covariates = "intercept", model_type = "linear",
+#'   loading_normalization = NA_real_)
+#' ms <- define_model_system(components = list(mc1, mc2), factor = fm)
+#' ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+#' result <- estimate_model_rcpp(ms, dat, control = ctrl,
+#'   optimizer = "nlminb", parallel = FALSE, verbose = FALSE)
+#' result$estimates
+#' }
 #' @export
 estimate_model_rcpp <- function(model_system, data, init_params = NULL,
                                 control = NULL, optimizer = "nlminb",
@@ -1070,6 +1159,10 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     } else {
       if (verbose) message("Using PSOCK cluster...")
       cl <- parallel::makeCluster(n_workers)
+    }
+    if (!requireNamespace("doParallel", quietly = TRUE)) {
+      stop("Package 'doParallel' is required for parallel estimation. ",
+           "Install with: install.packages('doParallel')")
     }
     doParallel::registerDoParallel(cl)
 

@@ -436,6 +436,24 @@ estimate_single_factorscore <- function(fm_ptr, iobs, estimates, n_factors,
   # Get the factor scores
   factor_scores <- best_result$par
 
+  # Check if any data contributed for this observation. If all eval indicators
+  # are 0, the observation-only log-likelihood at any factor value is 0 (all
+  # model densities are 1). In that case the factor score is undefined — there
+  # is simply no information. Return NA for both score and SE.
+  obs_only <- evaluate_factorscore_likelihood_cpp(
+    fm_ptr, iobs - 1, factor_scores, estimates,
+    compute_gradient = FALSE, compute_hessian = FALSE,
+    include_prior = FALSE
+  )
+  if (abs(obs_only$logLikelihood) < 1e-12) {
+    return(list(
+      factors = rep(NA_real_, n_factors),
+      ses = rep(NA_real_, n_factors),
+      converged = FALSE,
+      log_posterior = NA_real_
+    ))
+  }
+
   # Clip extreme factor scores to ±6.63*sigma (matches legacy C++ behavior)
   # This prevents extreme values that are outside the Gauss-Hermite quadrature range
   clipped <- FALSE
@@ -454,6 +472,17 @@ estimate_single_factorscore <- function(fm_ptr, iobs, estimates, n_factors,
   # include_prior controls whether SE is based on observation-only or posterior Hessian
   ses <- compute_factorscore_ses(fm_ptr, iobs, factor_scores, estimates, n_factors,
                                   include_prior)
+
+  # When include_prior=TRUE, the posterior SE is mathematically bounded above by the
+  # prior SD (data always adds information, never removes it, for log-concave
+  # likelihoods). If numerical issues push an SE above the prior SD, clamp it.
+  if (include_prior) {
+    for (k in seq_len(n_factors)) {
+      if (!is.na(ses[k]) && ses[k] > factor_sds[k]) {
+        ses[k] <- factor_sds[k]
+      }
+    }
+  }
 
   list(
     factors = factor_scores,

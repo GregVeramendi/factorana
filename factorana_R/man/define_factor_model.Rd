@@ -54,3 +54,10 @@ unobserved latent factors. This includes the number of factors and mixture compo
 Loading constraints are specified at the component level via \code{define_model_component()}.
 Numerical integration settings (quadrature points) are specified in \code{define_estimation_control()}.
 }
+\examples{
+# Single factor model
+fm <- define_factor_model(n_factors = 1)
+
+# Two-factor structural equation model
+fm_se <- define_factor_model(n_factors = 2, factor_structure = "SE_linear")
+}

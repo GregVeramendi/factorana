@@ -86,6 +86,15 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
           param_names <- c(param_names, paste0("se_linear_", j))
         }
 
+        # Type-specific SE intercepts (only when n_types > 1)
+        # Order must match C++: between linear coefs and se_residual_var
+        if (n_types > 1L) {
+          for (t in 2:n_types) {
+            init_params <- c(init_params, 0.0)
+            param_names <- c(param_names, paste0("se_intercept_type_", t))
+          }
+        }
+
         init_params <- c(init_params, 1.0)  # se_residual_var
         param_names <- c(param_names, "se_residual_var")
 
@@ -110,6 +119,15 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
         for (j in seq_len(n_input_factors)) {
           init_params <- c(init_params, 0.0)  # se_quadratic_j
           param_names <- c(param_names, paste0("se_quadratic_", j))
+        }
+
+        # Type-specific SE intercepts (only when n_types > 1)
+        # Order must match C++: between quadratic coefs and se_residual_var
+        if (n_types > 1L) {
+          for (t in 2:n_types) {
+            init_params <- c(init_params, 0.0)
+            param_names <- c(param_names, paste0("se_intercept_type_", t))
+          }
         }
 
         init_params <- c(init_params, 1.0)  # se_residual_var
@@ -319,6 +337,15 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
         param_names <- c(param_names, paste0("se_linear_", j))
       }
 
+      # Type-specific SE intercepts (only when n_types > 1)
+      # Order must match C++: between linear coefs and se_residual_var
+      if (n_types > 1L) {
+        for (t in 2:n_types) {
+          init_params <- c(init_params, 0.0)
+          param_names <- c(param_names, paste0("se_intercept_type_", t))
+        }
+      }
+
       # SE residual variance (initialize to 1.0)
       init_params <- c(init_params, 1.0)
       param_names <- c(param_names, "se_residual_var")
@@ -384,6 +411,15 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
       for (j in seq_len(n_input_factors)) {
         init_params <- c(init_params, 0.0)
         param_names <- c(param_names, paste0("se_quadratic_", j))
+      }
+
+      # Type-specific SE intercepts (only when n_types > 1)
+      # Order must match C++: between quadratic coefs and se_residual_var
+      if (n_types > 1L) {
+        for (t in 2:n_types) {
+          init_params <- c(init_params, 0.0)
+          param_names <- c(param_names, paste0("se_intercept_type_", t))
+        }
       }
 
       # SE residual variance (initialize to 1.0)
@@ -457,6 +493,14 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
     # Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
     # (n_types - 1) intercepts + (n_types - 1) * n_factors loadings (type 1 is reference)
     any_uses_types <- any(sapply(model_system$components, function(c) isTRUE(c$use_types)))
+    # SE_linear / SE_quadratic with ntyp > 1 implies types at the structural level
+    # (via se_intercept_type_{t}), so the type probability model is needed even when
+    # no measurement component sets use_types = TRUE.
+    .fs_for_types <- model_system$factor$factor_structure
+    if (!is.null(.fs_for_types) && .fs_for_types %in% c("SE_linear", "SE_quadratic") &&
+        n_types > 1L) {
+      any_uses_types <- TRUE
+    }
     if (n_types > 1L && any_uses_types) {
       # Type probability intercepts (n_types - 1)
       typeprob_intercepts <- rep(0.0, n_types - 1L)
@@ -1145,15 +1189,32 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
   }
 
   # Determine factor_variance_fixed status
+  # Must be a per-factor logical VECTOR (not scalar!) so that
+  # setup_parameter_constraints can correctly fix/free each factor's variance.
   if (!is.null(model_system$previous_stage_info)) {
-    # For previous_stage, check if factor variances are in free_params
-    free_params <- model_system$previous_stage_info$free_param_names
-    if (!is.null(free_params) && any(grepl("^factor_var", free_params))) {
-      # At least some factor variances are free
-      factor_variance_fixed_status <- FALSE
-    } else {
-      # All factor variances are fixed
-      factor_variance_fixed_status <- TRUE
+    # Compute per-factor identification from loadings (same logic as standard path)
+    factor_variance_fixed_status <- rep(FALSE, n_factors)
+    for (comp in model_system$components) {
+      if (!is.null(comp$loading_normalization)) {
+        for (k in seq_len(n_factors)) {
+          if (!is.na(comp$loading_normalization[k]) &&
+              abs(comp$loading_normalization[k] - 1.0) < 1e-6) {
+            factor_variance_fixed_status[k] <- TRUE
+          }
+        }
+      }
+    }
+    # If factor_var_k is explicitly in free_params, mark factor k as identified
+    # so its variance stays free regardless of loading normalization.
+    .fp <- model_system$previous_stage_info$free_param_names
+    if (!is.null(.fp)) {
+      for (fpn in .fp) {
+        m <- regmatches(fpn, regexec("^(?:mix\\d+_)?factor_var_(\\d+)$", fpn))[[1]]
+        if (length(m) >= 2) {
+          k <- as.integer(m[2])
+          if (k <= n_factors) factor_variance_fixed_status[k] <- TRUE
+        }
+      }
     }
   } else {
     # Standard case: use the computed status (vector for multifactor models)

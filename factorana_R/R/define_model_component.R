@@ -38,6 +38,12 @@
 #'   after component creation, which resolves the collinearity. Default FALSE.
 #'
 #' @return An object of class "model_component". A list representing the model component
+#' @examples
+#' dat <- data.frame(y = rnorm(50), intercept = 1)
+#' fm <- define_factor_model(n_factors = 1)
+#' mc <- define_model_component("Y", dat, "y", fm,
+#'   covariates = "intercept", model_type = "linear",
+#'   loading_normalization = 1)
 #' @export
 
 define_model_component <- function(name,
@@ -159,15 +165,51 @@ define_model_component <- function(name,
     stop("`intercept` must be a single TRUE/FALSE.")
   }
 
+  # ---- Intercept sanity checks ----
+  has_intercept_in_covariates <- length(covariates) > 0 &&
+    any(covariates %in% c("intercept", "constant"))
+
+  # Check 1: ERROR if an intercept covariate is included in an ordered probit model.
+  # Ordered probit absorbs the intercept into the cut points, so a separate
+  # intercept covariate is not identified. This silently produces NaN parameters
+  # and a singular Hessian, wasting hours of computation.
+  if (model_type == "oprobit" && has_intercept_in_covariates) {
+    stop(sprintf(
+      paste0("Component '%s': ordered probit (oprobit) models must NOT include an ",
+             "intercept covariate (found '%s' in covariates). The intercept is absorbed ",
+             "into the cutpoint thresholds. Remove the intercept from covariates."),
+      name, intersect(covariates, c("intercept", "constant"))[1]))
+  }
+
+  # Check 2: WARNING if a linear/probit/logit model has no intercept and the
+  # outcome is far from zero-mean. Without an intercept the model is
+  # misspecified for non-centered outcomes, causing degenerate convergence.
+  if (model_type %in% c("linear", "probit", "logit") && !has_intercept_in_covariates) {
+    # Compute outcome statistics on the FULL data (before eval_indicator subsetting)
+    y_raw <- data[[outcome[1]]]
+    y_raw <- y_raw[is.finite(y_raw)]
+    if (length(y_raw) > 10) {
+      y_mean <- mean(y_raw)
+      y_sd <- sd(y_raw)
+      if (y_sd > 0 && abs(y_mean) > 0.1 * y_sd) {
+        warning(sprintf(
+          paste0("Component '%s': no intercept covariate found for %s model, but ",
+                 "outcome '%s' has non-zero mean (%.3g, sd=%.3g). Without an intercept, ",
+                 "the model may converge to a degenerate point. Consider adding an ",
+                 "intercept: data$intercept <- 1; covariates = c('intercept', ...)."),
+          name, model_type, outcome[1], y_mean, y_sd),
+          immediate. = TRUE)
+      }
+    }
+  }
+
   # Warn if intercept=TRUE for models where it has no effect
   # Note: intercept=TRUE is just metadata. Users must add their own intercept column to data
   # and include it in covariates if they need an intercept term.
   if (isTRUE(intercept)) {
-    has_intercept_in_covariates <- !is.null(covariates) &&
-      any(covariates %in% c("intercept", "constant"))
-
     if (model_type == "oprobit") {
-      warning("`intercept = TRUE` has no effect for oprobit models (intercept is absorbed into thresholds).")
+      # Already handled above as an error if intercept IS in covariates.
+      # This warning is for the intercept=TRUE FLAG, not the covariate.
     } else if (model_type == "linear" && !has_intercept_in_covariates) {
       warning("`intercept = TRUE` does not automatically add an intercept. ",
               "Add a column of 1s to your data (e.g., data$intercept <- 1) ",

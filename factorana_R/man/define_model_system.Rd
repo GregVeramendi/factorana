@@ -49,3 +49,14 @@ An object of class "model_system". A list of model_component objects and one fac
 \description{
 Define a model system
 }
+\examples{
+dat <- data.frame(y1 = rnorm(50), y2 = rnorm(50), intercept = 1)
+fm <- define_factor_model(n_factors = 1)
+mc1 <- define_model_component("m1", dat, "y1", fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1)
+mc2 <- define_model_component("m2", dat, "y2", fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_)
+ms <- define_model_system(components = list(mc1, mc2), factor = fm)
+}

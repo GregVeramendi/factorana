@@ -81,3 +81,25 @@ When optimization fails to converge (possibly at a saddle point), the function
 will attempt to escape by moving in the direction of negative Hessian eigenvalues.
 This is controlled by the \code{max_restarts} parameter.
 }
+\examples{
+\donttest{
+# Simulate a simple one-factor model with two linear indicators
+set.seed(1); n <- 100
+f <- rnorm(n)
+dat <- data.frame(intercept = 1,
+  y1 = 1.0 * f + rnorm(n, 0, 0.5),
+  y2 = 0.8 * f + rnorm(n, 0, 0.5))
+fm <- define_factor_model(n_factors = 1)
+mc1 <- define_model_component("m1", dat, "y1", fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1)
+mc2 <- define_model_component("m2", dat, "y2", fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_)
+ms <- define_model_system(components = list(mc1, mc2), factor = fm)
+ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+result <- estimate_model_rcpp(ms, dat, control = ctrl,
+  optimizer = "nlminb", parallel = FALSE, verbose = FALSE)
+result$estimates
+}
+}

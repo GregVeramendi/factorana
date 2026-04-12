@@ -38,7 +38,7 @@ Creates a table comparing estimates across multiple models, with standard
 errors in parentheses below each estimate.
 }
 \examples{
-\donttest{
+\dontrun{
 # Compare two models
 results_table(model1, model2, model_names = c("Baseline", "Extended"))
 

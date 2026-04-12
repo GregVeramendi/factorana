@@ -53,6 +53,7 @@ private:
     int n_outcome_factors;             // Number of outcome factors (1 for SE_LINEAR)
     int se_param_start;                // Starting index for SE parameters in param vector
     int nse_param;                     // Total SE parameters
+    int nse_type_intercepts;           // Number of type-specific SE intercepts (ntyp-1 when ntyp>1, else 0)
 
     // Type model parameters (for n_types > 1)
     // Type probability model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
@@ -296,15 +297,27 @@ private:
     // - se_linear[j] at se_param_start + 1 + j
     // - se_quadratic[j] at se_param_start + 1 + n_input_factors + j
     // - se_residual_var at se_param_start + 1 + 2*n_input_factors
+    //
+    // When ntyp > 1 with SE_* factor structure, type-specific SE intercepts are
+    // inserted AFTER the linear (and quadratic) coefficients and BEFORE se_residual_var:
+    //   se_intercept_type_{t} at GetSETypeInterceptIndex(t - 2) for t = 2..ntyp
+    //   se_residual_var shifts by (ntyp - 1) slots to make room.
     int GetSEInterceptIndex() const { return se_param_start; }
     int GetSELinearIndex(int j) const { return se_param_start + 1 + j; }
     int GetSEQuadraticIndex(int j) const { return se_param_start + 1 + n_input_factors + j; }
-    int GetSEResidualVarIndex() const {
+    int GetSETypeInterceptIndex(int ityp_offset) const {
+        // ityp_offset: 0-based offset among non-reference types (0 = type 2, 1 = type 3, ...)
         if (factor_structure == FactorStructure::SE_QUADRATIC) {
-            return se_param_start + 1 + 2 * n_input_factors;
+            return se_param_start + 1 + 2 * n_input_factors + ityp_offset;
         } else {
-            return se_param_start + 1 + n_input_factors;
+            return se_param_start + 1 + n_input_factors + ityp_offset;
         }
+    }
+    int GetSEResidualVarIndex() const {
+        int base = (factor_structure == FactorStructure::SE_QUADRATIC)
+            ? (se_param_start + 1 + 2 * n_input_factors)
+            : (se_param_start + 1 + n_input_factors);
+        return base + nse_type_intercepts;
     }
 };
 
