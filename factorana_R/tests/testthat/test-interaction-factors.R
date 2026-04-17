@@ -1211,15 +1211,16 @@ test_that("Ordered probit model estimation with interaction factor terms recover
     evaluation_indicator = "eval"
   )
 
-  # Ordered probit outcome with interaction effect
+  # Ordered probit outcome with interaction effect.
+  # Note: oprobit has no intercept covariate — the intercept is absorbed into
+  # the cut points.
   mc_Y <- define_model_component(
     name = "Y_oprobit", data = dat, outcome = "Y_oprobit", factor = fm,
-    covariates = c("intercept", "x"), model_type = "oprobit",
+    covariates = "x", model_type = "oprobit",
     loading_normalization = c(NA_real_, NA_real_),
     factor_spec = "interactions",
     evaluation_indicator = "eval",
-    num_choices = 3,
-    intercept = FALSE
+    num_choices = 3
   )
 
   ms <- define_model_system(

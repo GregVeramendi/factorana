@@ -8,6 +8,9 @@
 #' @param x A factorana_result object from estimate_model_rcpp()
 #' @param digits Number of decimal places (default 4)
 #' @param ... Additional arguments (ignored)
+#' @return Invisibly returns \code{x}. Called for its side effect of printing
+#'   a formatted summary (convergence status, log-likelihood, and a parameter
+#'   table with estimates and standard errors) to the console.
 #'
 #' @export
 print.factorana_result <- function(x, digits = 4, ...) {
@@ -139,6 +142,9 @@ summary.factorana_result <- function(object, ...) {
 #' @param x A summary.factorana_result object
 #' @param digits Number of decimal places (default 4)
 #' @param ... Additional arguments (ignored)
+#' @return Invisibly returns \code{x}. Called for its side effect of printing
+#'   a detailed estimation summary (convergence, log-likelihood, and a
+#'   coefficient table with z-values and significance stars) to the console.
 #'
 #' @export
 print.summary.factorana_result <- function(x, digits = 4, ...) {
@@ -203,15 +209,26 @@ print.summary.factorana_result <- function(x, digits = 4, ...) {
 #' @export
 #'
 #' @examples
-#' \dontrun{
-#' # Compare two models
-#' results_table(model1, model2, model_names = c("Baseline", "Extended"))
+#' \donttest{
+#' # Estimate a small one-factor model and format the result as a table
+#' set.seed(1); n <- 200
+#' f <- rnorm(n)
+#' dat <- data.frame(intercept = 1,
+#'                   y1 = 1.0 * f + rnorm(n, 0, 0.5),
+#'                   y2 = 0.8 * f + rnorm(n, 0, 0.5))
+#' fm <- define_factor_model(n_factors = 1)
+#' mc1 <- define_model_component("m1", dat, "y1", fm,
+#'   covariates = "intercept", model_type = "linear",
+#'   loading_normalization = 1)
+#' mc2 <- define_model_component("m2", dat, "y2", fm,
+#'   covariates = "intercept", model_type = "linear",
+#'   loading_normalization = NA_real_)
+#' ms <- define_model_system(components = list(mc1, mc2), factor = fm)
+#' ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+#' fit <- estimate_model_rcpp(ms, dat, control = ctrl,
+#'   optimizer = "nlminb", parallel = FALSE, verbose = FALSE)
 #'
-#' # With custom formatting
-#' results_table(model1, model2, model3,
-#'               digits = 4,
-#'               se_format = "brackets",
-#'               stars = FALSE)
+#' results_table(fit, model_names = "Baseline")
 #' }
 results_table <- function(..., model_names = NULL, digits = 3,
                           se_format = c("parentheses", "brackets", "below"),
@@ -348,6 +365,9 @@ results_table <- function(..., model_names = NULL, digits = 3,
 #'
 #' @param x A factorana_table object
 #' @param ... Additional arguments (ignored)
+#' @return Invisibly returns \code{x}. Called for its side effect of printing
+#'   a side-by-side model-comparison table (parameters grouped by component,
+#'   with estimates and standard errors) to the console.
 #'
 #' @export
 print.factorana_table <- function(x, ...) {
@@ -438,20 +458,32 @@ print.factorana_table <- function(x, ...) {
 #' @export
 #'
 #' @examples
-#' \dontrun{
-#' # Export to file
-#' results_to_latex(model1, model2,
-#'                  model_names = c("Baseline", "Extended"),
-#'                  file = "results_table.tex",
-#'                  caption = "Factor Model Estimates",
-#'                  label = "tab:results")
+#' \donttest{
+#' # Estimate a small model and export the result as a LaTeX table
+#' set.seed(1); n <- 200
+#' f <- rnorm(n)
+#' dat <- data.frame(intercept = 1,
+#'                   y1 = 1.0 * f + rnorm(n, 0, 0.5),
+#'                   y2 = 0.8 * f + rnorm(n, 0, 0.5))
+#' fm <- define_factor_model(n_factors = 1)
+#' mc1 <- define_model_component("m1", dat, "y1", fm,
+#'   covariates = "intercept", model_type = "linear",
+#'   loading_normalization = 1)
+#' mc2 <- define_model_component("m2", dat, "y2", fm,
+#'   covariates = "intercept", model_type = "linear",
+#'   loading_normalization = NA_real_)
+#' ms <- define_model_system(components = list(mc1, mc2), factor = fm)
+#' ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+#' fit <- estimate_model_rcpp(ms, dat, control = ctrl,
+#'   optimizer = "nlminb", parallel = FALSE, verbose = FALSE)
 #'
-#' # Custom parameter labels
-#' results_to_latex(model1,
-#'                  param_labels = list(
-#'                    "intercept" = "Constant",
-#'                    "loading_1" = "$\\lambda_1$"
-#'                  ))
+#' # Return LaTeX as a character string
+#' tex <- results_to_latex(fit, model_names = "Baseline")
+#'
+#' # Or write to a file inside tempdir()
+#' results_to_latex(fit,
+#'                  model_names = "Baseline",
+#'                  file = file.path(tempdir(), "results_table.tex"))
 #' }
 results_to_latex <- function(..., model_names = NULL, digits = 3,
                               file = NULL, caption = NULL, label = NULL,
@@ -619,9 +651,26 @@ results_to_latex <- function(..., model_names = NULL, digits = 3,
 #' @export
 #'
 #' @examples
-#' \dontrun{
-#' # Display components table for a Roy model
-#' components_table(result)
+#' \donttest{
+#' # Estimate a small model and display the components table
+#' set.seed(1); n <- 200
+#' f <- rnorm(n)
+#' dat <- data.frame(intercept = 1,
+#'                   y1 = 1.0 * f + rnorm(n, 0, 0.5),
+#'                   y2 = 0.8 * f + rnorm(n, 0, 0.5))
+#' fm <- define_factor_model(n_factors = 1)
+#' mc1 <- define_model_component("m1", dat, "y1", fm,
+#'   covariates = "intercept", model_type = "linear",
+#'   loading_normalization = 1)
+#' mc2 <- define_model_component("m2", dat, "y2", fm,
+#'   covariates = "intercept", model_type = "linear",
+#'   loading_normalization = NA_real_)
+#' ms <- define_model_system(components = list(mc1, mc2), factor = fm)
+#' ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+#' fit <- estimate_model_rcpp(ms, dat, control = ctrl,
+#'   optimizer = "nlminb", parallel = FALSE, verbose = FALSE)
+#'
+#' components_table(fit)
 #' }
 components_table <- function(result, digits = 3, show_se = TRUE, stars = TRUE) {
   if (!inherits(result, "factorana_result")) {
@@ -757,6 +806,9 @@ components_table <- function(result, digits = 3, show_se = TRUE, stars = TRUE) {
 #'
 #' @param x A components_table object
 #' @param ... Additional arguments (ignored)
+#' @return Invisibly returns \code{x}. Called for its side effect of printing
+#'   a components-as-columns view of model estimates (one column per model
+#'   component, factor parameters in a separate section) to the console.
 #'
 #' @export
 print.components_table <- function(x, ...) {

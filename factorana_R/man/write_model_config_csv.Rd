@@ -13,7 +13,14 @@ write_model_config_csv(model_system, factor_model, estimation_control, file)
 
 \item{estimation_control}{an estimation_control object}
 
-\item{file}{path to CSV to write}
+\item{file}{Path to CSV to write. Required; pass an explicit path (use
+\code{tempdir()} in examples or tests).}
+}
+\value{
+Invisibly returns the data frame of configuration rows that was
+written to \code{file} (columns \code{section}, \code{component},
+\code{key}, \code{value}, \code{dtype}). Called primarily for its side
+effect of writing a CSV.
 }
 \description{
 Write a single CSV with all configuration rows

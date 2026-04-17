@@ -573,8 +573,10 @@ define_model_component <- function(name,
 
 
 #' Get component name (internal)
-#' @param x Object to extract name from
-#' @param ... Additional arguments
+#' @param x Object to extract name from (a \code{model_component}).
+#' @param ... Additional arguments (not used).
+#' @return A single character string with the component name, or
+#'   \code{NA_character_} if the component has no name set.
 #' @keywords internal
 get_component_name <- function(x, ...) UseMethod("get_component_name")
 
@@ -586,8 +588,9 @@ get_component_name.model_component <- function(x, ...) {
 }
 
 #' Get factor from component (internal)
-#' @param x Object to extract factor from
-#' @param ... Additional arguments
+#' @param x Object to extract factor from (a \code{model_component}).
+#' @param ... Additional arguments (not used).
+#' @return The \code{factor_model} object attached to the component.
 #' @keywords internal
 get_factor <- function(x, ...) UseMethod("get_factor")
 
@@ -602,6 +605,8 @@ get_factor.model_component <- function(x, ...) {
 #'
 #' @param x An object of class "model_component".
 #' @param ... Not used.
+#' @return Invisibly returns \code{x}. Called for its side effect of printing
+#'   a human-readable summary of the component to the console.
 #' @export
 print.model_component <- function(x, ...) {
   cat("Model Component\n")

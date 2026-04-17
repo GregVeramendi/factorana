@@ -76,20 +76,28 @@ When parallel=TRUE, observations are distributed across cores using
 doParallel/foreach, with each worker processing a subset of observations.
 }
 \examples{
-\dontrun{
-# First estimate the model
-result <- estimate_model_rcpp(model_system, data, control)
+\donttest{
+# Estimate a small one-factor model, then recover factor scores
+set.seed(1); n <- 200
+f <- rnorm(n)
+dat <- data.frame(intercept = 1,
+                  y1 = 1.0 * f + rnorm(n, 0, 0.5),
+                  y2 = 0.8 * f + rnorm(n, 0, 0.5))
+fm <- define_factor_model(n_factors = 1)
+mc1 <- define_model_component("m1", dat, "y1", fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1)
+mc2 <- define_model_component("m2", dat, "y2", fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_)
+ms <- define_model_system(components = list(mc1, mc2), factor = fm)
+ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+fit <- estimate_model_rcpp(ms, dat, control = ctrl,
+  optimizer = "nlminb", parallel = FALSE, verbose = FALSE)
 
-# Then estimate factor scores (serial)
-factor_scores <- estimate_factorscores_rcpp(result, data)
-
-# Or in parallel with 4 cores
-ctrl <- define_estimation_control(num_cores = 4)
-factor_scores <- estimate_factorscores_rcpp(result, data, control = ctrl,
-                                             parallel = TRUE)
-
-# View results
-head(factor_scores)
+fscores <- estimate_factorscores_rcpp(fit, dat, control = ctrl,
+                                       parallel = FALSE, verbose = FALSE)
+head(fscores)
 }
 
 }

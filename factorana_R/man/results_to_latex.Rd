@@ -48,19 +48,31 @@ A character string containing the LaTeX table code
 Creates a LaTeX table from factorana results, suitable for academic papers.
 }
 \examples{
-\dontrun{
-# Export to file
-results_to_latex(model1, model2,
-                 model_names = c("Baseline", "Extended"),
-                 file = "results_table.tex",
-                 caption = "Factor Model Estimates",
-                 label = "tab:results")
+\donttest{
+# Estimate a small model and export the result as a LaTeX table
+set.seed(1); n <- 200
+f <- rnorm(n)
+dat <- data.frame(intercept = 1,
+                  y1 = 1.0 * f + rnorm(n, 0, 0.5),
+                  y2 = 0.8 * f + rnorm(n, 0, 0.5))
+fm <- define_factor_model(n_factors = 1)
+mc1 <- define_model_component("m1", dat, "y1", fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1)
+mc2 <- define_model_component("m2", dat, "y2", fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_)
+ms <- define_model_system(components = list(mc1, mc2), factor = fm)
+ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+fit <- estimate_model_rcpp(ms, dat, control = ctrl,
+  optimizer = "nlminb", parallel = FALSE, verbose = FALSE)
 
-# Custom parameter labels
-results_to_latex(model1,
-                 param_labels = list(
-                   "intercept" = "Constant",
-                   "loading_1" = "$\\\\lambda_1$"
-                 ))
+# Return LaTeX as a character string
+tex <- results_to_latex(fit, model_names = "Baseline")
+
+# Or write to a file inside tempdir()
+results_to_latex(fit,
+                 model_names = "Baseline",
+                 file = file.path(tempdir(), "results_table.tex"))
 }
 }

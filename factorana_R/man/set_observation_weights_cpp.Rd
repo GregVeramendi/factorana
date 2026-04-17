@@ -11,6 +11,11 @@ set_observation_weights_cpp(fm_ptr, weights)
 
 \item{weights}{Numeric vector of observation weights (length = n_obs)}
 }
+\value{
+No return value. Called for its side effect of setting the
+per-observation likelihood weights on the FactorModel pointed to by
+\code{fm_ptr}.
+}
 \description{
 Sets per-observation weights for the likelihood calculation. When weights
 are set, each observation's contribution to the log-likelihood is multiplied

@@ -1,6 +1,6 @@
 #' Run estimation and write standard output files
 #'
-#' Calls estimate_model(), then writes Greg’s 4 expected output files:
+#' Calls estimate_model(), then writes the four expected output files:
 #' - model_config.csv
 #' - meas_par.csv
 #' - system_inits_long.csv
@@ -10,10 +10,22 @@
 #' @param factor_model factor_model object
 #' @param control estimation_control object
 #' @param data Optional data frame (to save as simulated_data.csv)
-#' @param results_dir Directory for writing output files
+#' @param results_dir Directory for writing output files. This argument is
+#'   required; the function writes nothing without an explicit path. Use
+#'   \code{tempdir()} in examples or tests.
+#' @return Invisibly returns a list with two components: \code{results} (a
+#'   data frame of initial parameter values per component, as produced by
+#'   \code{estimate_model()}) and \code{packed} (a list with \code{values} and
+#'   \code{ses} giving the packed parameter vector and standard errors written
+#'   to \code{meas_par.csv}). Called primarily for the side effect of writing
+#'   \code{model_config.csv}, \code{meas_par.csv}, \code{system_inits_long.csv},
+#'   and optionally \code{simulated_data.csv} into \code{results_dir}.
 #' @export
 estimate_and_write <- function(model_system, factor_model, control,
-                               data = NULL, results_dir = "results") {
+                               data = NULL, results_dir) {
+  if (missing(results_dir) || is.null(results_dir)) {
+    stop("'results_dir' is required. Pass an explicit directory path; use tempdir() in examples.")
+  }
   dir.create(results_dir, showWarnings = FALSE, recursive = TRUE)
 
   cat("=== Running estimation ===\n")

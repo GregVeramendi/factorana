@@ -11,6 +11,10 @@
 
 \item{...}{Not used.}
 }
+\value{
+Invisibly returns \code{x}. Called for its side effect of printing
+a human-readable summary of the component to the console.
+}
 \description{
 Print method for model_component objects
 }

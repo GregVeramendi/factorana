@@ -9,7 +9,7 @@ estimate_and_write(
   factor_model,
   control,
   data = NULL,
-  results_dir = "results"
+  results_dir
 )
 }
 \arguments{
@@ -21,10 +21,21 @@ estimate_and_write(
 
 \item{data}{Optional data frame (to save as simulated_data.csv)}
 
-\item{results_dir}{Directory for writing output files}
+\item{results_dir}{Directory for writing output files. This argument is
+required; the function writes nothing without an explicit path. Use
+\code{tempdir()} in examples or tests.}
+}
+\value{
+Invisibly returns a list with two components: \code{results} (a
+data frame of initial parameter values per component, as produced by
+\code{estimate_model()}) and \code{packed} (a list with \code{values} and
+\code{ses} giving the packed parameter vector and standard errors written
+to \code{meas_par.csv}). Called primarily for the side effect of writing
+\code{model_config.csv}, \code{meas_par.csv}, \code{system_inits_long.csv},
+and optionally \code{simulated_data.csv} into \code{results_dir}.
 }
 \description{
-Calls estimate_model(), then writes Greg’s 4 expected output files:
+Calls estimate_model(), then writes the four expected output files:
 \itemize{
 \item model_config.csv
 \item meas_par.csv

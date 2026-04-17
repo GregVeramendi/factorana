@@ -6,7 +6,7 @@
 \alias{factorana-package}
 \title{factorana: Factor Model Estimation with Latent Variables}
 \description{
-A flexible framework for estimating factor models with multiple latent variables. Supports linear, probit, ordered probit, and multinomial logit model components. Features include multi-stage estimation, automatic parameter initialization, analytical gradients and Hessians, and parallel estimation.
+A flexible framework for estimating factor models with multiple latent variables. Supports linear, probit, ordered probit, and multinomial logit model components. Features include multi-stage estimation, automatic parameter initialization, analytical gradients and Hessians, and parallel estimation. Methods are described in Heckman, Humphries, and Veramendi (2016) \doi{10.1016/j.jeconom.2015.12.001}, Heckman, Humphries, and Veramendi (2018) \doi{10.1086/698760}, and Humphries, Joensen, and Veramendi (2024) \doi{10.1257/pandp.20241026}.
 }
 \author{
 \strong{Maintainer}: Greg Veramendi \email{greg.veramendi@gmail.com}

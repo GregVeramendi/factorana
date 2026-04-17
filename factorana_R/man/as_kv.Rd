@@ -19,9 +19,15 @@ as_kv(x, ...)
 \method{as_kv}{model_system}(x, ...)
 }
 \arguments{
-\item{x}{Object to convert}
+\item{x}{Object to convert (an \code{estimation_control}, \code{factor_model},
+\code{model_component}, or \code{model_system}).}
 
-\item{...}{Additional arguments}
+\item{...}{Additional arguments (not used).}
+}
+\value{
+A data frame of key-value rows with columns \code{section},
+\code{component}, \code{key}, \code{value}, and \code{dtype}, one row per
+configuration field. Used internally by \code{\link{write_model_config_csv}}.
 }
 \description{
 Convert object to key-value format (internal)

@@ -23,8 +23,25 @@ Creates a table with model components as columns and parameter types as rows.
 This is similar to how SEM/CFA software displays results.
 }
 \examples{
-\dontrun{
-# Display components table for a Roy model
-components_table(result)
+\donttest{
+# Estimate a small model and display the components table
+set.seed(1); n <- 200
+f <- rnorm(n)
+dat <- data.frame(intercept = 1,
+                  y1 = 1.0 * f + rnorm(n, 0, 0.5),
+                  y2 = 0.8 * f + rnorm(n, 0, 0.5))
+fm <- define_factor_model(n_factors = 1)
+mc1 <- define_model_component("m1", dat, "y1", fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1)
+mc2 <- define_model_component("m2", dat, "y2", fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_)
+ms <- define_model_system(components = list(mc1, mc2), factor = fm)
+ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+fit <- estimate_model_rcpp(ms, dat, control = ctrl,
+  optimizer = "nlminb", parallel = FALSE, verbose = FALSE)
+
+components_table(fit)
 }
 }

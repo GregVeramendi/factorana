@@ -29,6 +29,12 @@ set_adaptive_quadrature_cpp(
 
 \item{verbose}{Whether to print summary of adaptive quadrature setup (default TRUE)}
 }
+\value{
+No return value. Called for its side effect of enabling adaptive
+quadrature on the FactorModel pointed to by \code{fm_ptr} and (when
+\code{verbose = TRUE}) printing a summary of the per-observation
+integration-point distribution.
+}
 \description{
 Enables adaptive integration where the number of quadrature points varies
 by observation based on the precision of factor score estimates. When factor

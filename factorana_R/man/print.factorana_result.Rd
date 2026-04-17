@@ -13,6 +13,11 @@
 
 \item{...}{Additional arguments (ignored)}
 }
+\value{
+Invisibly returns \code{x}. Called for its side effect of printing
+a formatted summary (convergence status, log-likelihood, and a parameter
+table with estimates and standard errors) to the console.
+}
 \description{
 Functions for displaying and exporting factor model estimation results
 in formatted tables, including LaTeX output.

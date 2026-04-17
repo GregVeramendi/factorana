@@ -334,7 +334,10 @@ pack_values_with_ses <- function(ms, inits, factor_var_first = 1.0) {
 # }
 
 # --- writer unchanged ---
-write_meas_par <- function(values, ses, path = file.path("results","meas_par.txt")) {
+write_meas_par <- function(values, ses, path) {
+  if (missing(path) || is.null(path)) {
+    stop("'path' is required; pass an explicit file path.")
+  }
   stopifnot(length(values) == length(ses))
   dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
   idx <- seq_along(values) - 1L
@@ -347,8 +350,12 @@ write_meas_par <- function(values, ses, path = file.path("results","meas_par.txt
 # ---- generic: flatten to key-value rows -----------------------------------
 
 #' Convert object to key-value format (internal)
-#' @param x Object to convert
-#' @param ... Additional arguments
+#' @param x Object to convert (an \code{estimation_control}, \code{factor_model},
+#'   \code{model_component}, or \code{model_system}).
+#' @param ... Additional arguments (not used).
+#' @return A data frame of key-value rows with columns \code{section},
+#'   \code{component}, \code{key}, \code{value}, and \code{dtype}, one row per
+#'   configuration field. Used internally by \code{\link{write_model_config_csv}}.
 #' @keywords internal
 as_kv <- function(x, ...) UseMethod("as_kv")
 
@@ -454,9 +461,17 @@ as_kv.model_system <- function(x, ...) {
 #' @param model_system a model_system object
 #' @param factor_model a factor_model object
 #' @param estimation_control an estimation_control object
-#' @param file path to CSV to write
+#' @param file Path to CSV to write. Required; pass an explicit path (use
+#'   \code{tempdir()} in examples or tests).
+#' @return Invisibly returns the data frame of configuration rows that was
+#'   written to \code{file} (columns \code{section}, \code{component},
+#'   \code{key}, \code{value}, \code{dtype}). Called primarily for its side
+#'   effect of writing a CSV.
 #' @export
 write_model_config_csv <- function(model_system, factor_model, estimation_control, file) {
+  if (missing(file) || is.null(file)) {
+    stop("'file' is required; pass an explicit file path.")
+  }
   stopifnot(inherits(model_system, "model_system"),
             inherits(factor_model, "factor_model"),
             inherits(estimation_control, "estimation_control"))

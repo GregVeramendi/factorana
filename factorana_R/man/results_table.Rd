@@ -38,14 +38,25 @@ Creates a table comparing estimates across multiple models, with standard
 errors in parentheses below each estimate.
 }
 \examples{
-\dontrun{
-# Compare two models
-results_table(model1, model2, model_names = c("Baseline", "Extended"))
+\donttest{
+# Estimate a small one-factor model and format the result as a table
+set.seed(1); n <- 200
+f <- rnorm(n)
+dat <- data.frame(intercept = 1,
+                  y1 = 1.0 * f + rnorm(n, 0, 0.5),
+                  y2 = 0.8 * f + rnorm(n, 0, 0.5))
+fm <- define_factor_model(n_factors = 1)
+mc1 <- define_model_component("m1", dat, "y1", fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1)
+mc2 <- define_model_component("m2", dat, "y2", fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = NA_real_)
+ms <- define_model_system(components = list(mc1, mc2), factor = fm)
+ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+fit <- estimate_model_rcpp(ms, dat, control = ctrl,
+  optimizer = "nlminb", parallel = FALSE, verbose = FALSE)
 
-# With custom formatting
-results_table(model1, model2, model3,
-              digits = 4,
-              se_format = "brackets",
-              stars = FALSE)
+results_table(fit, model_names = "Baseline")
 }
 }

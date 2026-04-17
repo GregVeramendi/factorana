@@ -1286,6 +1286,9 @@ NumericVector extract_free_params_cpp(SEXP fm_ptr, NumericVector full_params) {
 //'
 //' @param fm_ptr External pointer to FactorModel object
 //' @param weights Numeric vector of observation weights (length = n_obs)
+//' @return No return value. Called for its side effect of setting the
+//'   per-observation likelihood weights on the FactorModel pointed to by
+//'   \code{fm_ptr}.
 //' @export
 // [[Rcpp::export]]
 void set_observation_weights_cpp(SEXP fm_ptr, NumericVector weights) {
@@ -1308,6 +1311,10 @@ void set_observation_weights_cpp(SEXP fm_ptr, NumericVector weights) {
 //' @param threshold Threshold for determining quadrature points (default 0.5, matching legacy)
 //' @param max_quad Maximum quadrature points per factor (default 16)
 //' @param verbose Whether to print summary of adaptive quadrature setup (default TRUE)
+//' @return No return value. Called for its side effect of enabling adaptive
+//'   quadrature on the FactorModel pointed to by \code{fm_ptr} and (when
+//'   \code{verbose = TRUE}) printing a summary of the per-observation
+//'   integration-point distribution.
 //' @export
 // [[Rcpp::export]]
 void set_adaptive_quadrature_cpp(SEXP fm_ptr,
@@ -1392,6 +1399,9 @@ void set_adaptive_quadrature_cpp(SEXP fm_ptr,
 //' Reverts to standard (non-adaptive) quadrature integration.
 //'
 //' @param fm_ptr External pointer to FactorModel object
+//' @return No return value. Called for its side effect of disabling adaptive
+//'   quadrature and clearing any observation weights on the FactorModel
+//'   pointed to by \code{fm_ptr}.
 //' @export
 // [[Rcpp::export]]
 void disable_adaptive_quadrature_cpp(SEXP fm_ptr) {

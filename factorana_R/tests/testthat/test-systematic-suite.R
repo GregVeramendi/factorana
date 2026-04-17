@@ -1642,13 +1642,14 @@ test_that("Test J: Two-stage with multiple outcome types and fixed coefficients"
                                        loading_normalization = NA_real_, evaluation_indicator = "eval")
   mc_probit <- fix_coefficient(mc_probit, "x2", 0)
 
-  # Ordered probit with intercept fixed to 0 (3 categories)
+  # Ordered probit with x2 coefficient fixed to 0 (3 categories).
+  # Note: oprobit has no intercept covariate — the intercept is absorbed into
+  # the cut points. So we fix x2 instead to exercise fix_coefficient() here.
   mc_oprobit <- define_model_component(name = "oprobit", data = dat, outcome = "Y_oprobit", factor = fm,
-                                        covariates = c("intercept", "x1"), model_type = "oprobit",
+                                        covariates = c("x1", "x2"), model_type = "oprobit",
                                         num_choices = 3, loading_normalization = NA_real_,
-                                        evaluation_indicator = "eval",
-                                        intercept = FALSE)
-  mc_oprobit <- fix_coefficient(mc_oprobit, "intercept", 0)
+                                        evaluation_indicator = "eval")
+  mc_oprobit <- fix_coefficient(mc_oprobit, "x2", 0)
 
   # Multinomial logit with choice 2 intercept fixed to 0
   mc_mlogit <- define_model_component(name = "mlogit", data = dat, outcome = "Y_mlogit", factor = fm,
@@ -1678,7 +1679,7 @@ test_that("Test J: Two-stage with multiple outcome types and fixed coefficients"
   # Test 1: Check that fixed coefficients are exactly at their fixed values
   expect_equal(unname(result$estimates["linear_x2"]), 0, tolerance = 1e-10)
   expect_equal(unname(result$estimates["probit_x2"]), 0, tolerance = 1e-10)
-  expect_equal(unname(result$estimates["oprobit_intercept"]), 0, tolerance = 1e-10)
+  expect_equal(unname(result$estimates["oprobit_x2"]), 0, tolerance = 1e-10)
   expect_equal(unname(result$estimates["mlogit_c2_intercept"]), 0, tolerance = 1e-10)
   expect_equal(unname(result$estimates["explogit_c1_x1"]), 0, tolerance = 1e-10)
 

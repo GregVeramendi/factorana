@@ -30,18 +30,19 @@
 #' }
 #'
 #' @examples
-#' \dontrun{
-#' # Fix intercept to 0
-#' mc <- define_model_component(name = "wage", ...)
+#' # Build a minimal model component and fix a coefficient
+#' dat <- data.frame(intercept = 1, x1 = rnorm(20), y = rnorm(20))
+#' fm <- define_factor_model(n_factors = 1)
+#' mc <- define_model_component(
+#'   name = "y", data = dat, outcome = "y", factor = fm,
+#'   covariates = c("intercept", "x1"), model_type = "linear",
+#'   loading_normalization = 1
+#' )
+#'
+#' # Fix intercept to 0 and x1 coefficient to 0.1
 #' mc <- fix_coefficient(mc, covariate = "intercept", value = 0.0)
-#'
-#' # Fix a coefficient to a specific value
-#' mc <- fix_coefficient(mc, covariate = "education", value = 0.1)
-#'
-#' # For multinomial logit: fix coefficient for choice 2
-#' mc <- define_model_component(name = "occupation", ..., num_choices = 4)
-#' mc <- fix_coefficient(mc, covariate = "age", value = 0.05, choice = 2)
-#' }
+#' mc <- fix_coefficient(mc, covariate = "x1", value = 0.1)
+#' length(mc$fixed_coefficients)  # 2 constraints stored on the component
 #'
 #' @export
 fix_coefficient <- function(component, covariate, value, choice = NULL) {
@@ -189,18 +190,16 @@ get_fixed_coefficient_value <- function(component, covariate, choice = NULL) {
 #' }
 #'
 #' @examples
-#' \dontrun{
-#' # Fix all type intercepts to 0 for a component
-#' mc <- define_model_component(name = "wage", ...)
+#' # Build a component with n_types = 2 and fix the type-2 intercept
+#' dat <- data.frame(intercept = 1, y = rnorm(20))
+#' fm <- define_factor_model(n_factors = 1, n_types = 2)
+#' mc <- define_model_component(
+#'   name = "y", data = dat, outcome = "y", factor = fm,
+#'   covariates = "intercept", model_type = "linear",
+#'   loading_normalization = 1, use_types = TRUE
+#' )
 #' mc <- fix_type_intercepts(mc)
-#'
-#' # Fix only type 2's intercept (in a 3-type model)
-#' mc <- fix_type_intercepts(mc, types = 2)
-#'
-#' # For multinomial logit: fix type intercepts for choice 1 only
-#' mc <- define_model_component(name = "occupation", ..., num_choices = 4)
-#' mc <- fix_type_intercepts(mc, choice = 1)
-#' }
+#' length(mc$fixed_type_intercepts)
 #'
 #' @export
 fix_type_intercepts <- function(component, types = NULL, choice = NULL) {

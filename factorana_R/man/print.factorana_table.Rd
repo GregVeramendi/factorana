@@ -11,6 +11,11 @@
 
 \item{...}{Additional arguments (ignored)}
 }
+\value{
+Invisibly returns \code{x}. Called for its side effect of printing
+a side-by-side model-comparison table (parameters grouped by component,
+with estimates and standard errors) to the console.
+}
 \description{
 Print method for factorana_table
 }

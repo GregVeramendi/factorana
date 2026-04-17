@@ -1,3 +1,27 @@
+# factorana 1.1.1
+
+## CRAN resubmission fixes
+* Added method references (with DOIs) to the `DESCRIPTION` field: Heckman,
+  Humphries & Veramendi (2016, 2018) and Humphries, Joensen & Veramendi (2024).
+* Added `\value` (via `@return`) to all exported functions that were missing it,
+  including `as_kv`, `estimate_and_write`, `write_model_config_csv`, the
+  adaptive-quadrature and observation-weight setters, and every `print` method.
+* Replaced `\dontrun{}` with runnable examples (`fix_coefficient`,
+  `fix_type_intercepts`) or `\donttest{}` blocks (`results_table`,
+  `results_to_latex`, `components_table`, `estimate_factorscores_rcpp`,
+  `cleanup_parallel_workers`).
+* `estimate_and_write()` and `write_model_config_csv()` no longer write to a
+  default path; `results_dir` / `file` is now required (use `tempdir()` in
+  examples and tests).
+* Replaced the non-executing `introduction` vignette with two executable
+  vignettes: `measurement_system` (two-factor CFA) and `roy_model` (sector
+  choice with a latent ability factor).
+
+## Bug fixes
+* Fixed systematic-suite test that constructed an ordered-probit component
+  with `intercept` in its covariates; this configuration is rejected (the
+  intercept is absorbed into the cut points).
+
 # factorana 1.0.2
 
 ## Improvements

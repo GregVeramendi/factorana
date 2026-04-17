@@ -44,17 +44,15 @@ Fixed type intercepts are stored in the component and used during:
 }
 }
 \examples{
-\dontrun{
-# Fix all type intercepts to 0 for a component
-mc <- define_model_component(name = "wage", ...)
+# Build a component with n_types = 2 and fix the type-2 intercept
+dat <- data.frame(intercept = 1, y = rnorm(20))
+fm <- define_factor_model(n_factors = 1, n_types = 2)
+mc <- define_model_component(
+  name = "y", data = dat, outcome = "y", factor = fm,
+  covariates = "intercept", model_type = "linear",
+  loading_normalization = 1, use_types = TRUE
+)
 mc <- fix_type_intercepts(mc)
-
-# Fix only type 2's intercept (in a 3-type model)
-mc <- fix_type_intercepts(mc, types = 2)
-
-# For multinomial logit: fix type intercepts for choice 1 only
-mc <- define_model_component(name = "occupation", ..., num_choices = 4)
-mc <- fix_type_intercepts(mc, choice = 1)
-}
+length(mc$fixed_type_intercepts)
 
 }

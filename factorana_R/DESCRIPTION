@@ -1,7 +1,7 @@
 Package: factorana
 Type: Package
 Title: Factor Model Estimation with Latent Variables
-Version: 1.1.0
+Version: 1.1.1
 Authors@R: c(
     person("Greg", "Veramendi", email = "greg.veramendi@gmail.com",
            role = c("aut", "cre")),
@@ -11,7 +11,10 @@ Description: A flexible framework for estimating factor models with multiple
     latent variables. Supports linear, probit, ordered probit, and multinomial
     logit model components. Features include multi-stage estimation, automatic
     parameter initialization, analytical gradients and Hessians, and parallel
-    estimation.
+    estimation. Methods are described in Heckman, Humphries, and Veramendi
+    (2016) <doi:10.1016/j.jeconom.2015.12.001>, Heckman, Humphries, and
+    Veramendi (2018) <doi:10.1086/698760>, and Humphries, Joensen, and
+    Veramendi (2024) <doi:10.1257/pandp.20241026>.
 License: GPL-3
 Encoding: UTF-8
 RoxygenNote: 7.3.3

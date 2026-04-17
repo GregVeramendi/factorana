@@ -10,9 +10,13 @@ get_component_name(x, ...)
 \method{get_component_name}{model_component}(x, ...)
 }
 \arguments{
-\item{x}{Object to extract name from}
+\item{x}{Object to extract name from (a \code{model_component}).}
 
-\item{...}{Additional arguments}
+\item{...}{Additional arguments (not used).}
+}
+\value{
+A single character string with the component name, or
+\code{NA_character_} if the component has no name set.
 }
 \description{
 Get component name (internal)

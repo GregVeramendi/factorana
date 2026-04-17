@@ -13,6 +13,11 @@
 
 \item{...}{Additional arguments (ignored)}
 }
+\value{
+Invisibly returns \code{x}. Called for its side effect of printing
+a detailed estimation summary (convergence, log-likelihood, and a
+coefficient table with z-values and significance stars) to the console.
+}
 \description{
 Print method for summary.factorana_result
 }

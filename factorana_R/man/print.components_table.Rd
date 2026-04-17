@@ -11,6 +11,11 @@
 
 \item{...}{Additional arguments (ignored)}
 }
+\value{
+Invisibly returns \code{x}. Called for its side effect of printing
+a components-as-columns view of model estimates (one column per model
+component, factor parameters in a separate section) to the console.
+}
 \description{
 Print method for components_table
 }

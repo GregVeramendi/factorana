@@ -80,6 +80,9 @@ extract_free_params_cpp <- function(fm_ptr, full_params) {
 #'
 #' @param fm_ptr External pointer to FactorModel object
 #' @param weights Numeric vector of observation weights (length = n_obs)
+#' @return No return value. Called for its side effect of setting the
+#'   per-observation likelihood weights on the FactorModel pointed to by
+#'   \code{fm_ptr}.
 #' @export
 set_observation_weights_cpp <- function(fm_ptr, weights) {
     invisible(.Call(`_factorana_set_observation_weights_cpp`, fm_ptr, weights))
@@ -99,6 +102,10 @@ set_observation_weights_cpp <- function(fm_ptr, weights) {
 #' @param threshold Threshold for determining quadrature points (default 0.5, matching legacy)
 #' @param max_quad Maximum quadrature points per factor (default 16)
 #' @param verbose Whether to print summary of adaptive quadrature setup (default TRUE)
+#' @return No return value. Called for its side effect of enabling adaptive
+#'   quadrature on the FactorModel pointed to by \code{fm_ptr} and (when
+#'   \code{verbose = TRUE}) printing a summary of the per-observation
+#'   integration-point distribution.
 #' @export
 set_adaptive_quadrature_cpp <- function(fm_ptr, factor_scores, factor_ses, factor_vars, threshold = 0.5, max_quad = 16L, verbose = TRUE) {
     invisible(.Call(`_factorana_set_adaptive_quadrature_cpp`, fm_ptr, factor_scores, factor_ses, factor_vars, threshold, max_quad, verbose))
@@ -109,6 +116,9 @@ set_adaptive_quadrature_cpp <- function(fm_ptr, factor_scores, factor_ses, facto
 #' Reverts to standard (non-adaptive) quadrature integration.
 #'
 #' @param fm_ptr External pointer to FactorModel object
+#' @return No return value. Called for its side effect of disabling adaptive
+#'   quadrature and clearing any observation weights on the FactorModel
+#'   pointed to by \code{fm_ptr}.
 #' @export
 disable_adaptive_quadrature_cpp <- function(fm_ptr) {
     invisible(.Call(`_factorana_disable_adaptive_quadrature_cpp`, fm_ptr))

@@ -10,9 +10,12 @@ get_factor(x, ...)
 \method{get_factor}{model_component}(x, ...)
 }
 \arguments{
-\item{x}{Object to extract factor from}
+\item{x}{Object to extract factor from (a \code{model_component}).}
 
-\item{...}{Additional arguments}
+\item{...}{Additional arguments (not used).}
+}
+\value{
+The \code{factor_model} object attached to the component.
 }
 \description{
 Get factor from component (internal)

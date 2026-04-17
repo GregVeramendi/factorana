@@ -370,62 +370,56 @@ test_that("two-factor CFA with ordered probit and covariates converges and recov
   # WITH COVARIATES
   mc1 <- define_model_component(
     name = "m1", data = dat, outcome = "m1", factor = fm,
-    covariates = c("intercept", "x1"),
+    covariates = "x1",
     model_type = "oprobit",
     loading_normalization = c(NA, 0),  # f1=free, f2=0
-    num_choices = 5,
-    intercept = FALSE
+    num_choices = 5
   )
 
   # m2: free loading on f1
   mc2 <- define_model_component(
     name = "m2", data = dat, outcome = "m2", factor = fm,
-    covariates = c("intercept", "x1"),
+    covariates = "x1",
     model_type = "oprobit",
     loading_normalization = c(NA, 0),  # f1=free, f2=0
-    num_choices = 5,
-    intercept = FALSE
+    num_choices = 5
   )
 
   # m3: free loading on f1
   mc3 <- define_model_component(
     name = "m3", data = dat, outcome = "m3", factor = fm,
-    covariates = c("intercept", "x1"),
+    covariates = "x1",
     model_type = "oprobit",
     loading_normalization = c(NA, 0),  # f1=free, f2=0
-    num_choices = 5,
-    intercept = FALSE
+    num_choices = 5
   )
 
   # Factor 2 measures: zero on f1, loading on f2
   # m4: free loading on f2
   mc4 <- define_model_component(
     name = "m4", data = dat, outcome = "m4", factor = fm,
-    covariates = c("intercept", "x1"),
+    covariates = "x1",
     model_type = "oprobit",
     loading_normalization = c(0, NA),  # f1=0, f2=free
-    num_choices = 5,
-    intercept = FALSE
+    num_choices = 5
   )
 
   # m5: free loading on f2
   mc5 <- define_model_component(
     name = "m5", data = dat, outcome = "m5", factor = fm,
-    covariates = c("intercept", "x1"),
+    covariates = "x1",
     model_type = "oprobit",
     loading_normalization = c(0, NA),  # f1=0, f2=free
-    num_choices = 5,
-    intercept = FALSE
+    num_choices = 5
   )
 
   # m6: free loading on f2
   mc6 <- define_model_component(
     name = "m6", data = dat, outcome = "m6", factor = fm,
-    covariates = c("intercept", "x1"),
+    covariates = "x1",
     model_type = "oprobit",
     loading_normalization = c(0, NA),  # f1=0, f2=free
-    num_choices = 5,
-    intercept = FALSE
+    num_choices = 5
   )
 
   # Create model system

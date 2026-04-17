@@ -13,6 +13,11 @@
 
 \item{...}{Additional arguments (ignored)}
 }
+\value{
+Invisibly returns \code{x}. Called for its side effect of printing
+a summary of the factor score estimates (convergence rate, per-factor
+summary statistics, and the first \code{n} rows) to the console.
+}
 \description{
 Print method for factorana_factorscores
 }

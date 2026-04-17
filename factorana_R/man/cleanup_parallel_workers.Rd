@@ -22,12 +22,12 @@ continue running after the main process exits. This function finds and
 terminates any orphaned R worker processes started by the parallel package.
 }
 \examples{
-\dontrun{
-# After interrupting a parallel job with Ctrl-C:
-cleanup_parallel_workers()
+# Safe to run: list potential orphaned parallel workers without killing them.
+cleanup_parallel_workers(list_only = TRUE, verbose = FALSE)
 
-# First check what processes would be killed:
-cleanup_parallel_workers(list_only = TRUE)
+\donttest{
+# After interrupting a parallel job with Ctrl-C, terminate orphaned workers:
+cleanup_parallel_workers()
 
 # Force kill if graceful shutdown doesn't work:
 cleanup_parallel_workers(signal = "KILL")
