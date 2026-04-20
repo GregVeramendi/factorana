@@ -164,11 +164,39 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
         }
       }
 
+      # Add type model parameters when n_types > 1.
+      # Order MUST mirror the no-previous_stage branch: typeprob/type_loading
+      # appear AFTER the SE / covariate / factor_mean params and BEFORE the
+      # measurement params from the previous stage. This block was previously
+      # omitted, causing setup_parameter_constraints to read garbage values for
+      # type_*_loading_* and either error or silently mis-fix params.
+      if (n_types > 1L) {
+        n_factors_se <- model_system$factor$n_factors
+        # Type probability intercepts: n_types - 1 of them
+        for (t in 2:n_types) {
+          init_params <- c(init_params, 0.0)
+          param_names <- c(param_names, paste0("typeprob_", t, "_intercept"))
+        }
+        # Type probability loadings on each factor: (n_types - 1) * n_factors.
+        # The loading on the OUTCOME factor (k = n_factors_se) is fixed to 0
+        # by setup_parameter_constraints; we still need a slot for it.
+        for (t in 2:n_types) {
+          for (k in seq_len(n_factors_se)) {
+            init_params <- c(init_params, 0.0)
+            param_names <- c(param_names, paste0("type_", t, "_loading_", k))
+          }
+        }
+      }
+
       # Add measurement parameters from Stage 1 (only fixed ones)
-      # These are loadings and thresholds (not factor_var, se_, factor_mean_, or chol_ params)
+      # These are loadings, thresholds, intercepts, sigmas, etc. — not
+      # factor_var, se_, factor_mean_, chol_, typeprob_, or type_loading_
+      # (all factor-level params, already laid out above in the canonical
+      # Stage 2 position — keeping them here too would duplicate them).
       prev_params <- model_system$previous_stage_info$all_param_values
       prev_names <- names(prev_params)
-      meas_idx <- !grepl("^(factor_var|se_|chol_|factor_mean_)", prev_names)
+      meas_idx <- !grepl("^(factor_var|se_|chol_|factor_mean_|typeprob_|type_\\d+_loading_)",
+                         prev_names)
       meas_params <- prev_params[meas_idx]
       meas_names <- prev_names[meas_idx]
 

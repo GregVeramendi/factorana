@@ -1,3 +1,27 @@
+# factorana 1.1.2
+
+## Bug fixes
+
+* Two-stage estimation with `previous_stage + SE_linear/SE_quadratic` and
+  `n_types > 1` now correctly builds the Stage 2 parameter vector. Prior
+  versions omitted the `typeprob_*` and `type_*_loading_*` slots, causing
+  either a crash in `setup_parameter_constraints()` or silently mis-fixed
+  parameters. The measurement-parameter filter in
+  `initialize_parameters()` was also tightened so that factor-level type
+  parameters from Stage 1 are no longer duplicated into the measurement
+  block. Discovered during analysis of a structural model where types are
+  introduced at Stage 2.
+
+## Tests
+
+* New `tests/testthat/test-two-stage-se-types.R` adds:
+  - a shape test that verifies Stage 2 SE_linear + `n_types = 2` produces
+    the expected parameter vector aligned with `build_parameter_metadata()`,
+  - a finite-difference gradient and Hessian check at the DGP parameters,
+  - a skipped placeholder documenting a known Hessian-FD mismatch in the
+    Stage-1-with-types -> Stage-2-SE_linear variant (not the common
+    workflow; tracked for a future fix).
+
 # factorana 1.1.1
 
 ## CRAN resubmission fixes
