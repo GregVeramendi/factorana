@@ -1,3 +1,31 @@
+# factorana 1.1.3
+
+## New tests and documentation
+
+* New `tests/testthat/test-dynamic-single-factor.R` covers the standard
+  workflow for estimating an SE_linear dynamic structural equation on a
+  single latent construct measured at two time points:
+  - Stage 1 fits a 2-factor independent measurement model with
+    `equality_constraints` tying factor loadings and residual sigmas
+    across periods but leaving measurement intercepts period-specific.
+  - A dummy 2-factor `previous_stage` object is built that carries the
+    wave-1 intercepts into both factor slots (discarding the wave-2
+    intercepts, which absorb the structural-equation mean shift).
+  - Stage 2 fits `SE_linear` and recovers the structural intercept
+    `se_intercept` (alpha), slope `se_linear_1` (beta), residual
+    variance `se_residual_var`, and input factor variance
+    `factor_var_1`.
+* New vignette `vignettes/dynamic_structural.Rmd` walks through the
+  same workflow with executable code and explains the motivation for
+  using wave-1 intercepts in Stage 2 (naive pooling of measurement
+  intercepts across periods biases them by `lambda_m * E[f_2] / 2`,
+  which propagates into an under-estimate of alpha).
+* Removed the parameter-recovery test from
+  `test-two-stage-se-types.R` (its Stage-1-no-types ->
+  Stage-2-with-types setup is not a canonical workflow); the shape
+  test, FD gradient/Hessian test, and the skipped
+  Stage-1-with-types known-issue placeholder remain in place.
+
 # factorana 1.1.2
 
 ## Bug fixes
