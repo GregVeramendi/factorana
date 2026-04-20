@@ -262,7 +262,118 @@ test_that("Two-stage SE_linear with n_types=2: FD gradient and Hessian match", {
 
 
 # =============================================================================
-# TEST 3 — known-broken variant: Stage 1 also has types
+# TEST 3 — parameter recovery
+#
+# Verifies that the structural Stage-2 parameters (se_linear_1,
+# se_intercept_type_2, se_residual_var, factor_var_1) are recovered within
+# tolerance when the DGP matches the Stage 2 SE_linear + n_types=2 model.
+#
+# Note on identification: se_intercept in Stage 2 is NOT free to equal the
+# DGP constant. Stage 1 absorbs E[f2] into the fixed measurement
+# intercepts, so Stage 2 must satisfy
+#     se_intercept + se_intercept_type_2 * Pr(type = 2) ≈ 0
+# to remain consistent with the Stage 1 measurement fit. The MLE therefore
+# lands at a NEGATIVE se_intercept even when the DGP specifies 0. We
+# initialise se_intercept near its expected (negative) MLE value rather
+# than the DGP 0, which is also the practical starting strategy for real
+# applications of this workflow. typeprob_2_intercept and
+# type_2_loading_1 are weakly identified by 6 measurements and we do not
+# assert tight recovery on them here.
+# =============================================================================
+test_that("Two-stage SE_linear with n_types=2: structural parameter recovery", {
+  skip_on_cran()
+
+  sim <- .simulate_se_types_dgp(
+    n = 2000, seed = 37,
+    true_var_f1 = 1.0, true_se_lin = 0.6, true_se_res = 0.5,
+    se_int_t2 = 0.8,
+    typeprob_t2 = 0.3, type_load_t2 = 0.4
+  )
+  dat <- sim$data
+  truth <- sim$true
+
+  stage1 <- .build_stage1_notypes_model(dat)
+  ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+
+  result_stage1 <- estimate_model_rcpp(
+    model_system = stage1$ms, data = dat, control = ctrl,
+    optimizer = "nlminb", parallel = FALSE, verbose = FALSE
+  )
+  expect_equal(result_stage1$convergence, 0)
+
+  fm_stage2 <- define_factor_model(n_factors = 2, n_types = 2,
+                                    factor_structure = "SE_linear")
+  ms_stage2 <- define_model_system(components = list(), factor = fm_stage2,
+                                    previous_stage = result_stage1)
+
+  init_s2 <- initialize_parameters(ms_stage2, dat, verbose = FALSE)
+  # Practical init: start se_intercept NEGATIVE (not at the DGP 0 — see
+  # comment at top of this test) and leave typeprob / type_loading at zero.
+  init_s2$init_params["se_intercept"]         <- -0.5
+  init_s2$init_params["se_linear_1"]          <- 0.5
+  init_s2$init_params["se_residual_var"]      <- 0.5
+  init_s2$init_params["se_intercept_type_2"]  <- 0.5
+  init_s2$init_params["typeprob_2_intercept"] <- 0.0
+  init_s2$init_params["type_2_loading_1"]     <- 0.0
+
+  result_stage2 <- estimate_model_rcpp(
+    model_system = ms_stage2, data = dat,
+    init_params = init_s2$init_params, control = ctrl,
+    optimizer = "nlminb", parallel = FALSE, verbose = FALSE
+  )
+  expect_equal(result_stage2$convergence, 0,
+               info = "Stage 2 must converge strictly")
+
+  est <- result_stage2$estimates
+  se  <- result_stage2$std_errors
+
+  # Structural parameters (well identified)
+  expect_equal(unname(est["se_linear_1"]),         truth$se_lin,    tolerance = 0.15,
+               info = sprintf("se_linear_1 true=%.3f est=%.3f",
+                              truth$se_lin, est["se_linear_1"]))
+  expect_equal(unname(est["se_intercept_type_2"]), truth$se_int_t2, tolerance = 0.25,
+               info = sprintf("se_intercept_type_2 true=%.3f est=%.3f",
+                              truth$se_int_t2, est["se_intercept_type_2"]))
+  expect_equal(unname(est["se_residual_var"]),     truth$se_res,    tolerance = 0.20,
+               info = sprintf("se_residual_var true=%.3f est=%.3f",
+                              truth$se_res, est["se_residual_var"]))
+  expect_equal(unname(est["factor_var_1"]),        truth$var_f1,    tolerance = 0.20,
+               info = sprintf("factor_var_1 true=%.3f est=%.3f",
+                              truth$var_f1, est["factor_var_1"]))
+
+  # Sign check on se_intercept_type_2 (the key type effect): must be
+  # positive, and at least one SE away from zero.
+  expect_true(unname(est["se_intercept_type_2"]) > 0,
+              info = "se_intercept_type_2 must be positive (DGP has type 2 raising f2)")
+  expect_true(unname(est["se_intercept_type_2"]) / unname(se["se_intercept_type_2"]) > 1,
+              info = "se_intercept_type_2 must be > 1 SE from zero")
+
+  # Positive standard errors for all new Stage 2 free parameters
+  new_params <- c("factor_var_1", "se_linear_1", "se_intercept",
+                  "se_residual_var", "se_intercept_type_2",
+                  "typeprob_2_intercept", "type_2_loading_1")
+  expect_true(all(se[new_params] > 0),
+              info = "All new Stage 2 free params must have positive std_errors")
+
+  if (VERBOSE) {
+    cat("\n=== Stage 2 parameter recovery (Stage 1 no types, n=2000) ===\n")
+    cat(sprintf("Stage 2 loglik: %.2f\n", result_stage2$loglik))
+    for (p in new_params) {
+      tr <- if (p == "se_intercept") NA else truth[[switch(p,
+          factor_var_1 = "var_f1", se_linear_1 = "se_lin",
+          se_residual_var = "se_res", se_intercept_type_2 = "se_int_t2",
+          typeprob_2_intercept = "typeprob_t2", type_2_loading_1 = "type_load_t2")]]
+      cat(sprintf("  %-22s  true=%s  est=%+.4f  se=%.4f\n",
+                  p,
+                  if (is.na(tr)) "  n/a " else sprintf("%+.3f", tr),
+                  est[p], se[p]))
+    }
+  }
+})
+
+
+# =============================================================================
+# TEST 4 — known-broken variant: Stage 1 also has types
 #
 # When Stage 1 already estimates a type-probability model and type-specific
 # measurement intercepts (use_types = TRUE on components), the analytical
@@ -274,10 +385,10 @@ test_that("Two-stage SE_linear with n_types=2: FD gradient and Hessian match", {
 # practice (the standard workflow puts types at the structural level in
 # Stage 2 only), so the bug is documented here as a skipped test until
 # the Hessian path is fixed; the common Stage-1-no-types workflow is
-# covered by tests 1-2 above.
+# covered by tests 1-3 above.
 # =============================================================================
 test_that("KNOWN ISSUE: Stage 1 with types + Stage 2 SE_linear Hessian mismatch", {
   skip(paste0("Hessian FD mismatch in the Stage-1-with-types -> ",
-              "Stage-2-SE_linear path; see TEST 3 comment in ",
+              "Stage-2-SE_linear path; see TEST 4 comment in ",
               "test-two-stage-se-types.R. Re-enable once fixed."))
 })

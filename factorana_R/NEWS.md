@@ -18,6 +18,11 @@
   - a shape test that verifies Stage 2 SE_linear + `n_types = 2` produces
     the expected parameter vector aligned with `build_parameter_metadata()`,
   - a finite-difference gradient and Hessian check at the DGP parameters,
+  - a structural parameter recovery test (`se_linear_1`,
+    `se_intercept_type_2`, `se_residual_var`, `factor_var_1`) with init
+    `se_intercept = -0.5` (Stage 1 absorbs E[f2] into the measurement
+    intercepts, so the MLE `se_intercept` is negative even if the DGP
+    constant is 0), and
   - a skipped placeholder documenting a known Hessian-FD mismatch in the
     Stage-1-with-types -> Stage-2-SE_linear variant (not the common
     workflow; tracked for a future fix).
