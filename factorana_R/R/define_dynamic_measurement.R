@@ -306,16 +306,24 @@ build_dynamic_previous_stage <- function(dyn, stage1_result, data,
   mt <- dyn$model_type
   n_cat <- dyn$n_categories
 
-  # Pull anchor-period intercepts (per item)
+  # Pull anchor-period intercepts (per item). Oprobit and probit/logit
+  # absorb the intercept into the cutpoints / link, so there are no
+  # explicit "_intercept" parameters; in that case anchor_intercepts is
+  # left empty and the per-component assembly below skips intercept slots.
   anchor_pref <- prefixes[anchor_period]
-  anchor_intercepts <- vapply(items, function(it) {
-    nm <- paste0(anchor_pref, it, "_intercept")
-    if (!nm %in% names(s1_est)) {
-      stop("Stage 1 result missing expected parameter: ", nm)
-    }
-    unname(s1_est[nm])
-  }, numeric(1))
-  names(anchor_intercepts) <- items
+  has_intercept_param <- mt == "linear"
+  if (has_intercept_param) {
+    anchor_intercepts <- vapply(items, function(it) {
+      nm <- paste0(anchor_pref, it, "_intercept")
+      if (!nm %in% names(s1_est)) {
+        stop("Stage 1 result missing expected parameter: ", nm)
+      }
+      unname(s1_est[nm])
+    }, numeric(1))
+    names(anchor_intercepts) <- items
+  } else {
+    anchor_intercepts <- setNames(numeric(0), character(0))
+  }
 
   # Pull tied loadings (items 2..n_items, value equal across all periods)
   tied_loadings <- if (n_items >= 2L) {
@@ -371,9 +379,13 @@ build_dynamic_previous_stage <- function(dyn, stage1_result, data,
     for (i in seq_len(n_items)) {
       comp_name <- paste0(prefixes[p], items[i])
 
-      # Intercept: anchor period's value for EVERY period
-      vals   <- c(vals,   anchor_intercepts[[items[i]]])
-      names_ <- c(names_, paste0(comp_name, "_intercept"))
+      # Intercept: anchor period's value for EVERY period. Skip for model
+      # types that do not have an explicit intercept (oprobit / probit /
+      # logit), where the location is absorbed into cutpoints / link.
+      if (has_intercept_param) {
+        vals   <- c(vals,   anchor_intercepts[[items[i]]])
+        names_ <- c(names_, paste0(comp_name, "_intercept"))
+      }
 
       # Free loading (item >= 2) on factor p
       if (i >= 2L) {

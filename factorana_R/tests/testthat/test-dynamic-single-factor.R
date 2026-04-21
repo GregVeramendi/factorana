@@ -190,3 +190,163 @@ test_that("define_dynamic_measurement + Stage 2 SE_linear recovers alpha, beta, 
     }
   }
 })
+
+
+# ---- DGP helper with types (types shift f_2 mean only) ----------------------
+
+.simulate_dynamic_single_factor_dgp_types <- function(
+    n            = 3000,
+    seed         = 53,
+    true_var_f1  = 1.0,
+    true_alpha   = 0.4,
+    true_beta    = 0.6,
+    true_sigma_e = sqrt(0.5),
+    true_alpha_t2 = 0.8,
+    typeprob_t2   = 0.3,
+    type_load_t2  = 0.4,
+    item_int      = c(1.5, 1.0, 0.8),
+    item_load     = c(1.0, 0.9, 1.1),
+    item_sigma    = c(0.7, 0.75, 0.65)) {
+
+  set.seed(seed)
+
+  f1 <- rnorm(n, 0, sqrt(true_var_f1))
+  p_t2 <- plogis(typeprob_t2 + type_load_t2 * f1)
+  t2   <- as.integer(runif(n) < p_t2)
+  eps  <- rnorm(n, 0, true_sigma_e)
+  f2   <- true_alpha + true_beta * f1 + true_alpha_t2 * t2 + eps
+
+  gen_Y <- function(f, i) {
+    item_int[i] + item_load[i] * f + rnorm(length(f), 0, item_sigma[i])
+  }
+
+  dat_wide <- data.frame(
+    id        = seq_len(n),
+    intercept = 1,
+    eval      = 1L,
+    Y_t1_m1 = gen_Y(f1, 1), Y_t1_m2 = gen_Y(f1, 2), Y_t1_m3 = gen_Y(f1, 3),
+    Y_t2_m1 = gen_Y(f2, 1), Y_t2_m2 = gen_Y(f2, 2), Y_t2_m3 = gen_Y(f2, 3)
+  )
+
+  list(
+    wide = dat_wide,
+    true = list(
+      var_f1       = true_var_f1,
+      alpha        = true_alpha,
+      beta         = true_beta,
+      sigma_e2     = true_sigma_e^2,
+      alpha_t2     = true_alpha_t2,
+      typeprob_t2  = typeprob_t2,
+      type_load_t2 = type_load_t2
+    )
+  )
+}
+
+
+# =============================================================================
+# TEST 3: End-to-end with n_types = 2 at Stage 2 (types shift f_2 mean only)
+#
+# The wrapper is type-agnostic at Stage 1 (hardcoded n_types = 1L). Stage 2
+# adds n_types = 2 via define_factor_model(); the SE_linear model picks up
+# the type-specific intercept se_intercept_type_2, the typeprob intercept,
+# and the type loading on the input factor. This test verifies that the
+# wrapper plus types path recovers the well-identified structural
+# parameters, and that all free parameters have positive standard errors.
+# =============================================================================
+test_that("define_dynamic_measurement + Stage 2 SE_linear + n_types=2 recovers structural params", {
+  skip_on_cran()
+
+  sim   <- .simulate_dynamic_single_factor_dgp_types(n = 3000, seed = 53)
+  truth <- sim$true
+  ctrl  <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+
+  dyn <- define_dynamic_measurement(
+    data                 = sim$wide,
+    items                = c("m1", "m2", "m3"),
+    period_prefixes      = c("Y_t1_", "Y_t2_"),
+    model_type           = "linear",
+    evaluation_indicator = "eval"
+  )
+  s1 <- estimate_model_rcpp(
+    dyn$model_system, sim$wide, control = ctrl,
+    optimizer = "nlminb", parallel = FALSE, verbose = FALSE
+  )
+  expect_equal(s1$convergence, 0)
+
+  dummy <- build_dynamic_previous_stage(dyn, s1, sim$wide, anchor_period = 1L)
+
+  fm_s2 <- define_factor_model(n_factors = 2, n_types = 2,
+                                factor_structure = "SE_linear")
+  ms_s2 <- define_model_system(components = list(), factor = fm_s2,
+                                previous_stage = dummy)
+
+  # Neutral init (not at truth). Earlier manual testing confirmed the
+  # mode is robust: three different inits (neutral, alpha-absorbs-shift,
+  # type-absorbs-shift) all converge to the same log-likelihood.
+  init_s2 <- initialize_parameters(ms_s2, sim$wide, verbose = FALSE)
+  init_s2$init_params["factor_var_1"]         <- unname(dummy$estimates["factor_var_1"])
+  init_s2$init_params["se_intercept"]         <- 0.0
+  init_s2$init_params["se_linear_1"]          <- 0.5
+  init_s2$init_params["se_residual_var"]      <- 0.5
+  init_s2$init_params["se_intercept_type_2"]  <- 0.3
+  init_s2$init_params["typeprob_2_intercept"] <- 0.0
+  init_s2$init_params["type_2_loading_1"]     <- 0.0
+
+  r2 <- estimate_model_rcpp(
+    ms_s2, sim$wide, init_params = init_s2$init_params, control = ctrl,
+    optimizer = "nlminb", parallel = FALSE, verbose = FALSE
+  )
+  expect_equal(r2$convergence, 0,
+               info = "Stage 2 (SE_linear + n_types=2) must converge strictly")
+
+  est <- r2$estimates
+  se  <- r2$std_errors
+
+  # Well-identified structural parameters (tight tolerances).
+  expect_equal(unname(est["se_linear_1"]),         truth$beta,     tolerance = 0.10,
+               info = sprintf("se_linear_1 (beta): true=%.3f est=%.3f",
+                              truth$beta, est["se_linear_1"]))
+  expect_equal(unname(est["se_intercept_type_2"]), truth$alpha_t2, tolerance = 0.20,
+               info = sprintf("se_intercept_type_2 (alpha_type): true=%.3f est=%.3f",
+                              truth$alpha_t2, est["se_intercept_type_2"]))
+  expect_equal(unname(est["se_residual_var"]),     truth$sigma_e2, tolerance = 0.15,
+               info = sprintf("se_residual_var: true=%.3f est=%.3f",
+                              truth$sigma_e2, est["se_residual_var"]))
+  expect_equal(unname(est["factor_var_1"]),        truth$var_f1,   tolerance = 0.15,
+               info = sprintf("factor_var_1: true=%.3f est=%.3f",
+                              truth$var_f1, est["factor_var_1"]))
+
+  # se_intercept (alpha) trades off with typeprob_2_intercept and
+  # type_2_loading_1. The SUM se_intercept + se_intercept_type_2 * Pr(t=2)
+  # pins E[f_2]; the individual decomposition is only weakly identified
+  # with three indicators per period. We use a generous tolerance.
+  expect_equal(unname(est["se_intercept"]), truth$alpha, tolerance = 0.25,
+               info = sprintf("se_intercept (alpha): true=%.3f est=%.3f se=%.3f",
+                              truth$alpha, est["se_intercept"], se["se_intercept"]))
+
+  # Positive SE on every new free parameter (sanity: Fisher information
+  # is not singular).
+  new_free <- c("factor_var_1", "se_intercept", "se_linear_1",
+                "se_residual_var", "se_intercept_type_2",
+                "typeprob_2_intercept", "type_2_loading_1")
+  expect_true(all(se[new_free] > 0),
+              info = "All Stage 2 free params must have positive std_errors")
+
+  if (VERBOSE) {
+    cat("\n=== Stage 2 SE_linear + n_types=2 recovery (via wrapper) ===\n")
+    cat(sprintf("%-22s %10s %10s %10s %10s\n", "param", "true", "est", "se", "z"))
+    for (p in new_free) {
+      tr <- switch(p,
+                   factor_var_1         = truth$var_f1,
+                   se_intercept         = truth$alpha,
+                   se_linear_1          = truth$beta,
+                   se_residual_var      = truth$sigma_e2,
+                   se_intercept_type_2  = truth$alpha_t2,
+                   typeprob_2_intercept = truth$typeprob_t2,
+                   type_2_loading_1     = truth$type_load_t2)
+      zv <- if (se[p] > 0) (est[p] - tr) / se[p] else NA
+      cat(sprintf("  %-22s %+10.4f %+10.4f %10.4f %+10.2f\n",
+                  p, tr, est[p], se[p], zv))
+    }
+  }
+})

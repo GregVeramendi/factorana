@@ -1,3 +1,24 @@
+# factorana 1.1.5
+
+## Bug fix
+
+* `build_dynamic_previous_stage()` now handles oprobit, probit, and
+  logit model types. Those types do not have explicit `_intercept`
+  parameters (location is absorbed into cutpoints or the link
+  function); the previous version would error when looking up a
+  missing intercept. Linear behaviour is unchanged.
+
+## Tests
+
+* `test-dynamic-single-factor.R` gains a third test that exercises the
+  wrapper plus Stage 2 `SE_linear` with `n_types = 2`. Types shift the
+  period-2 factor mean via `se_intercept_type_2`. Recovery of the
+  well-identified structural parameters (factor_var_1, se_linear_1,
+  se_intercept_type_2, se_residual_var) is verified on a simulated
+  DGP, with a more generous tolerance on `se_intercept` (which trades
+  off against `typeprob_2_intercept` and `type_2_loading_1` when
+  measurement information density is low).
+
 # factorana 1.1.4
 
 ## New features
