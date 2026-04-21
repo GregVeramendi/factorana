@@ -1,3 +1,40 @@
+# factorana 1.1.6
+
+## Bug fixes
+
+* `define_dynamic_measurement()` with `model_type = "oprobit"` now ties
+  only the threshold INCREMENTS across periods (`_thresh_k` for
+  `k = 2..K-1`) and leaves `_thresh_1` period-specific. Previously all
+  thresholds were tied, which forced any wave-to-wave shift in the
+  latent factor mean into the factor variances and produced Stage 1
+  convergence code 1 (false convergence) plus boundary warnings. The
+  new behaviour mirrors the linear case: tie the scale (sigmas /
+  threshold increments), leave the location (intercepts / thresh_1)
+  period-specific. Patch contributed by an external agent working on
+  the Mental Health Trap simulation, where Stage 1 convergence went
+  from conv = 1 with `factor_var_1 = 4.06` / `factor_var_2 = 0.98` to
+  conv = 0 with balanced variances.
+
+* `define_dynamic_measurement()` now silently strips `"intercept"` or
+  `"constant"` from `covariates` when `model_type = "oprobit"`. Ordered
+  probit absorbs the intercept into the cutpoints, so factorana rejects
+  an intercept covariate on oprobit components. The wrapper's default
+  `covariates = "intercept"` now works for every supported model type
+  without requiring the user to tailor it by model type.
+
+## Tests
+
+* `test-dynamic-single-factor.R` gains a structural test for the
+  oprobit wrapper path that verifies: the intercept covariate is
+  stripped, equality constraints contain only threshold increments
+  `k = 2..K-1` (not `thresh_1`), `thresh_1` appears as a free
+  parameter in every period, and `build_dynamic_previous_stage()`
+  produces a dummy with no `_intercept` parameters and with the
+  anchor-period `thresh_1` carried into every period's slot.
+  Estimation-level recovery for oprobit is not asserted: the oprobit
+  dynamic model is empirically fragile at moderate n and identification
+  is tracked separately.
+
 # factorana 1.1.5
 
 ## Bug fix

@@ -361,3 +361,133 @@ test_that("define_dynamic_measurement + Stage 2 SE_linear + n_types=2 recovers s
     }
   }
 })
+
+
+# =============================================================================
+# TEST 4: structural check for model_type = "oprobit"
+#
+# Ordered probit needs a different tying pattern than linear. factorana
+# parameterises cutpoints as increments:
+#     cutpoint_k = thresh_1 + thresh_2 + ... + thresh_k
+# so thresh_1 plays the role of a linear intercept (location) and the
+# later increments play the role of sigma (scale / category spacing).
+# The wrapper ties only the increments across periods, leaving thresh_1
+# period-specific so a wave-to-wave shift in the latent factor mean can
+# be absorbed. The wrapper also silently strips the default
+# `intercept` covariate for oprobit (factorana rejects an intercept
+# covariate on oprobit components).
+#
+# This is a STRUCTURAL test: it checks the constructed model_system and
+# the bridge object, but does not run optimisation. Recovery of the
+# ordered-probit dynamic model is empirically fragile at moderate n
+# (see the patch README for the Mental Health Trap findings); we track
+# estimation-level testing separately.
+# =============================================================================
+test_that("oprobit wrapper ties only threshold increments and strips intercept", {
+  n_items      <- 3L
+  n_categories <- 4L     # => 3 thresholds per item
+
+  # Minimal data frame: the wrapper only reads column names and types.
+  set.seed(1); n <- 100
+  mk_col <- function() sample.int(n_categories, n, replace = TRUE)
+  dat <- data.frame(
+    intercept = 1, eval = 1L,
+    Y_t1_m1 = mk_col(), Y_t1_m2 = mk_col(), Y_t1_m3 = mk_col(),
+    Y_t2_m1 = mk_col(), Y_t2_m2 = mk_col(), Y_t2_m3 = mk_col()
+  )
+
+  dyn <- define_dynamic_measurement(
+    data                 = dat,
+    items                = paste0("m", 1:n_items),
+    period_prefixes      = c("Y_t1_", "Y_t2_"),
+    model_type           = "oprobit",
+    n_categories         = n_categories,
+    covariates           = "intercept",   # should be stripped silently
+    evaluation_indicator = "eval"
+  )
+
+  # ---- covariates auto-stripped for oprobit ----
+  expect_true(is.null(dyn$covariates) || length(dyn$covariates) == 0L,
+              info = "oprobit default covariates should be NULL after stripping intercept")
+
+  # ---- equality constraints ----
+  # Expected: (n_items - 1) loading ties + n_items * (n_categories - 2)
+  # threshold-increment ties (thresh_k for k = 2..K-1). thresh_1 is NOT tied.
+  n_loading_ties <- n_items - 1L              # items 2..n, loading free on both factors
+  n_thresh_ties  <- n_items * (n_categories - 2L)  # thresh_2 and thresh_3 for each item
+  expected_n_eq  <- n_loading_ties + n_thresh_ties
+  expect_equal(length(dyn$equality_constraints), expected_n_eq,
+               info = sprintf("expected %d equality constraints, got %d",
+                              expected_n_eq, length(dyn$equality_constraints)))
+
+  # Every constraint group should be a 2-element character vector
+  expect_true(all(vapply(dyn$equality_constraints,
+                          function(g) is.character(g) && length(g) == 2L, logical(1))))
+
+  # thresh_1 should NEVER appear in any tie group
+  tied_names <- unlist(dyn$equality_constraints)
+  expect_false(any(grepl("_thresh_1$", tied_names)),
+               info = "thresh_1 must be period-specific (not tied)")
+
+  # thresh_2 and thresh_3 SHOULD appear for every item
+  for (i in seq_len(n_items)) {
+    for (k in 2:(n_categories - 1L)) {
+      expect_true(any(grepl(sprintf("_m%d_thresh_%d$", i, k), tied_names)),
+                   info = sprintf("expected tie for m%d thresh_%d", i, k))
+    }
+  }
+
+  # ---- Parameter layout through the optimiser's metadata ----
+  md <- factorana:::build_parameter_metadata(dyn$model_system)
+  # Every component should have a thresh_1 slot (period-specific).
+  for (p in c("Y_t1_", "Y_t2_")) {
+    for (i in seq_len(n_items)) {
+      nm <- paste0(p, "m", i, "_thresh_1")
+      expect_true(nm %in% md$names,
+                   info = sprintf("%s must exist as a free parameter", nm))
+    }
+  }
+
+  # ---- Bridge handles oprobit (no _intercept slot expected) ----
+  # Build a fake Stage 1 result with plausible parameter values at the
+  # layout build_parameter_metadata emits, so that
+  # build_dynamic_previous_stage can run without estimation.
+  fake_est <- rep(0.5, length(md$names))
+  names(fake_est) <- md$names
+  # Give plausible increasing thresholds so the sum is strictly monotone.
+  for (p in c("Y_t1_", "Y_t2_")) {
+    for (i in seq_len(n_items)) {
+      fake_est[paste0(p, "m", i, "_thresh_1")] <- -1.0
+      fake_est[paste0(p, "m", i, "_thresh_2")] <-  1.0
+      fake_est[paste0(p, "m", i, "_thresh_3")] <-  1.0
+    }
+  }
+  fake_result <- list(
+    estimates = fake_est,
+    std_errors = setNames(rep(0.1, length(fake_est)), names(fake_est)),
+    convergence = 0L,
+    loglik = 0.0
+  )
+
+  dummy <- build_dynamic_previous_stage(dyn, fake_result, dat)
+  expect_true(is.list(dummy) && "estimates" %in% names(dummy))
+  # Dummy must NOT contain any _intercept parameters (oprobit has none).
+  expect_false(any(grepl("_intercept$", names(dummy$estimates))),
+               info = "dummy previous_stage for oprobit must not contain _intercept params")
+  # Dummy SHOULD contain thresh_1 slots for both periods, carrying the
+  # anchor period's value into every slot.
+  anchor_thresh1 <- fake_est["Y_t1_m1_thresh_1"]
+  for (p in c("Y_t1_", "Y_t2_")) {
+    for (i in seq_len(n_items)) {
+      nm <- paste0(p, "m", i, "_thresh_1")
+      expect_true(nm %in% names(dummy$estimates),
+                   info = sprintf("%s must appear in dummy estimates", nm))
+    }
+  }
+  # All m1 thresh_1 slots should equal the anchor value.
+  m1_slots <- grep("m1_thresh_1$", names(dummy$estimates), value = TRUE)
+  expect_true(length(m1_slots) == 2L)
+  expect_equal(unname(dummy$estimates[m1_slots[1]]),
+               unname(dummy$estimates[m1_slots[2]]),
+               info = "anchor-period thresh_1 must be carried into every period slot")
+})

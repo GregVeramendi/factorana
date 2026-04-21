@@ -119,6 +119,16 @@ define_dynamic_measurement <- function(
   n_periods <- length(period_prefixes)
   n_items   <- length(items)
 
+  # Oprobit absorbs its intercept into the cutpoint thresholds, so
+  # factorana rejects an "intercept" covariate for oprobit components.
+  # The wrapper's default covariates = "intercept" is correct for linear
+  # / probit / logit; strip it for oprobit so the default works for all
+  # model types without requiring the user to tailor covariates.
+  if (model_type == "oprobit") {
+    covariates <- setdiff(covariates, c("intercept", "constant"))
+    if (length(covariates) == 0L) covariates <- NULL
+  }
+
   # ---- Build factor model: one factor per period ----
   fm <- define_factor_model(
     n_factors        = n_periods,
@@ -206,16 +216,30 @@ define_dynamic_measurement <- function(
       eq_constraints[[length(eq_constraints) + 1L]] <- tied
     }
   } else if (model_type == "oprobit") {
-    # Tie every cutpoint (1..n_categories - 1) of every item.
+    # Tie THRESHOLD INCREMENTS (k = 2..n_categories-1) across periods, and
+    # leave the FIRST threshold period-specific. factorana parameterises
+    # ordered-probit cutpoints as an increment vector:
+    #   cutpoint_k = thresh_1 + thresh_2 + ... + thresh_k
+    # so thresh_1 is the location (analog of a linear intercept) and the
+    # later increments are the category spacing (analog of the scale).
+    # Tying only the increments mirrors the linear strategy of tying sigmas
+    # while leaving intercepts period-specific, so the wave-specific
+    # population-mean shift in the latent factor can be absorbed by
+    # wave-specific thresh_1 values. Tying every cutpoint (the earlier
+    # behaviour) forced the factor variances to contort to fit the mean
+    # drift and led to conv=1 in Stage 1 whenever the population mean
+    # shifted across periods.
     n_thresh <- as.integer(n_categories) - 1L
-    for (i in seq_len(n_items)) {
-      for (k in seq_len(n_thresh)) {
-        tied <- character(n_periods)
-        for (p in seq_len(n_periods)) {
-          comp_name <- paste0(period_prefixes[p], items[i])
-          tied[p]   <- paste0(comp_name, "_thresh_", k)
+    if (n_thresh >= 2L) {
+      for (i in seq_len(n_items)) {
+        for (k in 2:n_thresh) {
+          tied <- character(n_periods)
+          for (p in seq_len(n_periods)) {
+            comp_name <- paste0(period_prefixes[p], items[i])
+            tied[p]   <- paste0(comp_name, "_thresh_", k)
+          }
+          eq_constraints[[length(eq_constraints) + 1L]] <- tied
         }
-        eq_constraints[[length(eq_constraints) + 1L]] <- tied
       }
     }
   }
@@ -347,10 +371,18 @@ build_dynamic_previous_stage <- function(dyn, stage1_result, data,
     }, numeric(1))
     names(tied_sigmas) <- items
   } else if (mt == "oprobit") {
+    # For every item, pull the anchor-period threshold vector. Increments
+    # (k >= 2) are tied across periods in Stage 1; thresh_1 is period-
+    # specific. Here we carry the anchor period's thresh_1 into every
+    # period's slot so that Stage 2 inherits a common location (analog of
+    # the linear wrapper carrying wave-1 intercepts).
     n_thresh <- as.integer(n_cat) - 1L
     tied_thresh <- lapply(items, function(it) {
       vapply(seq_len(n_thresh), function(k) {
         nm <- paste0(anchor_pref, it, "_thresh_", k)
+        if (!nm %in% names(s1_est)) {
+          stop("Stage 1 result missing expected parameter: ", nm)
+        }
         unname(s1_est[nm])
       }, numeric(1))
     })
