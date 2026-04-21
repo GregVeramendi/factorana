@@ -1,3 +1,69 @@
+# factorana 1.1.7
+
+## Bug fixes
+
+* Analytical Hessian now accumulates correctly under equality
+  constraints. Previously `FactorModel::CalcLkhd` iterated over
+  `freeparlist` for its Hessian contribution loops, which skipped
+  equality-tied (derived) parameters. The subsequent
+  `ExtractFreeHessian` aggregation had no tied-position values to sum
+  into the primaries, so the analytical Hessian at primary x primary
+  positions missed the `d^2L / d(primary) d(derived)`, `d^2L /
+  d(derived) d(primary)`, and `d^2L / d(derived) d(derived)` terms.
+  This produced analytical zeros at positions where finite differences
+  (with equality enforced at reinitialisation) reported magnitudes of
+  10 to 50, meaning SE estimates under equality constraints were
+  biased. Fix: iterate over `gradparlist` (free plus tied) in the
+  Hessian loops and symmetrise `full_hessL` before
+  `ExtractFreeHessian`. Validated by the now-passing Stage 1 FD tests
+  in `test-dynamic-single-factor.R` (linear max_err ~2.5e-6, oprobit
+  Hessian max_err ~3.3e-6).
+
+* The C++ name-to-index map for ordered-probit thresholds was looking
+  up the field `n_categories` instead of the actual component field
+  `num_choices`, so threshold equality constraints were silently
+  dropped. Fixed in `rcpp_interface.cpp`. This was the root cause of
+  the conv = 1 + "items to replace" warnings observed in the Mental
+  Health Trap simulation's Stage 1 oprobit estimation.
+
+## New features
+
+* `define_dynamic_measurement()` for `model_type = "oprobit"` now
+  ties only the threshold INCREMENTS (`_thresh_k` for
+  `k = 2..K-1`) across periods and leaves `_thresh_1`
+  period-specific, mirroring the linear strategy (tie sigmas, free
+  intercepts). Patch contributed by an external agent on the MH Trap
+  project.
+
+* `define_dynamic_measurement()` now silently strips `"intercept"` /
+  `"constant"` from `covariates` when `model_type = "oprobit"` (ordered
+  probit absorbs the intercept into the cutpoints). The default
+  `covariates = "intercept"` now works for every supported model type.
+
+## New tests
+
+* `test-se-models.R`: `.build_se_type_model` gains an
+  `indicator_type` argument (`"linear"` or `"oprobit"`) and two new
+  tests exercise single-stage `SE_linear + n_types = 2` FD (gradient
+  and Hessian) with ordered-probit indicators.
+
+* `test-two-stage-se-types.R`: TEST 3 adds an oprobit variant of the
+  two-stage FD test at Stage 2 (analog of the linear TEST 2). The old
+  TEST 3 known-issue placeholder is renumbered to TEST 4.
+
+* `test-dynamic-single-factor.R`:
+  * TEST 4: structural test for the oprobit wrapper path (equality
+    constraints, no estimation).
+  * TEST 5: oprobit Stage 1 converges cleanly with tied thresholds
+    (regression guard for the threshold-name-lookup bug).
+  * TEST 6-7: Stage 1 FD (gradient + Hessian) for the dynamic-measurement
+    wrapper at a non-MLE parameter point, linear and oprobit. These
+    tests actively exercise the Hessian-accumulation fix.
+  * TEST 8: oprobit two-stage structural parameter recovery. Became
+    feasible once the two C++ bugs were fixed; recovery of
+    factor_var_1, se_intercept, se_linear_1, se_residual_var is
+    within tolerance at n = 2500.
+
 # factorana 1.1.6
 
 ## Bug fixes

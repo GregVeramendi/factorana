@@ -977,12 +977,16 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 totalgrad[gradparlist[gi]] = 0.0;
             }
         }
-        // OPTIMIZATION: Only zero free parameter entries (like legacy code)
+        // Zero Hessian entries for every parameter that needs a Hessian
+        // contribution. With equality constraints this includes tied
+        // (derived) parameters because ExtractFreeHessian later aggregates
+        // their cross-derivatives into their primaries; the tied positions
+        // must therefore be populated on the upper triangle.
         if (iflag == 3) {
-            for (int fi = 0; fi < nparam_free; fi++) {
-                int i = freeparlist[fi];
-                for (int fj = fi; fj < nparam_free; fj++) {
-                    int j = freeparlist[fj];
+            for (size_t fi = 0; fi < gradparlist.size(); fi++) {
+                int i = gradparlist[fi];
+                for (size_t fj = fi; fj < gradparlist.size(); fj++) {
+                    int j = gradparlist[fj];
                     totalhess[i * nparam + j] = 0.0;
                 }
             }
@@ -1254,12 +1258,13 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             double type_weighted_prob = 0.0;
             if (ntyp > 1) {
                 if (iflag >= 2) std::fill(type_weighted_grad.begin(), type_weighted_grad.end(), 0.0);
-                // OPTIMIZATION: Only zero free parameter entries (like legacy code)
+                // Include tied params under equality constraints (see comment
+                // at the outer totalhess zeroing loop).
                 if (iflag == 3) {
-                    for (int fi = 0; fi < nparam_free; fi++) {
-                        int i = freeparlist[fi];
-                        for (int fj = fi; fj < nparam_free; fj++) {
-                            int j = freeparlist[fj];
+                    for (size_t fi = 0; fi < gradparlist.size(); fi++) {
+                        int i = gradparlist[fi];
+                        for (size_t fj = fi; fj < gradparlist.size(); fj++) {
+                            int j = gradparlist[fj];
                             type_weighted_hess[i * nparam + j] = 0.0;
                         }
                     }
@@ -1303,12 +1308,13 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
                 // Gradient accumulators for this type (pre-allocated, zero here)
                 if (iflag >= 2) std::fill(grad_this_type.begin(), grad_this_type.end(), 0.0);
-                // OPTIMIZATION: Only zero free parameter entries (like legacy code)
+                // Include tied params under equality constraints (see comment
+                // at the outer totalhess zeroing loop).
                 if (iflag == 3) {
-                    for (int fi = 0; fi < nparam_free; fi++) {
-                        int i = freeparlist[fi];
-                        for (int fj = fi; fj < nparam_free; fj++) {
-                            int j = freeparlist[fj];
+                    for (size_t fi = 0; fi < gradparlist.size(); fi++) {
+                        int i = gradparlist[fi];
+                        for (size_t fj = fi; fj < gradparlist.size(); fj++) {
+                            int j = gradparlist[fj];
                             hess_this_type[i * nparam + j] = 0.0;
                         }
                     }
@@ -2093,10 +2099,14 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     // Gradient of type-weighted likelihood:
                     // d(π_t * L_t)/dθ = (dπ_t/dθ) * L_t + π_t * (dL_t/dθ)
                     // For model parameters: dπ_t/dθ = 0, so just π_t * (dL_t/dθ)
-                    // OPTIMIZATION: For ntyp=1, skip - we'll use grad_this_type directly later
+                    // For ntyp=1, skip - we use grad_this_type directly later.
+                    // Include tied params under equality constraints: the
+                    // downstream aggregation (mixgrad += type_weighted_grad)
+                    // uses gradparlist, so tied positions of type_weighted_grad
+                    // must be populated here or their contribution is lost.
                     if (ntyp > 1) {
-                        for (int fi = 0; fi < nparam_free; fi++) {
-                            int ipar = freeparlist[fi];
+                        for (size_t fi = 0; fi < gradparlist.size(); fi++) {
+                            int ipar = gradparlist[fi];
                             type_weighted_grad[ipar] += type_prob * prob_this_type * grad_this_type[ipar];
                         }
                     }
@@ -2153,12 +2163,14 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     // ===== STEP 9c: Hessian for model parameters (original formula) =====
                     // d²L_t/dθdφ = L_t * [d²(log L_t)/dθdφ + d(log L_t)/dθ * d(log L_t)/dφ]
                     // Weighted by π_t: contribution to d²L_mix/dθdφ is π_t * d²L_t/dθdφ
-                    // OPTIMIZATION: For ntyp=1, skip - we'll use hess_this_type directly later
+                    // For ntyp=1, skip - we use hess_this_type directly later.
+                    // Include tied params under equality constraints (see comment
+                    // at the outer totalhess zeroing loop).
                     if (ntyp > 1) {
-                        for (int fi = 0; fi < nparam_free; fi++) {
-                            int i = freeparlist[fi];
-                            for (int fj = fi; fj < nparam_free; fj++) {
-                                int j = freeparlist[fj];
+                        for (size_t fi = 0; fi < gradparlist.size(); fi++) {
+                            int i = gradparlist[fi];
+                            for (size_t fj = fi; fj < gradparlist.size(); fj++) {
+                                int j = gradparlist[fj];
                                 int idx = i * nparam + j;
                                 // Accumulate Hessian weighted by type probability
                                 type_weighted_hess[idx] += type_prob * prob_this_type *
@@ -2537,10 +2549,12 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     // Raw Hessian = L * (d²(log L)/dθ² + d(log L)/dθ * d(log L)/dθ')
                     //             = prob_this_type * (hess_this_type + grad_this_type * grad_this_type')
                     double combined_weight = quad_weight * prob_this_type;
-                    for (int fi = 0; fi < nparam_free; fi++) {
-                        int i = freeparlist[fi];
-                        for (int fj = fi; fj < nparam_free; fj++) {
-                            int j = freeparlist[fj];
+                    // Include tied params under equality constraints (see comment
+                    // at the outer totalhess zeroing loop).
+                    for (size_t fi = 0; fi < gradparlist.size(); fi++) {
+                        int i = gradparlist[fi];
+                        for (size_t fj = fi; fj < gradparlist.size(); fj++) {
+                            int j = gradparlist[fj];
                             int idx = i * nparam + j;
                             mixhess[idx] += combined_weight *
                                 (hess_this_type[idx] + grad_this_type[i] * grad_this_type[j]);
@@ -2614,10 +2628,12 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 }
 
                 if (iflag == 3) {
-                    for (int fi = 0; fi < nparam_free; fi++) {
-                        int i = freeparlist[fi];
-                        for (int fj = fi; fj < nparam_free; fj++) {
-                            int j = freeparlist[fj];
+                    // Include tied params under equality constraints (see comment
+                    // at the outer totalhess zeroing loop).
+                    for (size_t fi = 0; fi < gradparlist.size(); fi++) {
+                        int i = gradparlist[fi];
+                        for (size_t fj = fi; fj < gradparlist.size(); fj++) {
+                            int j = gradparlist[fj];
                             int idx = i * nparam + j;
                             mixhess[idx] += quad_weight * type_weighted_hess[idx];
                         }
@@ -2652,11 +2668,12 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         }
 
         if (iflag == 3) {
-            // Mixture Hessian contribution
-            for (int fi = 0; fi < nparam_free; fi++) {
-                int i = freeparlist[fi];
-                for (int fj = fi; fj < nparam_free; fj++) {
-                    int j = freeparlist[fj];
+            // Mixture Hessian contribution. Include tied params under equality
+            // constraints (see comment at the outer totalhess zeroing loop).
+            for (size_t fi = 0; fi < gradparlist.size(); fi++) {
+                int i = gradparlist[fi];
+                for (size_t fj = fi; fj < gradparlist.size(); fj++) {
+                    int j = gradparlist[fj];
                     int idx = i * nparam + j;
                     totalhess[idx] += mix_weight * mixhess[idx];
                 }
@@ -3150,12 +3167,18 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             }
 
             // Hessian: d²(log L)/dθ² = (1/L)*d²L/dθ² - (1/L²)*(dL/dθ)² (weighted)
-            // OPTIMIZATION: Only compute entries for free parameters (like legacy code)
+            // Include tied params under equality constraints: with ties the
+            // analytical Hessian at a primary position must accumulate the
+            // cross-derivatives ∂²L/∂primary∂derived, ∂²L/∂derived∂primary,
+            // and ∂²L/∂derived∂derived (see ExtractFreeHessian for the
+            // aggregation step). That requires populating the
+            // full-parameter-space Hessian at tied positions too, which is
+            // why we iterate gradparlist here rather than freeparlist.
             if (iflag == 3) {
-                for (int fi = 0; fi < nparam_free; fi++) {
-                    int i = freeparlist[fi];
-                    for (int fj = fi; fj < nparam_free; fj++) {
-                        int j = freeparlist[fj];
+                for (size_t fi = 0; fi < gradparlist.size(); fi++) {
+                    int i = gradparlist[fi];
+                    for (size_t fj = fi; fj < gradparlist.size(); fj++) {
+                        int j = gradparlist[fj];
                         int idx = i * nparam + j;
                         double term1 = totalhess[idx] / totalprob;
                         double term2 = (totalgrad[i] * totalgrad[j]) / (totalprob * totalprob);
@@ -3174,6 +3197,21 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         ExtractFreeGradient(full_gradL, gradL);
     }
     if (iflag == 3) {
+        // Under equality constraints, ExtractFreeHessian iterates all (i, j)
+        // pairs and reads full_hess[i * nparam + j]. The per-observation
+        // accumulation above only populated the upper triangle. For tied
+        // parameters, the aggregation needs to find the symmetric entry on
+        // the lower triangle too (e.g. when derived i > primary j, the
+        // populated upper-triangle entry lives at (j, i), not (i, j)).
+        // Symmetrising full_hessL here makes the aggregation lookup correct
+        // in both triangles.
+        if (!equality_mapping.empty()) {
+            for (int i = 0; i < nparam; i++) {
+                for (int j = i + 1; j < nparam; j++) {
+                    full_hessL[j * nparam + i] = full_hessL[i * nparam + j];
+                }
+            }
+        }
         ExtractFreeHessian(full_hessL, hessL);
     }
 }

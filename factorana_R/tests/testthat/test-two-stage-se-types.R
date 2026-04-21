@@ -261,10 +261,148 @@ test_that("Two-stage SE_linear with n_types=2: FD gradient and Hessian match", {
 })
 
 
+# ---- Oprobit variant of the DGP + Stage 1 ----------------------------------
+.simulate_se_types_dgp_oprobit <- function(
+    n            = 800,
+    seed         = 23,
+    true_var_f1  = 1.0,
+    true_se_lin  = 0.6,
+    true_se_res  = 0.5,
+    se_int_t2    = 0.8,
+    typeprob_t2  = 0.0,
+    type_load_t2 = 0.0,
+    cuts1        = c(-1.0, 0.0, 1.0),   # cutpoints for factor-1 indicators
+    cuts2        = c(-1.0, 0.0, 1.0)) { # cutpoints for factor-2 indicators
+
+  set.seed(seed)
+  f1 <- rnorm(n, 0, sqrt(true_var_f1))
+  log_odds_t2 <- typeprob_t2 + type_load_t2 * f1
+  t2 <- as.integer(runif(n) < plogis(log_odds_t2))
+  eps <- rnorm(n, 0, sqrt(true_se_res))
+  f2  <- true_se_lin * f1 + se_int_t2 * t2 + eps
+
+  lambda_f1 <- c(1.0, 0.9, 1.1)
+  lambda_f2 <- c(1.0, 0.85, 1.15)
+  gen <- function(f, lam, cuts) {
+    ystar <- lam * f + rnorm(length(f), 0, 1)   # probit scale, sigma = 1
+    as.integer(findInterval(ystar, cuts) + 1L)
+  }
+  list(
+    data = data.frame(
+      intercept = 1,
+      Y1_1 = gen(f1, lambda_f1[1], cuts1),
+      Y1_2 = gen(f1, lambda_f1[2], cuts1),
+      Y1_3 = gen(f1, lambda_f1[3], cuts1),
+      Y2_1 = gen(f2, lambda_f2[1], cuts2),
+      Y2_2 = gen(f2, lambda_f2[2], cuts2),
+      Y2_3 = gen(f2, lambda_f2[3], cuts2),
+      eval = 1
+    ),
+    true = list(var_f1 = true_var_f1, se_lin = true_se_lin, se_res = true_se_res,
+                se_int_t2 = se_int_t2, typeprob_t2 = typeprob_t2,
+                type_load_t2 = type_load_t2)
+  )
+}
+
+.build_stage1_notypes_model_oprobit <- function(dat, n_categories = 4L) {
+  fm <- define_factor_model(n_factors = 2, n_types = 1,
+                            factor_structure = "independent")
+  mk <- function(name, outcome, norm) {
+    define_model_component(
+      name = name, data = dat, outcome = outcome, factor = fm,
+      covariates = NULL, model_type = "oprobit",
+      num_choices = n_categories,
+      loading_normalization = norm,
+      use_types = FALSE, evaluation_indicator = "eval"
+    )
+  }
+  comps <- list(
+    mk("Y1_1", "Y1_1", c(1, 0)),
+    mk("Y1_2", "Y1_2", c(NA_real_, 0)),
+    mk("Y1_3", "Y1_3", c(NA_real_, 0)),
+    mk("Y2_1", "Y2_1", c(0, 1)),
+    mk("Y2_2", "Y2_2", c(0, NA_real_)),
+    mk("Y2_3", "Y2_3", c(0, NA_real_))
+  )
+  list(fm = fm, ms = define_model_system(components = comps, factor = fm))
+}
+
+# =============================================================================
+# TEST 3: Two-stage SE_linear with n_types=2 AND oprobit indicators, FD check.
+#
+# Analog of the linear TEST 2 with ordered-probit measurements. Stage 1 is a
+# 2-factor independent oprobit measurement model; Stage 2 is SE_linear +
+# n_types = 2 with previous_stage = Stage 1. FD gradient and Hessian are
+# checked at the DGP structural parameters.
+# =============================================================================
+test_that("Two-stage SE_linear with n_types=2 and oprobit indicators: FD gradient and Hessian match", {
+  skip_on_cran()
+
+  sim <- .simulate_se_types_dgp_oprobit(
+    n = 800, seed = 23,
+    true_var_f1 = 1.0, true_se_lin = 0.6, true_se_res = 0.5,
+    se_int_t2 = 0.8, typeprob_t2 = 0.3, type_load_t2 = 0.4
+  )
+  dat   <- sim$data
+  truth <- sim$true
+
+  stage1 <- .build_stage1_notypes_model_oprobit(dat, n_categories = 4L)
+  ctrl   <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+
+  result_stage1 <- estimate_model_rcpp(
+    stage1$ms, dat, control = ctrl,
+    optimizer = "nlminb", parallel = FALSE, verbose = FALSE
+  )
+  expect_equal(result_stage1$convergence, 0,
+               info = "Oprobit Stage 1 must converge strictly")
+
+  fm_stage2 <- define_factor_model(n_factors = 2, n_types = 2,
+                                    factor_structure = "SE_linear")
+  ms_stage2 <- define_model_system(components = list(), factor = fm_stage2,
+                                    previous_stage = result_stage1)
+
+  init_s2 <- initialize_parameters(ms_stage2, dat, verbose = FALSE)
+  params <- init_s2$init_params
+  params["factor_var_1"]         <- truth$var_f1
+  params["se_intercept"]         <- 0.0
+  params["se_linear_1"]          <- truth$se_lin
+  params["se_intercept_type_2"]  <- truth$se_int_t2
+  params["se_residual_var"]      <- truth$se_res
+  params["typeprob_2_intercept"] <- truth$typeprob_t2
+  params["type_2_loading_1"]     <- truth$type_load_t2
+
+  metadata <- factorana:::build_parameter_metadata(ms_stage2)
+  constraints <- factorana:::setup_parameter_constraints(
+    ms_stage2, params, metadata,
+    init_s2$factor_variance_fixed, verbose = FALSE
+  )
+  param_fixed <- rep(TRUE, length(params))
+  param_fixed[constraints$free_idx] <- FALSE
+
+  grad_check <- check_gradient_accuracy(ms_stage2, dat, params,
+                                         param_fixed = param_fixed,
+                                         tol = GRAD_TOL, verbose = FALSE, n_quad = 8)
+  expect_true(grad_check$pass,
+              info = sprintf("oprobit Stage 2 gradient FD failed (max err: %.2e)",
+                             grad_check$max_error))
+
+  hess_check <- check_hessian_accuracy(ms_stage2, dat, params,
+                                        param_fixed = param_fixed,
+                                        tol = HESS_TOL, verbose = FALSE, n_quad = 8)
+  expect_true(hess_check$pass,
+              info = sprintf("oprobit Stage 2 Hessian FD failed (max err: %.2e)",
+                             hess_check$max_error))
+
+  if (VERBOSE) {
+    cat("\n=== Oprobit two-stage Stage 2 FD checks ===\n")
+    cat(sprintf("Grad max rel_err: %.2e  (tol=%.0e)\n", grad_check$max_error, GRAD_TOL))
+    cat(sprintf("Hess max rel_err: %.2e  (tol=%.0e)\n", hess_check$max_error, HESS_TOL))
+  }
+})
 
 
 # =============================================================================
-# TEST 3 — known-broken variant: Stage 1 also has types
+# TEST 4 — known-broken variant: Stage 1 also has types
 #
 # When Stage 1 already estimates a type-probability model and type-specific
 # measurement intercepts (use_types = TRUE on components), the analytical
@@ -280,6 +418,6 @@ test_that("Two-stage SE_linear with n_types=2: FD gradient and Hessian match", {
 # =============================================================================
 test_that("KNOWN ISSUE: Stage 1 with types + Stage 2 SE_linear Hessian mismatch", {
   skip(paste0("Hessian FD mismatch in the Stage-1-with-types -> ",
-              "Stage-2-SE_linear path; see TEST 3 comment in ",
+              "Stage-2-SE_linear path; see TEST 4 comment in ",
               "test-two-stage-se-types.R. Re-enable once fixed."))
 })

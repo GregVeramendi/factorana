@@ -263,14 +263,22 @@ test_that("SE_linear model converges", {
 .build_se_type_model <- function(n_factors = 2, n_types = 2,
                                  factor_structure = "SE_linear",
                                  n_meas_per_factor = 3,
-                                 n = 150, seed = 1) {
+                                 n = 150, seed = 1,
+                                 indicator_type = "linear",
+                                 n_categories    = 4L,
+                                 oprobit_cuts    = c(-1.0, 0.0, 1.0)) {
+  stopifnot(indicator_type %in% c("linear", "oprobit"))
+  if (indicator_type == "oprobit") {
+    stopifnot(length(oprobit_cuts) == n_categories - 1L)
+  }
+
   set.seed(seed)
   # Draw input factors and residual
   n_input <- n_factors - 1L
   f_input <- matrix(rnorm(n * n_input), nrow = n, ncol = n_input)
 
   # Simple type assignment (deterministic mix of halves) — does not depend on
-  # the outcome factor. For the FD tests we don't need realistic type draws.
+  # the outcome factor. For the FD tests we do not need realistic type draws.
   type_id <- sample(seq_len(n_types), n, replace = TRUE)
 
   # Truth for SE equation
@@ -299,14 +307,29 @@ test_that("SE_linear model converges", {
     for (jj in seq_len(n_meas_per_factor)) {
       load_true <- if (jj == 1) 1.0 else 0.8 + 0.1 * jj
       col <- sprintf("f%d_m%d", k, jj)
-      dat[[col]] <- load_true * fk + rnorm(n, 0, 0.4)
-      loading_norm <- rep(0, n_factors)
-      if (jj == 1) loading_norm[k] <- 1 else loading_norm[k] <- NA_real_
-      mc_list[[length(mc_list) + 1L]] <- define_model_component(
-        col, dat, col, fm,
-        covariates = "intercept", model_type = "linear",
-        loading_normalization = loading_norm
-      )
+
+      if (indicator_type == "linear") {
+        dat[[col]] <- load_true * fk + rnorm(n, 0, 0.4)
+        loading_norm <- rep(0, n_factors)
+        if (jj == 1) loading_norm[k] <- 1 else loading_norm[k] <- NA_real_
+        mc_list[[length(mc_list) + 1L]] <- define_model_component(
+          col, dat, col, fm,
+          covariates = "intercept", model_type = "linear",
+          loading_normalization = loading_norm
+        )
+      } else {
+        # Oprobit: discretize the latent Y* into n_categories
+        ystar <- load_true * fk + rnorm(n, 0, 1)  # probit scale (sigma = 1)
+        dat[[col]] <- as.integer(findInterval(ystar, oprobit_cuts) + 1L)
+        loading_norm <- rep(0, n_factors)
+        if (jj == 1) loading_norm[k] <- 1 else loading_norm[k] <- NA_real_
+        mc_list[[length(mc_list) + 1L]] <- define_model_component(
+          col, dat, col, fm,
+          covariates = NULL, model_type = "oprobit",
+          num_choices = n_categories,
+          loading_normalization = loading_norm
+        )
+      }
     }
   }
 
@@ -358,6 +381,55 @@ test_that("SE_linear with n_types=2 Hessian matches finite differences", {
                                 tol = 1e-3, verbose = FALSE, n_quad = 8)
   expect_true(res$pass,
               info = sprintf("SE_linear ntyp=2 Hessian check failed, max error: %.2e",
+                             res$max_error))
+})
+
+# ---- Oprobit indicator variant (no equality constraints) --------------------
+# Exercises SE_linear + n_types=2 with ORDERED PROBIT indicators on every
+# measurement component. Covers the same likelihood path as the linear
+# version above but with threshold-based measurements, verifying the
+# analytical gradient and Hessian against finite differences.
+test_that("SE_linear with n_types=2 and oprobit indicators: gradient matches FD", {
+  skip_on_cran()
+  mod <- .build_se_type_model(n_factors = 2, n_types = 2,
+                              factor_structure = "SE_linear",
+                              n_meas_per_factor = 3, n = 150, seed = 13,
+                              indicator_type = "oprobit",
+                              n_categories = 4L)
+  init <- initialize_parameters(mod$model_system, mod$data, verbose = FALSE)
+  params <- init$init_params
+  params["se_intercept_type_2"] <- 0.3
+  params["se_intercept"]        <- 0.1
+  params["se_linear_1"]         <- 0.7
+  pfix <- .se_type_param_fixed(mod$model_system, mod$data, params)
+
+  res <- check_gradient_accuracy(mod$model_system, mod$data, params,
+                                  param_fixed = pfix,
+                                  tol = 1e-4, verbose = FALSE, n_quad = 8)
+  expect_true(res$pass,
+              info = sprintf("SE_linear ntyp=2 + oprobit gradient FD failed, max err: %.2e",
+                             res$max_error))
+})
+
+test_that("SE_linear with n_types=2 and oprobit indicators: Hessian matches FD", {
+  skip_on_cran()
+  mod <- .build_se_type_model(n_factors = 2, n_types = 2,
+                              factor_structure = "SE_linear",
+                              n_meas_per_factor = 3, n = 150, seed = 14,
+                              indicator_type = "oprobit",
+                              n_categories = 4L)
+  init <- initialize_parameters(mod$model_system, mod$data, verbose = FALSE)
+  params <- init$init_params
+  params["se_intercept_type_2"] <- 0.3
+  params["se_intercept"]        <- 0.1
+  params["se_linear_1"]         <- 0.7
+  pfix <- .se_type_param_fixed(mod$model_system, mod$data, params)
+
+  res <- check_hessian_accuracy(mod$model_system, mod$data, params,
+                                 param_fixed = pfix,
+                                 tol = 1e-3, verbose = FALSE, n_quad = 8)
+  expect_true(res$pass,
+              info = sprintf("SE_linear ntyp=2 + oprobit Hessian FD failed, max err: %.2e",
                              res$max_error))
 })
 

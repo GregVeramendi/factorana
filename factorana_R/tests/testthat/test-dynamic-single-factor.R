@@ -491,3 +491,289 @@ test_that("oprobit wrapper ties only threshold increments and strips intercept",
                unname(dummy$estimates[m1_slots[2]]),
                info = "anchor-period thresh_1 must be carried into every period slot")
 })
+
+
+# =============================================================================
+# TEST 5: oprobit Stage 1 estimation converges cleanly with no recycling
+# warnings.
+#
+# This exercises the actual Stage 1 fit for the oprobit dynamic wrapper.
+# Historically (v1.1.6 and earlier) the C++ initialiser looked up
+# threshold-parameter names by the wrong field name ("n_categories"
+# instead of "num_choices"), so threshold equality constraints were
+# silently dropped. The optimizer then ran over a larger free set than R
+# thought; pmax/pmin in the saddle-escape path produced "fractionally
+# recycled" warnings, and Stage 1 often landed at conv = 1 with factor
+# variances contorted to absorb the period-mean drift.
+#
+# With the C++ fix, the R and C++ sides agree on the free-parameter set
+# and Stage 1 converges strictly with no warnings. We also check that
+# the threshold increments (thresh_k for k >= 2) come out exactly tied
+# across periods, and that thresh_1 is period-specific with a
+# consistent-sign shift reflecting the DGP mean drift.
+# =============================================================================
+test_that("oprobit Stage 1 fits cleanly with threshold equality constraints enforced", {
+  skip_on_cran()
+
+  set.seed(71); n <- 500
+  item_load <- c(1.0, 0.9, 1.1)
+  cuts      <- c(-1.0, 0.0, 1.0)
+  f1 <- rnorm(n, 0, 1)
+  f2 <- 0.4 + 0.6 * f1 + rnorm(n, 0, sqrt(0.4))   # positive period-mean drift
+  gen_Y <- function(f, i) {
+    as.integer(findInterval(item_load[i] * f + rnorm(length(f), 0, 1), cuts) + 1L)
+  }
+  dat <- data.frame(
+    intercept = 1, eval = 1L,
+    Y_t1_m1 = gen_Y(f1, 1), Y_t1_m2 = gen_Y(f1, 2), Y_t1_m3 = gen_Y(f1, 3),
+    Y_t2_m1 = gen_Y(f2, 1), Y_t2_m2 = gen_Y(f2, 2), Y_t2_m3 = gen_Y(f2, 3)
+  )
+
+  dyn <- define_dynamic_measurement(
+    data                 = dat,
+    items                = c("m1", "m2", "m3"),
+    period_prefixes      = c("Y_t1_", "Y_t2_"),
+    model_type           = "oprobit",
+    n_categories         = 4L,
+    evaluation_indicator = "eval"
+  )
+
+  ctrl <- define_estimation_control(n_quad_points = 6, num_cores = 1)
+
+  # No recycling / fractional-recycled warnings during the fit.
+  ws <- capture_warnings(
+    s1 <- estimate_model_rcpp(
+      dyn$model_system, dat, control = ctrl,
+      optimizer = "nlminb", parallel = FALSE, verbose = FALSE
+    )
+  )
+  expect_equal(s1$convergence, 0,
+               info = "Stage 1 oprobit must converge strictly (conv = 0)")
+  bad <- grep("recycled|recycling", ws, value = TRUE)
+  expect_equal(length(bad), 0,
+               info = paste("Unexpected recycling warnings:",
+                            paste(bad, collapse = "; ")))
+
+  # Threshold increments (k >= 2) tied exactly across periods.
+  for (i in 1:3) {
+    for (k in 2:3) {
+      d1 <- unname(s1$estimates[paste0("Y_t1_m", i, "_thresh_", k)])
+      d2 <- unname(s1$estimates[paste0("Y_t2_m", i, "_thresh_", k)])
+      expect_equal(d1, d2, tolerance = 1e-10,
+                   info = sprintf("m%d thresh_%d must be tied across periods", i, k))
+    }
+  }
+
+  # thresh_1 period-specific; with a POSITIVE DGP mean drift in f_2, the
+  # model's period-2 thresh_1 should be LOWER than period-1 (because
+  # higher observed Y's push the cutpoints down when the factor is
+  # forced to mean 0 by convention). Every item should show the same
+  # sign of shift.
+  shifts <- vapply(1:3, function(i) {
+    unname(s1$estimates[paste0("Y_t2_m", i, "_thresh_1")] -
+           s1$estimates[paste0("Y_t1_m", i, "_thresh_1")])
+  }, numeric(1))
+  expect_true(all(shifts < 0),
+              info = sprintf("Expected negative thresh_1 shifts across items; got %s",
+                             paste(sprintf("%+.3f", shifts), collapse = ", ")))
+})
+
+
+# =============================================================================
+# TEST 6: Stage 1 FD check (linear) for the dynamic-measurement wrapper.
+#
+# Stage 1 is a 2-factor independent measurement model with
+# equality_constraints tying loadings and sigmas across periods. The FD
+# gradient and Hessian are checked at DGP-consistent parameter values
+# with the equality constraints active. This path exposes the
+# Hessian-accumulation fix in FactorModel::CalcLkhd: before the fix,
+# the C++ Hessian computation iterated only over freeparlist and so
+# missed cross-derivatives between a primary and its tied derived
+# parameters, producing analytical values of ~0 at positions where FD
+# reported magnitudes of 10 to 50. After the fix (iterating gradparlist
+# plus symmetrising full_hessL before ExtractFreeHessian) the
+# aggregation recovers the effective Hessian at primary positions and
+# analytical / FD agree to ~1e-6.
+# =============================================================================
+test_that("dynamic wrapper Stage 1 (linear): FD gradient and Hessian match", {
+  skip_on_cran()
+
+  sim <- .simulate_dynamic_single_factor_dgp(n = 800, seed = 81)
+  truth <- sim$true
+  dat <- sim$wide
+
+  dyn <- define_dynamic_measurement(
+    data                 = dat,
+    items                = c("m1", "m2", "m3"),
+    period_prefixes      = c("Y_t1_", "Y_t2_"),
+    model_type           = "linear",
+    evaluation_indicator = "eval"
+  )
+
+  init <- initialize_parameters(dyn$model_system, dat, verbose = FALSE)
+  params <- init$init_params
+  params["factor_var_1"] <- truth$var_f1
+  params["factor_var_2"] <- truth$beta^2 * truth$var_f1 + truth$sigma_e2
+  for (i in seq_along(truth$item_int)) {
+    params[paste0("Y_t1_m", i, "_intercept")] <- truth$item_int[i]
+    params[paste0("Y_t2_m", i, "_intercept")] <- truth$item_int[i] +
+      truth$item_load[i] * truth$alpha
+    params[paste0("Y_t1_m", i, "_sigma")]     <- truth$item_sigma[i]
+    params[paste0("Y_t2_m", i, "_sigma")]     <- truth$item_sigma[i]
+    if (i > 1L) {
+      params[paste0("Y_t1_m", i, "_loading_1")] <- truth$item_load[i]
+      params[paste0("Y_t2_m", i, "_loading_2")] <- truth$item_load[i]
+    }
+  }
+
+  md <- factorana:::build_parameter_metadata(dyn$model_system)
+  cons <- factorana:::setup_parameter_constraints(
+    dyn$model_system, params, md, init$factor_variance_fixed, verbose = FALSE
+  )
+  pfix <- rep(TRUE, length(params))
+  pfix[cons$free_idx] <- FALSE
+
+  grad <- check_gradient_accuracy(dyn$model_system, dat, params,
+                                   param_fixed = pfix,
+                                   tol = 1e-3, verbose = FALSE, n_quad = 8)
+  expect_true(grad$pass,
+              info = sprintf("Stage 1 linear gradient FD failed (max err: %.2e)",
+                             grad$max_error))
+
+  hess <- check_hessian_accuracy(dyn$model_system, dat, params,
+                                  param_fixed = pfix,
+                                  tol = 5e-3, verbose = FALSE, n_quad = 8)
+  expect_true(hess$pass,
+              info = sprintf("Stage 1 linear Hessian FD failed (max err: %.2e)",
+                             hess$max_error))
+})
+
+
+# =============================================================================
+# TEST 7: Stage 1 FD check (oprobit) for the dynamic-measurement wrapper.
+#
+# As TEST 6 but with ordered-probit indicators and the threshold-based
+# equality constraint structure. Exercises the same Hessian-accumulation
+# fix on the oprobit likelihood path (now that C++ correctly maps
+# _thresh_k names via the num_choices field in rcpp_interface.cpp and
+# the Hessian loops iterate over gradparlist in FactorModel.cpp).
+# =============================================================================
+test_that("dynamic wrapper Stage 1 (oprobit): FD gradient and Hessian match", {
+  skip_on_cran()
+
+  set.seed(82); n <- 800
+  item_load <- c(1.0, 0.9, 1.1)
+  cuts <- c(-1.0, 0.0, 1.0)
+  f1 <- rnorm(n, 0, 1); f2 <- 0.4 + 0.6*f1 + rnorm(n, 0, sqrt(0.5))
+  gen <- function(f, i) as.integer(findInterval(item_load[i]*f + rnorm(length(f),0,1), cuts) + 1L)
+  dat <- data.frame(
+    intercept = 1, eval = 1L,
+    Y_t1_m1 = gen(f1, 1), Y_t1_m2 = gen(f1, 2), Y_t1_m3 = gen(f1, 3),
+    Y_t2_m1 = gen(f2, 1), Y_t2_m2 = gen(f2, 2), Y_t2_m3 = gen(f2, 3)
+  )
+
+  dyn <- define_dynamic_measurement(
+    data                 = dat,
+    items                = c("m1", "m2", "m3"),
+    period_prefixes      = c("Y_t1_", "Y_t2_"),
+    model_type           = "oprobit",
+    n_categories         = 4L,
+    evaluation_indicator = "eval"
+  )
+
+  ctrl <- define_estimation_control(n_quad_points = 6, num_cores = 1)
+  # Use the initialised parameter point (NOT the MLE): at the MLE the
+  # gradient is ~0, so FD central-difference noise of order 1e-4 produces
+  # a pathological rel_err of ~1 even when analytical and FD agree in
+  # absolute terms. Initialised values give gradients of meaningful
+  # magnitude for a clean FD comparison.
+  init <- initialize_parameters(dyn$model_system, dat, verbose = FALSE)
+  params <- init$init_params
+
+  md <- factorana:::build_parameter_metadata(dyn$model_system)
+  cons <- factorana:::setup_parameter_constraints(
+    dyn$model_system, params, md, init$factor_variance_fixed, verbose = FALSE
+  )
+  pfix <- rep(TRUE, length(params))
+  pfix[cons$free_idx] <- FALSE
+
+  # Oprobit is more numerically noisy than linear; accept a slightly
+  # looser tolerance for the gradient (1.5e-3 vs 1e-3 for linear) to
+  # tolerate finite-difference noise around the initialisation point
+  # without masking real analytical bugs (which produce rel_err of
+  # order 1 on the Hessian-accumulation bug that this test guards).
+  grad <- check_gradient_accuracy(dyn$model_system, dat, params,
+                                   param_fixed = pfix,
+                                   tol = 1.5e-3, verbose = FALSE, n_quad = 6)
+  expect_true(grad$pass,
+              info = sprintf("Stage 1 oprobit gradient FD failed (max err: %.2e)",
+                             grad$max_error))
+
+  hess <- check_hessian_accuracy(dyn$model_system, dat, params,
+                                  param_fixed = pfix,
+                                  tol = 5e-3, verbose = FALSE, n_quad = 6)
+  expect_true(hess$pass,
+              info = sprintf("Stage 1 oprobit Hessian FD failed (max err: %.2e)",
+                             hess$max_error))
+})
+
+
+# =============================================================================
+# TEST 8: Oprobit two-stage parameter recovery (wrapper + SE_linear).
+#
+# End-to-end oprobit workflow: dynamic-measurement wrapper Stage 1 fits
+# a 2-factor ordered-probit measurement system with period-specific
+# thresh_1 and tied threshold increments; Stage 2 is SE_linear on top.
+# The structural parameters (factor_var_1, se_intercept, se_linear_1,
+# se_residual_var) are recovered within tolerance. Became feasible once
+# the C++ threshold-name lookup and the Hessian-accumulation bugs were
+# fixed (v1.1.6 and v1.1.7 respectively).
+# =============================================================================
+test_that("dynamic wrapper oprobit two-stage: structural parameter recovery", {
+  skip_on_cran()
+
+  set.seed(91); n <- 2500
+  f1 <- rnorm(n, 0, 1); eps <- rnorm(n, 0, sqrt(0.5))
+  f2 <- 0.4 + 0.6 * f1 + eps
+  item_load <- c(1.0, 0.9, 1.1); cuts <- c(-1.0, 0.0, 1.0)
+  gen <- function(f, i) {
+    as.integer(findInterval(item_load[i] * f + rnorm(length(f), 0, 1), cuts) + 1L)
+  }
+  dat <- data.frame(intercept = 1, eval = 1L,
+    Y_t1_m1 = gen(f1, 1), Y_t1_m2 = gen(f1, 2), Y_t1_m3 = gen(f1, 3),
+    Y_t2_m1 = gen(f2, 1), Y_t2_m2 = gen(f2, 2), Y_t2_m3 = gen(f2, 3))
+
+  dyn <- define_dynamic_measurement(
+    data = dat, items = c("m1", "m2", "m3"),
+    period_prefixes = c("Y_t1_", "Y_t2_"),
+    model_type = "oprobit", n_categories = 4L,
+    evaluation_indicator = "eval"
+  )
+  ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+
+  s1 <- estimate_model_rcpp(dyn$model_system, dat, control = ctrl,
+                             optimizer = "nlminb", parallel = FALSE, verbose = FALSE)
+  expect_equal(s1$convergence, 0)
+
+  dummy <- build_dynamic_previous_stage(dyn, s1, dat, anchor_period = 1L)
+  fm_s2 <- define_factor_model(n_factors = 2, n_types = 1, factor_structure = "SE_linear")
+  ms_s2 <- define_model_system(components = list(), factor = fm_s2, previous_stage = dummy)
+  init2 <- initialize_parameters(ms_s2, dat, verbose = FALSE)
+  init2$init_params["factor_var_1"]    <- unname(dummy$estimates["factor_var_1"])
+  init2$init_params["se_intercept"]    <- 0
+  init2$init_params["se_linear_1"]     <- 0.5
+  init2$init_params["se_residual_var"] <- 0.5
+
+  r2 <- estimate_model_rcpp(ms_s2, dat, init_params = init2$init_params,
+                             control = ctrl, optimizer = "nlminb",
+                             parallel = FALSE, verbose = FALSE)
+  expect_equal(r2$convergence, 0)
+
+  est <- r2$estimates
+  expect_equal(unname(est["factor_var_1"]),    1.0, tolerance = 0.20)
+  expect_equal(unname(est["se_intercept"]),    0.4, tolerance = 0.15)
+  expect_equal(unname(est["se_linear_1"]),     0.6, tolerance = 0.15)
+  expect_equal(unname(est["se_residual_var"]), 0.5, tolerance = 0.20)
+  expect_true(all(r2$std_errors[c("factor_var_1", "se_intercept",
+                                    "se_linear_1", "se_residual_var")] > 0))
+})

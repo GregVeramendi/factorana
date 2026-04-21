@@ -1094,9 +1094,15 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
                     param_name_to_idx[comp_name + "_sigma"] = idx++;
                 }
 
-                // Ordered probit has thresholds
-                if (model_type_str == "oprobit" && comp.containsElementNamed("n_categories")) {
-                    int n_cat = as<int>(comp["n_categories"]);
+                // Ordered probit has thresholds. The component's field is
+                // named "num_choices"; an earlier version of this code
+                // checked "n_categories" here, which never matched, so
+                // threshold names were never added to param_name_to_idx.
+                // That in turn caused equality constraints referencing
+                // _thresh_k names to silently be skipped (the name
+                // lookup at line ~1132 returned end()).
+                if (model_type_str == "oprobit" && comp.containsElementNamed("num_choices")) {
+                    int n_cat = as<int>(comp["num_choices"]);
                     for (int j = 1; j < n_cat; j++) {
                         param_name_to_idx[comp_name + "_thresh_" + std::to_string(j)] = idx++;
                     }
