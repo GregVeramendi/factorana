@@ -441,18 +441,44 @@ test_that("Two-stage SE_linear with n_types=2 and oprobit indicators: FD gradien
 # makes the analytical Hessian match FD on this path too.
 # =============================================================================
 test_that("KNOWN ISSUE: Stage 1 with types + Stage 2 SE_linear Hessian mismatch", {
-  # Attempted re-enable after the v1.1.7 Hessian-accumulation fix:
-  # still shows Hessian FD max_err ~1.67 on the SE x SE sub-block,
-  # with the gradient passing. The v1.1.7 fix addressed the general
-  # case of tied cross-derivatives not being populated; the remaining
-  # mismatch here is specific to how Stage 1 type model interacts
-  # with the Stage 2 SE structure and is not resolved by the general
-  # Hessian accumulation fix. Track separately; skip for now.
+  # Investigation (v1.1.8 work):
+  #   - Gradient FD passes (analytical == FD).
+  #   - Hessian FD fails with max_err ~1.67 on the SE x SE sub-block.
+  #     Specific elements:
+  #       (se_intercept, se_intercept_type_2)  analytical = -1   FD = 181
+  #       (se_intercept, se_residual_var)      analytical = -29  FD = -137
+  #       (se_linear_1,  se_residual_var)      analytical = -203 FD = -140
+  #       (se_intercept, se_linear_1)          analytical = -37  FD = -29
+  #     factor_var_1 x SE cross-derivatives all match FD to ~1e-7,
+  #     so the mismatch is isolated to the SE x SE block.
+  #   - Mismatch persists at the Stage 2 MLE (not a non-stationary
+  #     point artefact) and when Y*_type_2_intercept values are zeroed
+  #     (not a parameter-magnitude artefact).
+  #   - Mismatch triggers specifically when Stage 1 has use_types=TRUE
+  #     on measurement components (so Stage 2 inherits fixed
+  #     Y*_type_2_intercept parameters). Does NOT trigger when Stage 1
+  #     has n_types=1 (TEST 2) or when Stage 2's typeprob/type_loading
+  #     are left free (TEST 2 pattern).
+  #   - The v1.1.7 accumulation fix (iterate gradparlist for Hessian
+  #     loops + symmetrise before ExtractFreeHessian) did not close
+  #     this gap: it addressed cross-derivatives involving
+  #     equality-TIED parameters, but here the problematic fixed
+  #     parameters are plain-fixed (via previous_stage) not tied.
+  #
+  # Hypothesis (not confirmed): the SE-parameter Hessian code in
+  # FactorModel::CalcLkhd indexes modHess with
+  #   nDimModHess = nfac + base_param_count_hess
+  # where base_param_count_hess EXCLUDES type intercepts. If
+  # Model::Eval returns modHess sized to INCLUDE type intercepts
+  # (i.e. npar = numfac + nregressors + free_loadings + 1, possibly
+  # also + n_type_intercepts via nregressors), the index computation
+  # (nfac-1) * nDimModHess + (nfac-1) reads the wrong slot when
+  # use_types=TRUE on components. Needs instrumented C++ debugging
+  # to confirm and fix.
   skip(paste0("Stage-1-with-types -> Stage-2-SE_linear Hessian FD ",
-              "mismatch persists after the v1.1.7 accumulation fix ",
-              "(max err ~1.7 on the SE x SE block). Likely a separate ",
-              "issue in how the type-prob model interacts with SE_linear ",
-              "previous_stage; see TEST 4 comment."))
+              "mismatch on the SE x SE sub-block (max err ~1.7); ",
+              "isolated during v1.1.8 investigation. See TEST 4 ",
+              "comment for findings."))
 
   sim <- .simulate_se_types_dgp(
     n = 600, seed = 19,
