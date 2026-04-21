@@ -1,3 +1,28 @@
+# factorana 1.1.4
+
+## New features
+
+* New helper functions `define_dynamic_measurement()` and
+  `build_dynamic_previous_stage()` encapsulate the standard workflow for
+  estimating an SE_linear or SE_quadratic structural model on a single
+  latent construct observed at two or more time points:
+  - `define_dynamic_measurement()` builds the Stage 1 measurement model
+    (a k-factor independent system with loadings and residual sigmas
+    tied across periods via `equality_constraints`, measurement
+    intercepts left period-specific).
+  - `build_dynamic_previous_stage()` constructs a Stage 2
+    `previous_stage` object that plugs the anchor-period (wave 1 by
+    default) intercepts into every factor slot. This anchors the
+    measurement level under the factor-identification convention
+    `E[f_k] = 0` and lets the observed period-to-period mean shift in
+    Y identify the structural intercept (alpha) in Stage 2.
+  - Supports `model_type` of "linear", "oprobit", "probit", and
+    "logit" with appropriate tying of thresholds (oprobit) or sigmas
+    (linear).
+* Refactored `tests/testthat/test-dynamic-single-factor.R` to use the
+  wrapper; recovery results are unchanged.
+* Refactored `vignettes/dynamic_structural.Rmd` to use the wrapper.
+
 # factorana 1.1.3
 
 ## New tests and documentation
@@ -17,9 +42,7 @@
     `factor_var_1`.
 * New vignette `vignettes/dynamic_structural.Rmd` walks through the
   same workflow with executable code and explains the motivation for
-  using wave-1 intercepts in Stage 2 (naive pooling of measurement
-  intercepts across periods biases them by `lambda_m * E[f_2] / 2`,
-  which propagates into an under-estimate of alpha).
+  using wave-1 intercepts in Stage 2.
 * Removed the parameter-recovery test from
   `test-two-stage-se-types.R` (its Stage-1-no-types ->
   Stage-2-with-types setup is not a canonical workflow); the shape
