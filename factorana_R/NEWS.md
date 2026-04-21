@@ -1,3 +1,25 @@
+# factorana 1.1.8
+
+## Minor changes
+
+* `define_model_component()`: the no-intercept sanity warning now fires
+  only when the caller has NOT explicitly opted out of an intercept via
+  `intercept = FALSE`. The explicit opt-out is a deliberate choice
+  (common in validation and shape-only tests and in ordered-probit
+  setups where the intercept is absorbed into the cutpoints); treating
+  it as a candidate for the misspecification warning produced noise
+  without signal. Accidental omissions (`intercept` left at its default
+  of `TRUE`, but no intercept covariate provided) still trigger the
+  warning.
+
+* Attempted re-enable of the Stage-1-with-types / Stage-2-SE_linear
+  Hessian FD placeholder (`test-two-stage-se-types.R` TEST 4): still
+  fails after the v1.1.7 Hessian accumulation fix (max err ~1.7 on
+  the SE x SE sub-block, gradient passes). The remaining mismatch is
+  a separate issue in how the type-probability model interacts with
+  SE_linear under `previous_stage`, not covered by the general
+  accumulation fix. Re-skipped with an updated comment.
+
 # factorana 1.1.7
 
 ## Bug fixes

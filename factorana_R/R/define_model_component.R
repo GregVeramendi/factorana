@@ -184,7 +184,13 @@ define_model_component <- function(name,
   # Check 2: WARNING if a linear/probit/logit model has no intercept and the
   # outcome is far from zero-mean. Without an intercept the model is
   # misspecified for non-centered outcomes, causing degenerate convergence.
-  if (model_type %in% c("linear", "probit", "logit") && !has_intercept_in_covariates) {
+  # Only fire when the caller has NOT explicitly opted out of an intercept
+  # via `intercept = FALSE`: the explicit opt-out is a deliberate choice
+  # (common in validation and shape-only tests), not the accidental
+  # omission this warning is designed to catch.
+  if (isTRUE(intercept) &&
+      model_type %in% c("linear", "probit", "logit") &&
+      !has_intercept_in_covariates) {
     # Compute outcome statistics on the FULL data (before eval_indicator subsetting)
     y_raw <- data[[outcome[1]]]
     y_raw <- y_raw[is.finite(y_raw)]
