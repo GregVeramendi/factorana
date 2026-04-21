@@ -317,12 +317,23 @@ test_that("define_dynamic_measurement + Stage 2 SE_linear + n_types=2 recovers s
                               truth$var_f1, est["factor_var_1"]))
 
   # se_intercept (alpha) trades off with typeprob_2_intercept and
-  # type_2_loading_1. The SUM se_intercept + se_intercept_type_2 * Pr(t=2)
-  # pins E[f_2]; the individual decomposition is only weakly identified
-  # with three indicators per period. We use a generous tolerance.
-  expect_equal(unname(est["se_intercept"]), truth$alpha, tolerance = 0.25,
+  # type_2_loading_1 through the mean decomposition
+  # E[f_2] = se_intercept + se_intercept_type_2 * Pr(type=2). The SUM
+  # is tightly identified; the individual components are identified but
+  # noisier at moderate n. Empirically at n = 3000, SE scales roughly
+  # as 1/sqrt(n) and all z-scores stay under ~2 across sample sizes.
+  # Tolerances here are set at roughly 1 SE at n = 3000.
+  expect_equal(unname(est["se_intercept"]),         truth$alpha,       tolerance = 0.25,
                info = sprintf("se_intercept (alpha): true=%.3f est=%.3f se=%.3f",
                               truth$alpha, est["se_intercept"], se["se_intercept"]))
+  expect_equal(unname(est["typeprob_2_intercept"]), truth$typeprob_t2, tolerance = 0.30,
+               info = sprintf("typeprob_2_intercept: true=%.3f est=%.3f se=%.3f",
+                              truth$typeprob_t2, est["typeprob_2_intercept"],
+                              se["typeprob_2_intercept"]))
+  expect_equal(unname(est["type_2_loading_1"]),     truth$type_load_t2, tolerance = 0.50,
+               info = sprintf("type_2_loading_1: true=%.3f est=%.3f se=%.3f",
+                              truth$type_load_t2, est["type_2_loading_1"],
+                              se["type_2_loading_1"]))
 
   # Positive SE on every new free parameter (sanity: Fisher information
   # is not singular).
