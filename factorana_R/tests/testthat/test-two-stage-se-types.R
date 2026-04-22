@@ -21,12 +21,11 @@ VERBOSE  <- Sys.getenv("FACTORANA_TEST_VERBOSE", "FALSE") == "TRUE"
 GRAD_TOL <- 1e-3
 # Hessian tolerance is relaxed to 5e-3 specifically for the factor-variance
 # diagonal second derivative. The sqrt(factor_var) factor in the Gauss-Hermite
-# scaling makes d²ℓ/d(factor_var_k)² sensitive to FD step size; in this path
+# scaling makes d^2L/d(factor_var_k)^2 sensitive to FD step size; in this path
 # the analytical value is off from FD by ~2e-3 relative error at n_quad=12,
 # while every other Hessian element matches to ~1e-6. Five millieths is
-# strong enough to flag real bugs (the Stage-1-with-types variant shows
-# rel_err ~1.7 for this same block — see TEST 4) while tolerating the
-# genuine numerical noise of the factor-variance second derivative.
+# strong enough to flag real bugs while tolerating the genuine numerical
+# noise of the factor-variance second derivative.
 HESS_TOL <- 5e-3
 
 
@@ -440,45 +439,27 @@ test_that("Two-stage SE_linear with n_types=2 and oprobit indicators: FD gradien
 # cross-derivatives involving equality-tied parameters). The fix
 # makes the analytical Hessian match FD on this path too.
 # =============================================================================
-test_that("KNOWN ISSUE: Stage 1 with types + Stage 2 SE_linear Hessian mismatch", {
-  # Investigation (v1.1.8 work):
-  #   - Gradient FD passes (analytical == FD).
-  #   - Hessian FD fails with max_err ~1.67 on the SE x SE sub-block.
-  #     Specific elements:
-  #       (se_intercept, se_intercept_type_2)  analytical = -1   FD = 181
-  #       (se_intercept, se_residual_var)      analytical = -29  FD = -137
-  #       (se_linear_1,  se_residual_var)      analytical = -203 FD = -140
-  #       (se_intercept, se_linear_1)          analytical = -37  FD = -29
-  #     factor_var_1 x SE cross-derivatives all match FD to ~1e-7,
-  #     so the mismatch is isolated to the SE x SE block.
-  #   - Mismatch persists at the Stage 2 MLE (not a non-stationary
-  #     point artefact) and when Y*_type_2_intercept values are zeroed
-  #     (not a parameter-magnitude artefact).
-  #   - Mismatch triggers specifically when Stage 1 has use_types=TRUE
-  #     on measurement components (so Stage 2 inherits fixed
-  #     Y*_type_2_intercept parameters). Does NOT trigger when Stage 1
-  #     has n_types=1 (TEST 2) or when Stage 2's typeprob/type_loading
-  #     are left free (TEST 2 pattern).
-  #   - The v1.1.7 accumulation fix (iterate gradparlist for Hessian
-  #     loops + symmetrise before ExtractFreeHessian) did not close
-  #     this gap: it addressed cross-derivatives involving
-  #     equality-TIED parameters, but here the problematic fixed
-  #     parameters are plain-fixed (via previous_stage) not tied.
+test_that("Stage 1 with types + Stage 2 SE_linear: FD gradient and Hessian match", {
+  # Regression guard against a prior free/fixed mapping bug.
   #
-  # Hypothesis (not confirmed): the SE-parameter Hessian code in
-  # FactorModel::CalcLkhd indexes modHess with
-  #   nDimModHess = nfac + base_param_count_hess
-  # where base_param_count_hess EXCLUDES type intercepts. If
-  # Model::Eval returns modHess sized to INCLUDE type intercepts
-  # (i.e. npar = numfac + nregressors + free_loadings + 1, possibly
-  # also + n_type_intercepts via nregressors), the index computation
-  # (nfac-1) * nDimModHess + (nfac-1) reads the wrong slot when
-  # use_types=TRUE on components. Needs instrumented C++ debugging
-  # to confirm and fix.
-  skip(paste0("Stage-1-with-types -> Stage-2-SE_linear Hessian FD ",
-              "mismatch on the SE x SE sub-block (max err ~1.7); ",
-              "isolated during v1.1.8 investigation. See TEST 4 ",
-              "comment for findings."))
+  # In versions <= 1.1.8, define_model_system() in the Stage 2
+  # SE workflow (allow_different_structure = TRUE) only treated
+  # factor_var_*, se_*, chol_*, and factor_mean_* parameters as
+  # factor-distribution parameters. typeprob_*_intercept and
+  # type_*_loading_* were classified as measurement parameters and
+  # therefore marked FIXED when inherited from a Stage 1 that
+  # already had n_types >= 2. The C++ side correctly left them
+  # FREE in the SE branch, so the R-side free_idx and the C++
+  # free-parameter vector disagreed: evaluate_likelihood_rcpp
+  # extracted a 7-element free gradient from C++ and then scattered
+  # it into a 5-element R free_idx, shifting every value past the
+  # 5th slot. That produced a permuted Hessian with max rel_err
+  # ~1.67 on the SE x SE sub-block, which the TEST 4 comments
+  # previously flagged as a "KNOWN ISSUE". Fix: also treat
+  # ^typeprob_ and ^type_[0-9]+_loading_ as factor-distribution
+  # patterns in define_model_system().
+
+  skip_on_cran()
 
   sim <- .simulate_se_types_dgp(
     n = 600, seed = 19,

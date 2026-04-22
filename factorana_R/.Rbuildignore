@@ -10,6 +10,7 @@
 ^tests/test_se_covariates\.R$
 ^tests/#run_parallelization_benchmark\.R#$
 ^CLAUDE.*\.md$
+^CLAUDE.*\.R$
 ^LICENSE$
 ^DEBUG_HESSIAN_PERFORMANCE\.md$
 ^ISSUES\.md$

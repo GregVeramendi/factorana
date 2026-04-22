@@ -1,3 +1,53 @@
+# factorana 1.2.0
+
+## Bug fixes
+
+* Stage-2 SE workflow (`define_model_system(..., previous_stage = ...)`
+  with `factor_structure = "SE_linear"` or `"SE_quadratic"`) was
+  silently fixing `typeprob_*_intercept` and `type_*_loading_*`
+  parameters when the previous stage already had `n_types > 1`. The
+  `factor_dist_patterns` regex list in `define_model_system()`
+  enumerated only `factor_var_*`, `se_*`, `chol_*`, and
+  `factor_mean_*` as factor-distribution parameters, so typeprob and
+  type-loading slots fell through into `measurement_params` and were
+  forced to their Stage 1 values. The C++ initialization correctly
+  left those parameters free. The disagreement scrambled the mapping
+  between the C++ free-parameter vector and the R-side `free_idx`:
+  `evaluate_likelihood_rcpp()` extracted 7 free gradient entries from
+  C++ and scattered them into a 5-slot R map, shifting every value
+  past position 5. The result was a Hessian whose SE x SE sub-block
+  looked permuted (max rel_err ~1.67, previously flagged as the "TEST
+  4 known issue"). Added `^typeprob_` and `^type_[0-9]+_loading_` to
+  the pattern list; now the two sides agree that those are
+  factor-level free parameters. Also matches `TEST 1`'s explicit
+  expectation that typeprob and input-factor type loadings stay free
+  in Stage 2.
+
+* Type-probability mixture contribution to the Hessian on the
+  `d^2 L_mix / d(sigma^2_k)^2` diagonal was missing two terms in
+  `FactorModel::CalcLkhd` (section 3b):
+  1. The cross term `2 * dpi_t/d(sigma^2_k) * dL_t/d(sigma^2_k)` was
+     added only once rather than twice. The off-diagonal code
+     correctly added both orderings of the cross term; the `k == l`
+     branch kept a "we only add once due to symmetry in sum" comment
+     that was wrong. On the diagonal the two orderings coincide so
+     the correct behavior is a factor of 2.
+  2. The chain-rule second derivative of the type probability through
+     the GH scaling of the input factor itself: when `f_k = sigma_k *
+     x_q`, the full diagonal second derivative of `pi_t` w.r.t.
+     `sigma^2_k` is
+     `d^2(pi)/d(f_k)^2 * (df_k/d(sigma^2_k))^2 +
+      d(pi)/d(f_k) * d^2(f_k)/d(sigma^2_k)^2`.
+     Only the first term was being accumulated; the
+     `d(pi)/d(f_k) * d^2(f_k)/d(sigma^2_k)^2` term is now added when
+     `k == l`.
+  In combination with the free/fixed mapping fix, the Stage-1
+  with-types to Stage-2 SE_linear Hessian FD max rel_err dropped from
+  1.67 to ~8e-6 at `n_quad = 12`, reaching machine precision at
+  `n_quad >= 24`. The previously skipped TEST 4 in
+  `test-two-stage-se-types.R` has been re-enabled as a regression
+  guard.
+
 # factorana 1.1.8
 
 ## Minor changes

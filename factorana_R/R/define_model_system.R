@@ -192,9 +192,17 @@ define_model_system <- function(components, factor, previous_stage = NULL, weigh
 
     # For SE structure Stage 2: only fix measurement parameters, not factor distribution
     if (allow_different_structure) {
-      # Identify factor distribution parameters to exclude from fixing
-      # These include: factor_var_*, se_*, chol_* (correlation params), factor_mean_* (mean covariates)
-      factor_dist_patterns <- c("^factor_var", "^se_", "^chol_", "^factor_mean_")
+      # Identify factor distribution parameters to exclude from fixing.
+      # These include: factor_var_*, se_*, chol_* (correlation params),
+      # factor_mean_* (mean covariates), typeprob_*_intercept and
+      # type_*_loading_* (type-mixture parameters that describe the factor
+      # distribution over types). The type-related patterns only apply to
+      # factor-level parameters, not to component-level type intercepts,
+      # which have the form "{comp_name}_type_*_intercept" and therefore do
+      # not begin with "type_" or "typeprob_".
+      factor_dist_patterns <- c("^factor_var", "^se_", "^chol_",
+                                "^factor_mean_", "^typeprob_",
+                                "^type_[0-9]+_loading_")
       factor_dist_params <- unlist(lapply(factor_dist_patterns, function(p) {
         grep(p, all_param_names, value = TRUE)
       }))

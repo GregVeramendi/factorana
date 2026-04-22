@@ -2365,8 +2365,8 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                 // Cross term: dπ_t/dσ²_k * dL_t/dσ²_l + dπ_t/dσ²_l * dL_t/dσ²_k
                                 // Note: dL_t/dσ² = L_t * d(log L_t)/dσ² = prob_this_type * grad_this_type[factor_idx]
                                 if (k == l) {
-                                    // Diagonal: 2 * dπ_t/dσ² * dL_t/dσ² (but we only add once due to symmetry in sum)
-                                    type_weighted_hess[idx] += dpi_dsigma2_k * prob_this_type * grad_this_type[l];
+                                    // Diagonal: both cross terms coincide to 2 * dπ_t/dσ² * dL_t/dσ²
+                                    type_weighted_hess[idx] += 2.0 * dpi_dsigma2_k * prob_this_type * grad_this_type[l];
                                 } else {
                                     // Off-diagonal: add both cross terms
                                     type_weighted_hess[idx] += dpi_dsigma2_k * prob_this_type * grad_this_type[l];
@@ -2395,6 +2395,15 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                     }
                                 }
                                 double d2pi_dsigma2_k_l = d2pi_df_k_df_l * df_dsigma2[k] * df_dsigma2[l];
+                                // Diagonal (k == l): also add dπ_t/df_k * d²f_k/d(σ²_k)²
+                                // The chain rule for d²π_t/d(σ²_k)² is
+                                //   d²π/df_k² * (df_k/dσ²_k)² + dπ/df_k * d²f_k/d(σ²_k)²
+                                // The first term is already in d2pi_dsigma2_k_l; the second is only
+                                // non-zero when k == l because f_k's GH scaling depends on σ²_k alone.
+                                if (k == l) {
+                                    // dpi_df_k was computed above as Σ_s π_t (δ_{t,s+1} - π_{s+1}) λ_{s,k}
+                                    d2pi_dsigma2_k_l += dpi_df_k * d2f_dsigma2_sq[k];
+                                }
                                 type_weighted_hess[idx] += d2pi_dsigma2_k_l * prob_this_type;
                             }
 
