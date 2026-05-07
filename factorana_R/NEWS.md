@@ -1,3 +1,17 @@
+# factorana 1.2.3
+
+Combined release covering the parameter-mapping bugs introduced by the
+SE_linear / SE_quadratic + n_types > 1 + se_covariates / factor_covariates
+combinations. Bundles the 1.2.1 fixes (R/C++ parameter-ordering desync,
+factor_mean_param_start collision, and the un-fix loop name-coverage gap
+that produced a clean k-cycle of recycled values when callers used
+`define_model_system(previous_stage = ..., free_params = ...)` against a
+matching SE structure) with the 1.2.2 fix (equality_constraints map
+name-coverage gap, which silently bound component-level constraints to
+factor-distribution slots when factor_covariates or se_covariates were
+also present). See the 1.2.1 and 1.2.2 sections below for full
+descriptions and regression-test pointers.
+
 # factorana 1.2.2
 
 ## Bug fixes
