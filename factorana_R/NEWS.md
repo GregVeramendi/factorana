@@ -1,3 +1,34 @@
+# factorana 1.2.2
+
+## Bug fixes
+
+* `src/rcpp_interface.cpp::initialize_factor_model_cpp` parameter-name to
+  index map for the `equality_constraints` lookup had the same name-coverage
+  gap as the un-fix loop fixed in 1.2.1. The factor-level portion of the
+  map enumerated only `factor_var_*`, `mix_*`, `se_intercept`, `se_linear_*`,
+  `se_quadratic_*`, `se_intercept_type_*`, and `se_residual_var`. It also
+  contained `type_<t>_intercept` (which is a typo: the actual parameter
+  is named `typeprob_<t>_intercept`), and was missing every
+  `type_<t>_loading_<k>`, `factor_mean_<k>_<cov>`, and `se_cov_<cov>` entry.
+  Beyond making equality constraints on those names unrecognised, the
+  missing factor-mean and SE-covariate slots caused the iterator to under-
+  count factor-level positions, so every component-level index added to the
+  map after the factor block was off by `(n_factor_mean + n_se_cov)`. As a
+  result, equality constraints on component-level loadings, sigmas, or
+  thresholds silently bound to factor-distribution slots whenever
+  `factor_covariates` or `se_covariates` were used.
+
+  The map is now built in the same constructor-true layout used by the
+  un-fix loop and the FactorModel constructor:
+  `factor_var* -> [factor_corr_*] -> mix_means / mix_logweight -> se_*
+   -> typeprob_*_intercept / type_*_loading_* -> factor_mean_<k>_<cov>
+   -> se_cov_<cov> -> component model params`. A regression test in
+  `tests/testthat/test-equality-constraints.R` constructs an SE_linear +
+  `se_covariates = c("X")` model with equality_constraints tying
+  cross-wave loadings and sigmas, and asserts that tied parameters share
+  values to 1e-10 (binding the correct measurement slots) and that
+  `se_cov_X` recovers its DGP value (slot is not shifted).
+
 # factorana 1.2.1
 
 ## Bug fixes

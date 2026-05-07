@@ -989,106 +989,116 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         }
 
         // Factor-level parameters
-        // Naming convention matches R: mix{m}_factor_var_{k}, mix{m}_factor_mean_{k}, mix{m}_logweight
-        // where m is 1-indexed for mixtures (mix1, mix2, ...) and k is 1-indexed for factors
+        // Layout MUST mirror the FactorModel constructor + SetFactorMeanCovariates
+        // + SetSECovariates + AddModel call sequence in initialize_factor_model_cpp:
+        //
+        //   factor_var* -> [factor_corr_*] -> mix_factor_mean_* / mix_logweight
+        //   -> se_* (intercept, linear, [quadratic], type intercepts, residual var)
+        //   -> typeprob_*_intercept / type_*_loading_*
+        //   -> factor_mean_<k>_<cov>
+        //   -> se_cov_<cov>
+        //   -> component model params (handled by the loop below)
+        //
+        // Earlier versions of this map were missing typeprob_*_intercept (it was
+        // misspelled as type_*_intercept), all type_*_loading_*, and the entire
+        // factor_mean_*_* and se_cov_* blocks. Beyond making those equality
+        // constraints unrecognised, the missing factor_mean / se_cov slots also
+        // shifted every component-level idx that follows backwards, so equality
+        // constraints on loadings/sigmas/thresholds got mapped to factor-level
+        // slots whenever factor_covariates or se_covariates were used.
         int idx = 0;
-        if (fac_struct == FactorStructure::SE_LINEAR || fac_struct == FactorStructure::SE_QUADRATIC) {
-            // SE models: variances for all mixtures, then mixture means, then log-weights, then SE params
-            for (int m = 0; m < n_mixtures; m++) {
-                for (int k = 0; k < n_fac - 1; k++) {
-                    if (n_mixtures == 1) {
-                        param_name_to_idx["factor_var_" + std::to_string(k + 1)] = idx++;
-                    } else {
-                        // mix1_factor_var_1, mix1_factor_var_2, ... (1-indexed)
-                        param_name_to_idx["mix" + std::to_string(m + 1) + "_factor_var_" + std::to_string(k + 1)] = idx++;
+        bool is_se_eq = (fac_struct == FactorStructure::SE_LINEAR ||
+                         fac_struct == FactorStructure::SE_QUADRATIC);
+        int n_var_factors_eq = is_se_eq ? (n_fac - 1) : n_fac;
+
+        // Block 1: factor variances (per mixture) + correlation params
+        for (int m = 0; m < n_mixtures; m++) {
+            for (int k = 0; k < n_var_factors_eq; k++) {
+                std::string nm = (n_mixtures == 1)
+                    ? "factor_var_" + std::to_string(k + 1)
+                    : "mix" + std::to_string(m + 1) + "_factor_var_" + std::to_string(k + 1);
+                param_name_to_idx[nm] = idx++;
+            }
+            // Correlation params interleave per mixture in the CORRELATION layout
+            if (fac_struct == FactorStructure::CORRELATION) {
+                for (int j = 0; j < n_fac - 1; j++) {
+                    for (int k = j + 1; k < n_fac; k++) {
+                        std::string nm = (n_mixtures == 1)
+                            ? "factor_corr_" + std::to_string(j + 1) + "_" + std::to_string(k + 1)
+                            : "mix" + std::to_string(m + 1) + "_factor_corr_" + std::to_string(j + 1) + "_" + std::to_string(k + 1);
+                        param_name_to_idx[nm] = idx++;
                     }
                 }
             }
-            // Mixture means: mix{m}_factor_mean_{k} for m < nmix-1
-            for (int m = 0; m < n_mixtures - 1; m++) {
-                for (int k = 0; k < n_fac - 1; k++) {
-                    param_name_to_idx["mix" + std::to_string(m + 1) + "_factor_mean_" + std::to_string(k + 1)] = idx++;
-                }
+        }
+
+        // Block 2: mixture means + log-weights (n_mixtures > 1)
+        for (int m = 0; m < n_mixtures - 1; m++) {
+            for (int k = 0; k < n_var_factors_eq; k++) {
+                param_name_to_idx["mix" + std::to_string(m + 1) + "_factor_mean_" + std::to_string(k + 1)] = idx++;
             }
-            // Mixture log-weights: mix{m}_logweight for m < nmix-1
-            for (int m = 0; m < n_mixtures - 1; m++) {
-                param_name_to_idx["mix" + std::to_string(m + 1) + "_logweight"] = idx++;
-            }
-            // SE parameters
+        }
+        for (int m = 0; m < n_mixtures - 1; m++) {
+            param_name_to_idx["mix" + std::to_string(m + 1) + "_logweight"] = idx++;
+        }
+
+        // Block 3: SE parameters (SE structures only)
+        if (is_se_eq) {
             param_name_to_idx["se_intercept"] = idx++;
-            for (int k = 0; k < n_fac - 1; k++) {
+            for (int k = 0; k < n_var_factors_eq; k++) {
                 param_name_to_idx["se_linear_" + std::to_string(k + 1)] = idx++;
             }
             if (fac_struct == FactorStructure::SE_QUADRATIC) {
-                for (int k = 0; k < n_fac - 1; k++) {
+                for (int k = 0; k < n_var_factors_eq; k++) {
                     param_name_to_idx["se_quadratic_" + std::to_string(k + 1)] = idx++;
                 }
             }
-            // Type-specific SE intercepts (between (quadratic) coefs and se_residual_var)
             if (n_types > 1) {
                 for (int t = 2; t <= n_types; t++) {
                     param_name_to_idx["se_intercept_type_" + std::to_string(t)] = idx++;
                 }
             }
             param_name_to_idx["se_residual_var"] = idx++;
-        } else if (fac_struct == FactorStructure::CORRELATION) {
-            // Correlation: factor variances then correlation parameters
-            for (int m = 0; m < n_mixtures; m++) {
-                for (int k = 0; k < n_fac; k++) {
-                    if (n_mixtures == 1) {
-                        param_name_to_idx["factor_var_" + std::to_string(k + 1)] = idx++;
-                    } else {
-                        param_name_to_idx["mix" + std::to_string(m + 1) + "_factor_var_" + std::to_string(k + 1)] = idx++;
-                    }
-                }
-                // Add correlation parameters for this mixture
-                for (int j = 0; j < n_fac - 1; j++) {
-                    for (int k = j + 1; k < n_fac; k++) {
-                        if (n_mixtures == 1) {
-                            param_name_to_idx["factor_corr_" + std::to_string(j + 1) + "_" + std::to_string(k + 1)] = idx++;
-                        } else {
-                            param_name_to_idx["mix" + std::to_string(m + 1) + "_factor_corr_" + std::to_string(j + 1) + "_" + std::to_string(k + 1)] = idx++;
-                        }
-                    }
-                }
+        }
+
+        // Block 4: typeprob_*_intercept + type_*_loading_* (when n_types > 1
+        // AND any component uses types — matches the FactorModel constructor's
+        // gate, which is `if (ntyp > 1)` only adds these slots).
+        if (n_types > 1 && any_uses_types) {
+            for (int t = 2; t <= n_types; t++) {
+                param_name_to_idx["typeprob_" + std::to_string(t) + "_intercept"] = idx++;
             }
-            // Mixture means
-            for (int m = 0; m < n_mixtures - 1; m++) {
-                for (int k = 0; k < n_fac; k++) {
-                    param_name_to_idx["mix" + std::to_string(m + 1) + "_factor_mean_" + std::to_string(k + 1)] = idx++;
+            for (int t = 2; t <= n_types; t++) {
+                for (int k = 1; k <= n_fac; k++) {
+                    param_name_to_idx["type_" + std::to_string(t) + "_loading_" + std::to_string(k)] = idx++;
                 }
-            }
-            // Mixture log-weights
-            for (int m = 0; m < n_mixtures - 1; m++) {
-                param_name_to_idx["mix" + std::to_string(m + 1) + "_logweight"] = idx++;
-            }
-        } else {
-            // Independent: factor variances per mixture, then mixture means, then log-weights
-            for (int m = 0; m < n_mixtures; m++) {
-                for (int k = 0; k < n_fac; k++) {
-                    if (n_mixtures == 1) {
-                        param_name_to_idx["factor_var_" + std::to_string(k + 1)] = idx++;
-                    } else {
-                        param_name_to_idx["mix" + std::to_string(m + 1) + "_factor_var_" + std::to_string(k + 1)] = idx++;
-                    }
-                }
-            }
-            // Mixture means
-            for (int m = 0; m < n_mixtures - 1; m++) {
-                for (int k = 0; k < n_fac; k++) {
-                    param_name_to_idx["mix" + std::to_string(m + 1) + "_factor_mean_" + std::to_string(k + 1)] = idx++;
-                }
-            }
-            // Mixture log-weights
-            for (int m = 0; m < n_mixtures - 1; m++) {
-                param_name_to_idx["mix" + std::to_string(m + 1) + "_logweight"] = idx++;
             }
         }
 
-        // Type-specific parameters (if any)
-        if (n_types > 1) {
-            for (int t = 2; t <= n_types; t++) {
-                param_name_to_idx["type_" + std::to_string(t) + "_intercept"] = idx++;
+        // Block 5: factor_mean_<k>_<cov>
+        if (factor_model.containsElementNamed("factor_covariates") &&
+            !Rf_isNull(factor_model["factor_covariates"])) {
+            CharacterVector fcov_names_eq = factor_model["factor_covariates"];
+            int n_fcov_eq = fcov_names_eq.size();
+            if (n_fcov_eq > 0) {
+                int n_fac_with_mean = is_se_eq ? (n_fac - 1) : n_fac;
+                for (int k = 1; k <= n_fac_with_mean; k++) {
+                    for (int j = 0; j < n_fcov_eq; j++) {
+                        std::string cname = as<std::string>(fcov_names_eq[j]);
+                        param_name_to_idx["factor_mean_" + std::to_string(k) + "_" + cname] = idx++;
+                    }
+                }
+            }
+        }
+
+        // Block 6: se_cov_<cov>
+        if (factor_model.containsElementNamed("se_covariates") &&
+            !Rf_isNull(factor_model["se_covariates"])) {
+            CharacterVector secov_names_eq = factor_model["se_covariates"];
+            int n_secov_eq = secov_names_eq.size();
+            for (int j = 0; j < n_secov_eq; j++) {
+                std::string cname = as<std::string>(secov_names_eq[j]);
+                param_name_to_idx["se_cov_" + cname] = idx++;
             }
         }
 
