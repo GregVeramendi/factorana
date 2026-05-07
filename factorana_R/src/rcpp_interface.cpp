@@ -576,8 +576,30 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         }
     }
 
+    // Parameter-offset layout MUST mirror the actual FactorModel parameter
+    // layout produced by the constructor + Set{FactorMean,SE}Covariates +
+    // AddModel call sequence in initialize_factor_model_cpp:
+    //
+    //   factor_var* -> se_* -> typeprob/type_loading -> factor_mean*
+    //   -> se_cov* -> model params
+    //
+    // The constructor (FactorModel.cpp lines ~149-153) appends typeprob/
+    // type_loading immediately after the SE block; SetFactorMeanCovariates
+    // and SetSECovariates append AFTER typeprob. Computing param_offset in
+    // a different order desyncs param_fixed_vec (the constraint vector
+    // built here) from the actual parameter positions, silently fixing the
+    // wrong slots (e.g., the outcome-factor type loading being marked at
+    // an se_cov index).
+
+    // Add type model parameters offset if n_types > 1 and at least one component uses types
+    // Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
+    // Parameters: (n_types - 1) intercepts + (n_types - 1) * n_fac loadings
+    int type_param_start = param_offset;  // capture start BEFORE adding type params
+    if (n_types > 1 && any_uses_types) {
+        param_offset += (n_types - 1) + (n_types - 1) * n_fac;  // Type intercepts + Type loadings
+    }
+
     // Add factor mean covariate parameters offset if specified
-    // These parameters come after variance/SE/correlation params
     if (factor_model.containsElementNamed("factor_covariates") &&
         !Rf_isNull(factor_model["factor_covariates"])) {
         CharacterVector factor_cov_names = factor_model["factor_covariates"];
@@ -602,14 +624,6 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         if (n_se_cov > 0) {
             param_offset += n_se_cov;
         }
-    }
-
-    // Add type model parameters offset if n_types > 1 and at least one component uses types
-    // Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
-    // Parameters: (n_types - 1) intercepts + (n_types - 1) * n_fac loadings
-    int type_param_start = param_offset;  // capture start BEFORE adding type params
-    if (n_types > 1 && any_uses_types) {
-        param_offset += (n_types - 1) + (n_types - 1) * n_fac;  // Type intercepts + Type loadings
     }
 
     // Check if previous_stage_info exists - if so, fix all factor-level parameters
@@ -639,30 +653,53 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
                 CharacterVector free_names = prev_stage_info["free_param_names"];
                 if (free_names.size() > 0) {
                     // Build a name→index map for factor-level params (indices 0..param_offset-1)
-                    // using the same layout logic as the equality constraint map below.
+                    // using the SAME layout that param_offset was computed with (and that
+                    // the FactorModel constructor + Set{FactorMean,SE}Covariates produce):
+                    //   factor_var* -> [mix_means, mix_logweights] -> se_* / corr ->
+                    //   typeprob/type_loading -> factor_mean* -> se_cov*
+                    //
+                    // The map MUST include every factor-distribution parameter type that
+                    // a caller could legitimately list in `free_params`. Missing names
+                    // (e.g., typeprob_*_intercept, type_*_loading_*, factor_mean_*_*,
+                    // se_cov_*) silently fail the un-fix lookup and the C++ side keeps
+                    // them frozen while R's setup_parameter_constraints leaves them
+                    // free, scrambling the gradient/Hessian/estimates mapping.
                     std::map<std::string, int> fac_name_idx;
                     int idx = 0;
-                    if (fac_struct == FactorStructure::SE_LINEAR || fac_struct == FactorStructure::SE_QUADRATIC) {
-                        int n_inp = n_fac - 1;
-                        for (int m = 0; m < n_mixtures; m++) {
-                            for (int k = 0; k < n_inp; k++) {
-                                std::string nm = (n_mixtures == 1)
-                                    ? "factor_var_" + std::to_string(k + 1)
-                                    : "mix" + std::to_string(m + 1) + "_factor_var_" + std::to_string(k + 1);
-                                fac_name_idx[nm] = idx++;
-                            }
+                    bool is_se = (fac_struct == FactorStructure::SE_LINEAR ||
+                                  fac_struct == FactorStructure::SE_QUADRATIC);
+                    int n_var_factors = is_se ? (n_fac - 1) : n_fac;
+
+                    // Block 1: factor variances (per mixture)
+                    for (int m = 0; m < n_mixtures; m++) {
+                        for (int k = 0; k < n_var_factors; k++) {
+                            std::string nm = (n_mixtures == 1)
+                                ? "factor_var_" + std::to_string(k + 1)
+                                : "mix" + std::to_string(m + 1) + "_factor_var_" + std::to_string(k + 1);
+                            fac_name_idx[nm] = idx++;
                         }
-                        for (int m = 0; m < n_mixtures - 1; m++) {
-                            for (int k = 0; k < n_inp; k++)
-                                fac_name_idx["mix" + std::to_string(m+1) + "_factor_mean_" + std::to_string(k+1)] = idx++;
-                        }
-                        for (int m = 0; m < n_mixtures - 1; m++)
-                            fac_name_idx["mix" + std::to_string(m+1) + "_logweight"] = idx++;
+                    }
+
+                    // Correlation parameter (correlation structure only, n_mixtures == 1)
+                    if (fac_struct == FactorStructure::CORRELATION && n_fac == 2) {
+                        fac_name_idx["factor_corr_1_2"] = idx++;
+                    }
+
+                    // Block 2: mixture means + log-weights (for n_mixtures > 1)
+                    for (int m = 0; m < n_mixtures - 1; m++) {
+                        for (int k = 0; k < n_var_factors; k++)
+                            fac_name_idx["mix" + std::to_string(m+1) + "_factor_mean_" + std::to_string(k+1)] = idx++;
+                    }
+                    for (int m = 0; m < n_mixtures - 1; m++)
+                        fac_name_idx["mix" + std::to_string(m+1) + "_logweight"] = idx++;
+
+                    // Block 3: SE parameters (SE structures only)
+                    if (is_se) {
                         fac_name_idx["se_intercept"] = idx++;
-                        for (int k = 0; k < n_inp; k++)
+                        for (int k = 0; k < n_var_factors; k++)
                             fac_name_idx["se_linear_" + std::to_string(k+1)] = idx++;
                         if (fac_struct == FactorStructure::SE_QUADRATIC) {
-                            for (int k = 0; k < n_inp; k++)
+                            for (int k = 0; k < n_var_factors; k++)
                                 fac_name_idx["se_quadratic_" + std::to_string(k+1)] = idx++;
                         }
                         if (n_types > 1) {
@@ -670,27 +707,49 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
                                 fac_name_idx["se_intercept_type_" + std::to_string(t)] = idx++;
                         }
                         fac_name_idx["se_residual_var"] = idx++;
-                    } else {
-                        for (int m = 0; m < n_mixtures; m++) {
-                            for (int k = 0; k < n_fac; k++) {
-                                std::string nm = (n_mixtures == 1)
-                                    ? "factor_var_" + std::to_string(k + 1)
-                                    : "mix" + std::to_string(m + 1) + "_factor_var_" + std::to_string(k + 1);
-                                fac_name_idx[nm] = idx++;
-                            }
-                        }
-                        if (fac_struct == FactorStructure::CORRELATION && n_fac == 2) {
-                            fac_name_idx["factor_corr_1_2"] = idx++;
-                        }
-                        for (int m = 0; m < n_mixtures - 1; m++) {
-                            for (int k = 0; k < n_fac; k++)
-                                fac_name_idx["mix" + std::to_string(m+1) + "_factor_mean_" + std::to_string(k+1)] = idx++;
-                        }
-                        for (int m = 0; m < n_mixtures - 1; m++)
-                            fac_name_idx["mix" + std::to_string(m+1) + "_logweight"] = idx++;
                     }
 
-                    // Un-fix each free_param_name
+                    // Block 4: type-probability params (typeprob intercepts + type loadings)
+                    if (n_types > 1 && any_uses_types) {
+                        for (int t = 2; t <= n_types; t++)
+                            fac_name_idx["typeprob_" + std::to_string(t) + "_intercept"] = idx++;
+                        for (int t = 2; t <= n_types; t++) {
+                            for (int k = 1; k <= n_fac; k++) {
+                                fac_name_idx["type_" + std::to_string(t) + "_loading_" + std::to_string(k)] = idx++;
+                            }
+                        }
+                    }
+
+                    // Block 5: factor-mean covariate params
+                    if (factor_model.containsElementNamed("factor_covariates") &&
+                        !Rf_isNull(factor_model["factor_covariates"])) {
+                        CharacterVector fcov_names = factor_model["factor_covariates"];
+                        int n_fcov = fcov_names.size();
+                        if (n_fcov > 0) {
+                            int n_fac_with_mean = is_se ? (n_fac - 1) : n_fac;
+                            for (int k = 1; k <= n_fac_with_mean; k++) {
+                                for (int j = 0; j < n_fcov; j++) {
+                                    std::string cname = as<std::string>(fcov_names[j]);
+                                    fac_name_idx["factor_mean_" + std::to_string(k) + "_" + cname] = idx++;
+                                }
+                            }
+                        }
+                    }
+
+                    // Block 6: SE covariate params
+                    if (factor_model.containsElementNamed("se_covariates") &&
+                        !Rf_isNull(factor_model["se_covariates"])) {
+                        CharacterVector secov_names = factor_model["se_covariates"];
+                        int n_secov = secov_names.size();
+                        for (int j = 0; j < n_secov; j++) {
+                            std::string cname = as<std::string>(secov_names[j]);
+                            fac_name_idx["se_cov_" + cname] = idx++;
+                        }
+                    }
+
+                    // Un-fix each free_param_name. Names not present in the map
+                    // (e.g., a user-typo or a measurement-system param) are silently
+                    // ignored; only factor-distribution params can be un-fixed here.
                     for (int j = 0; j < free_names.size(); j++) {
                         std::string fn = std::string(free_names[j]);
                         auto it = fac_name_idx.find(fn);

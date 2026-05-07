@@ -246,33 +246,21 @@ build_parameter_metadata <- function(model_system) {
     component_id <- c(component_id, 0)  # 0 = factor model
   }
 
-  # Add factor mean covariate parameters if specified
-  factor_covariates <- model_system$factor$factor_covariates
-  if (!is.null(factor_covariates) && length(factor_covariates) > 0) {
-    # Determine how many factors get mean covariates
-    if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
-      n_factors_with_mean <- n_factors - 1L  # Only input factors
-    } else {
-      n_factors_with_mean <- n_factors
-    }
-    for (k in seq_len(n_factors_with_mean)) {
-      for (cov_name in factor_covariates) {
-        param_names <- c(param_names, sprintf("factor_mean_%d_%s", k, cov_name))
-        param_types <- c(param_types, "factor_mean")
-        component_id <- c(component_id, 0)  # 0 = factor model
-      }
-    }
-  }
-
-  # Add SE covariate parameters if specified (for SE_linear/SE_quadratic)
-  se_covariates <- model_system$factor$se_covariates
-  if (!is.null(se_covariates) && length(se_covariates) > 0) {
-    for (cov_name in se_covariates) {
-      param_names <- c(param_names, sprintf("se_cov_%s", cov_name))
-      param_types <- c(param_types, "se_covariate")
-      component_id <- c(component_id, 0)  # 0 = factor model
-    }
-  }
+  # Parameter-ordering invariant (must match C++ FactorModel constructor +
+  # SetFactorMeanCovariates / SetSECovariates / AddModel call sequence in
+  # rcpp_interface.cpp):
+  #
+  #   factor_var* -> se_* (intercept, linear, [quadratic], type intercepts,
+  #                  residual var) -> typeprob/type_loading -> factor_mean_*
+  #   -> se_cov_* -> component model params
+  #
+  # The C++ constructor adds typeprob/type_loading slots immediately after
+  # the SE block (see FactorModel::FactorModel, "type_param_start = nparam"
+  # comment). factor_mean_* and se_cov_* are appended LATER via
+  # SetFactorMeanCovariates / SetSECovariates. Putting type params after
+  # the covariate params on the R side desyncs every gradient / Hessian
+  # element involving covariate params or type params (regression bug
+  # observed in factorana <= 1.2.0 with n_types > 1 + se_covariates).
 
   # Add type model parameters if n_types > 1 and at least one component uses types
   # Type model: log(P(type=t)/P(type=1)) = typeprob_t_intercept + sum_k lambda_t_k * f_k
@@ -300,6 +288,34 @@ build_parameter_metadata <- function(model_system) {
         param_types <- c(param_types, "type_loading")
         component_id <- c(component_id, 0)  # 0 = factor model
       }
+    }
+  }
+
+  # Add factor mean covariate parameters if specified
+  factor_covariates <- model_system$factor$factor_covariates
+  if (!is.null(factor_covariates) && length(factor_covariates) > 0) {
+    # Determine how many factors get mean covariates
+    if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
+      n_factors_with_mean <- n_factors - 1L  # Only input factors
+    } else {
+      n_factors_with_mean <- n_factors
+    }
+    for (k in seq_len(n_factors_with_mean)) {
+      for (cov_name in factor_covariates) {
+        param_names <- c(param_names, sprintf("factor_mean_%d_%s", k, cov_name))
+        param_types <- c(param_types, "factor_mean")
+        component_id <- c(component_id, 0)  # 0 = factor model
+      }
+    }
+  }
+
+  # Add SE covariate parameters if specified (for SE_linear/SE_quadratic)
+  se_covariates <- model_system$factor$se_covariates
+  if (!is.null(se_covariates) && length(se_covariates) > 0) {
+    for (cov_name in se_covariates) {
+      param_names <- c(param_names, sprintf("se_cov_%s", cov_name))
+      param_types <- c(param_types, "se_covariate")
+      component_id <- c(component_id, 0)  # 0 = factor model
     }
   }
 

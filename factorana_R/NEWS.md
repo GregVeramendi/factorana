@@ -1,3 +1,60 @@
+# factorana 1.2.1
+
+## Bug fixes
+
+* `factor_structure = "SE_linear"` (or `"SE_quadratic"`) combined with
+  `n_types > 1` and either `se_covariates`, `factor_covariates`, or both,
+  silently scrambled gradients, Hessians, and final parameter estimates
+  due to a parameter-layout disagreement between the R initializer and
+  the C++ `FactorModel` constructor. The C++ constructor laid out
+  parameters as
+  `[factor_var, se_*, typeprob/type_loading, factor_mean_*, se_cov_*, model]`
+  while the R initializer (`R/initialize_parameters.R`,
+  `R/optimize_model.R::build_parameter_metadata`) laid them out as
+  `[factor_var, se_*, factor_mean_*, se_cov_*, typeprob/type_loading, model]`.
+  Every gradient and Hessian element involving a covariate slot or a type-model
+  slot was permuted, and the final `result$estimates` named vector held values
+  belonging to the wrong slots. The R initializer and `build_parameter_metadata`
+  now place type-model parameters immediately after the SE block, before
+  `factor_mean_*` and `se_cov_*`, matching the C++ constructor.
+
+* `src/rcpp_interface.cpp::initialize_factor_model_cpp` computed
+  `param_offset` and `type_param_start` in the same incorrect order
+  (covariates before type params) used by the R initializer. The
+  `param_fixed_vec` and the auto-fix logic for the outcome-factor type
+  loading were therefore writing to the wrong indices, marking
+  `se_cov_*` slots as fixed instead of `type_*_loading_<n_factors>`. The
+  offsets are now computed in the same constructor-true order so the
+  fixed-vs-free bookkeeping aligns with the actual parameter positions.
+
+* `src/FactorModel.cpp::SetFactorMeanCovariates` set
+  `factor_mean_param_start = n_input_factors + nse_param` (or `nfac` for
+  non-SE structures), which assumed no type-model or mixture parameters
+  preceded the factor-mean block. Whenever `n_types > 1` or
+  `n_mixtures > 1` was used together with `factor_covariates`, the
+  factor-mean block start collided with the typeprob / mixture-mean
+  block. The start index is now `nparam` at the time of the call, which
+  is the actual append point.
+
+* `src/rcpp_interface.cpp::initialize_factor_model_cpp` un-fix loop for
+  `define_model_system(previous_stage = ..., free_params = ...)` in the
+  matching-structure path used a `fac_name_idx` map that recognized only
+  `factor_var_*`, `mix_*`, `se_intercept`, `se_linear_*`,
+  `se_quadratic_*`, `se_intercept_type_*`, and `se_residual_var`.
+  Names like `typeprob_*_intercept`, `type_*_loading_*`,
+  `factor_mean_*_*`, and `se_cov_*` silently failed the lookup and
+  remained fixed on the C++ side while the R-side
+  `setup_parameter_constraints` correctly marked them free. The C++
+  optimizer then ran on a smaller free-set than R expected, and R's
+  `estimates[free_idx] <- estimates_free` triggered vector-recycling,
+  producing a perfect k-cycle of repeated values across the
+  longer-than-actual R free index. Reported by the MH-trap regime model
+  (17 free factor-distribution slots collapsed to 7 unique values). The
+  name-to-index map now covers every factor-distribution parameter type
+  in the constructor-true layout. A regression test guards the
+  matching-structure / `free_params` path with `se_covariates` plus
+  `n_types > 1`.
+
 # factorana 1.2.0
 
 ## Bug fixes
