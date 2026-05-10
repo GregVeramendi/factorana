@@ -838,6 +838,62 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
     }
   }
 
+  # Apply user-fixed factor-distribution parameters from fix_factor_param().
+  # Runs LAST (after previous_stage, auto-fix, and equality_constraints) so
+  # the user's explicit constraint always wins. Documented in
+  # ?fix_factor_param: a name listed in `free_params` of a previous_stage
+  # workflow is silently kept fixed, and any value in
+  # `previous_stage$estimates` for the same name is overridden.
+  if (!is.null(model_system$factor$fixed_params) &&
+      length(model_system$factor$fixed_params) > 0L) {
+    fp <- model_system$factor$fixed_params
+    fp_idx <- match(names(fp), param_metadata$names)
+    valid <- !is.na(fp_idx)
+    if (any(!valid)) {
+      stop("fix_factor_param() referenced parameter name(s) not present in ",
+           "the parameter vector for this model: ",
+           paste(names(fp)[!valid], collapse = ", "),
+           ". This typically means the model spec changed (e.g., n_types ",
+           "or se_covariates) after fix_factor_param() was called.")
+    }
+    # Conflict diagnostics with previous_stage / free_params.
+    if (!is.null(model_system$previous_stage_info)) {
+      psi <- model_system$previous_stage_info
+      if (!is.null(psi$free_param_names)) {
+        ovr_free <- intersect(names(fp), psi$free_param_names)
+        if (length(ovr_free) > 0L) {
+          warning(sprintf(
+            "fix_factor_param() overrides free_params for: %s. The parameter(s) stay fixed.",
+            paste(ovr_free, collapse = ", ")), call. = FALSE)
+        }
+      }
+      if (!is.null(psi$all_param_values)) {
+        prev_vals <- psi$all_param_values[names(fp)]
+        prev_vals <- prev_vals[!is.na(prev_vals)]
+        if (length(prev_vals) > 0L) {
+          for (nm in names(prev_vals)) {
+            if (abs(unname(prev_vals[nm]) - unname(fp[nm])) > 1e-10) {
+              warning(sprintf(
+                "fix_factor_param() value for '%s' (%g) differs from previous_stage value (%g); using fix_factor_param() value.",
+                nm, unname(fp[nm]), unname(prev_vals[nm])), call. = FALSE)
+            }
+          }
+        }
+      }
+    }
+    fp_idx <- fp_idx[valid]
+    fp_val <- unname(fp)[valid]
+    param_fixed[fp_idx] <- TRUE
+    lower_bounds[fp_idx] <- fp_val
+    upper_bounds[fp_idx] <- fp_val
+    if (verbose) {
+      message(sprintf("Fixed %d factor-distribution parameter(s) via fix_factor_param(): %s",
+                      length(fp_idx),
+                      paste(sprintf("%s=%g", names(fp)[valid], fp_val),
+                            collapse = ", ")))
+    }
+  }
+
   free_idx <- which(!param_fixed)
   n_free <- length(free_idx)
 

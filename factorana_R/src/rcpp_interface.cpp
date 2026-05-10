@@ -45,6 +45,140 @@ List gauss_hermite_quadrature(int n) {
     );
 }
 
+// Helper: apply user-fixed factor-distribution parameters from
+// factor$fixed_params (set in R via fix_factor_param()). Builds a
+// constructor-true name->index map for the factor-level parameter block
+// (factor_var, [factor_corr], mix_means, mix_logweight, se_*,
+//  typeprob/type_loading, factor_mean, se_cov), looks up each fixed name,
+// marks param_fixed_vec[idx] = true, and overrides init_params[idx] with
+// the user-supplied value. The same layout is also used by the un-fix
+// loop at the top of initialize_factor_model_cpp and by the
+// equality_constraints map; keep all three in sync if the layout changes.
+static inline void apply_fix_factor_param(
+    Rcpp::List factor_model,
+    FactorStructure fac_struct, int n_fac, int n_types, int n_mixtures,
+    bool any_uses_types, int param_offset,
+    std::vector<bool>& param_fixed_vec,
+    Rcpp::Nullable<Rcpp::NumericVector> init_params)
+{
+    if (!factor_model.containsElementNamed("fixed_params") ||
+        Rf_isNull(factor_model["fixed_params"])) return;
+
+    Rcpp::NumericVector fp = factor_model["fixed_params"];
+    if (fp.size() == 0) return;
+
+    Rcpp::CharacterVector fp_names = fp.names();
+    if (fp_names.size() != fp.size()) return;  // unnamed: nothing to do
+
+    bool is_se = (fac_struct == FactorStructure::SE_LINEAR ||
+                  fac_struct == FactorStructure::SE_QUADRATIC);
+    int n_var_factors = is_se ? (n_fac - 1) : n_fac;
+
+    // Build the same name -> index map used by the un-fix loop.
+    std::map<std::string, int> name_to_idx;
+    int idx = 0;
+
+    // Block 1: factor variances (per mixture)
+    for (int m = 0; m < n_mixtures; m++) {
+        for (int k = 0; k < n_var_factors; k++) {
+            std::string nm = (n_mixtures == 1)
+                ? "factor_var_" + std::to_string(k + 1)
+                : "mix" + std::to_string(m + 1) + "_factor_var_" + std::to_string(k + 1);
+            name_to_idx[nm] = idx++;
+        }
+    }
+
+    // Correlation parameter
+    if (fac_struct == FactorStructure::CORRELATION && n_fac == 2) {
+        name_to_idx["factor_corr_1_2"] = idx++;
+    }
+
+    // Block 2: mixture means + log-weights
+    for (int m = 0; m < n_mixtures - 1; m++) {
+        for (int k = 0; k < n_var_factors; k++) {
+            name_to_idx["mix" + std::to_string(m+1) + "_factor_mean_" + std::to_string(k+1)] = idx++;
+        }
+    }
+    for (int m = 0; m < n_mixtures - 1; m++) {
+        name_to_idx["mix" + std::to_string(m+1) + "_logweight"] = idx++;
+    }
+
+    // Block 3: SE parameters (SE structures only)
+    if (is_se) {
+        name_to_idx["se_intercept"] = idx++;
+        for (int k = 0; k < n_var_factors; k++) {
+            name_to_idx["se_linear_" + std::to_string(k+1)] = idx++;
+        }
+        if (fac_struct == FactorStructure::SE_QUADRATIC) {
+            for (int k = 0; k < n_var_factors; k++) {
+                name_to_idx["se_quadratic_" + std::to_string(k+1)] = idx++;
+            }
+        }
+        if (n_types > 1) {
+            for (int t = 2; t <= n_types; t++) {
+                name_to_idx["se_intercept_type_" + std::to_string(t)] = idx++;
+            }
+        }
+        name_to_idx["se_residual_var"] = idx++;
+    }
+
+    // Block 4: typeprob_*_intercept + type_*_loading_*
+    if (n_types > 1 && any_uses_types) {
+        for (int t = 2; t <= n_types; t++) {
+            name_to_idx["typeprob_" + std::to_string(t) + "_intercept"] = idx++;
+        }
+        for (int t = 2; t <= n_types; t++) {
+            for (int k = 1; k <= n_fac; k++) {
+                name_to_idx["type_" + std::to_string(t) + "_loading_" + std::to_string(k)] = idx++;
+            }
+        }
+    }
+
+    // Block 5: factor_mean_<k>_<cov>
+    if (factor_model.containsElementNamed("factor_covariates") &&
+        !Rf_isNull(factor_model["factor_covariates"])) {
+        Rcpp::CharacterVector fcov = factor_model["factor_covariates"];
+        if (fcov.size() > 0) {
+            int n_fac_with_mean = is_se ? (n_fac - 1) : n_fac;
+            for (int k = 1; k <= n_fac_with_mean; k++) {
+                for (int j = 0; j < fcov.size(); j++) {
+                    std::string cn = Rcpp::as<std::string>(fcov[j]);
+                    name_to_idx["factor_mean_" + std::to_string(k) + "_" + cn] = idx++;
+                }
+            }
+        }
+    }
+
+    // Block 6: se_cov_<cov>
+    if (factor_model.containsElementNamed("se_covariates") &&
+        !Rf_isNull(factor_model["se_covariates"])) {
+        Rcpp::CharacterVector secov = factor_model["se_covariates"];
+        for (int j = 0; j < secov.size(); j++) {
+            std::string cn = Rcpp::as<std::string>(secov[j]);
+            name_to_idx["se_cov_" + cn] = idx++;
+        }
+    }
+
+    // Apply each user fix.
+    for (int j = 0; j < fp.size(); j++) {
+        std::string nm = Rcpp::as<std::string>(fp_names[j]);
+        auto it = name_to_idx.find(nm);
+        if (it == name_to_idx.end()) continue;          // not a factor-dist name
+        int pos = it->second;
+        if (pos < 0 || pos >= (int) param_fixed_vec.size()) continue;
+        param_fixed_vec[pos] = true;
+        // Override init_params at this position so SetParameterConstraintsWithValues
+        // uses the user-supplied value as the FIXED value the C++ side reads.
+        if (!init_params.isNull()) {
+            Rcpp::NumericVector ip(init_params);
+            if (pos < ip.size()) {
+                ip[pos] = fp[j];
+            }
+        }
+    }
+}
+
+
 //' Initialize a FactorModel C++ object from R model system
 //'
 //' @param model_system R model_system object
@@ -1215,6 +1349,15 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             }
         }
 
+        // Apply user-fixed factor-distribution parameters from
+        // factor$fixed_params (set via fix_factor_param() in R). Reuses the
+        // same constructor-true layout the un-fix loop and the
+        // equality_constraints map use.
+        apply_fix_factor_param(factor_model, fac_struct, n_fac, n_types,
+                               n_mixtures, any_uses_types, param_offset,
+                               param_fixed_vec,
+                               init_params /* may be NULL */);
+
         // Set parameter constraints with optional initial values
         if (init_params.isNotNull()) {
             NumericVector ip(init_params);
@@ -1228,6 +1371,11 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         fm->SetEqualityConstraints(equality_map);
     } else {
         // No equality constraints - just set parameter constraints
+        apply_fix_factor_param(factor_model, fac_struct, n_fac, n_types,
+                               n_mixtures, any_uses_types, param_offset,
+                               param_fixed_vec,
+                               init_params /* may be NULL */);
+
         if (init_params.isNotNull()) {
             NumericVector ip(init_params);
             std::vector<double> init_params_vec = as<std::vector<double>>(ip);

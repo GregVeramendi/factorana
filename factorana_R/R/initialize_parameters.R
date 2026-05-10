@@ -1262,6 +1262,21 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
   names(init_params) <- param_names
 
   # Compute param_fixed using setup_parameter_constraints
+  # Apply user-fixed factor-distribution parameters from fix_factor_param()
+  # BEFORE setup_parameter_constraints. This ensures init_params carries the
+  # user-supplied value at the fixed position so the C++ side
+  # (SetParameterConstraintsWithValues) starts there. setup_parameter_constraints
+  # will then mark these positions as fixed independently; the values match.
+  if (!is.null(model_system$factor$fixed_params) &&
+      length(model_system$factor$fixed_params) > 0L) {
+    fp <- model_system$factor$fixed_params
+    fp_idx <- match(names(fp), param_names)
+    valid <- !is.na(fp_idx)
+    if (any(valid)) {
+      init_params[fp_idx[valid]] <- unname(fp)[valid]
+    }
+  }
+
   # This is needed for gradient/Hessian checking in tests
   param_metadata <- build_parameter_metadata(model_system)
   param_constraints <- setup_parameter_constraints(

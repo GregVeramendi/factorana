@@ -1,3 +1,97 @@
+# factorana 1.3.0
+
+## New features
+
+* `fix_factor_param(factor_model, name, value)` constrains a parameter in
+  the latent-factor distribution (factor variances, SE-equation slopes /
+  intercept / type-specific intercepts / residual variance,
+  type-probability intercepts and loadings, factor-mean covariate
+  coefficients, SE covariate coefficients) to a fixed value at model-
+  definition time. The fixed parameter appears in `result$estimates` at
+  the user-supplied value with `result$std_errors == 0` and is excluded
+  from the optimizer's free-parameter vector.
+
+  The most common use case is setting a `type_<t>_loading_<k>` to 0 when
+  factor `k` is known a priori not to enter the type-probability model
+  (e.g., regime-switching models where one latent dimension drives the
+  regime probability and others do not). Estimating such a loading free
+  leaks identification, walks the optimizer along a flat ridge, and
+  inflates the standard errors of the remaining type-model parameters.
+
+  API: single-fix and named-vector batch forms,
+  `fix_factor_param(fm, "type_2_loading_2", 0)` or
+  `fix_factor_param(fm, c(type_2_loading_2 = 0, type_2_loading_3 = 0))`.
+  Pass `value = NA_real_` to release a previously fixed parameter.
+  Idempotent at 0 for the SE-outcome-factor type loading (auto-fixed
+  there); errors on any non-zero value for that slot. Overrides the
+  auto-fix of non-identified factor variances.
+
+  When combined with `define_model_system(previous_stage = ...,
+  free_params = ...)`: `fix_factor_param()` always wins. A name listed in
+  both `free_params` and `fix_factor_param()` stays fixed, with a
+  one-time warning per conflict to surface accidental misuse. A value in
+  `previous_stage$estimates` for the same name is overridden, with an
+  informational warning.
+
+  `print(factor_model)` echoes the fixed factor-distribution parameters.
+
+## Bug fixes
+
+Bundles the parameter-mapping bug fixes that were committed but never
+shipped to CRAN (1.2.1 + 1.2.2 + 1.2.3 in the local history). All three
+addressed silent-wrong-estimate paths when `factor_structure = "SE_linear"`
+or `"SE_quadratic"` was combined with `n_types > 1` and either
+`se_covariates` or `factor_covariates`:
+
+* R/C++ parameter-ordering desync. The R initializer
+  (`R/initialize_parameters.R`,
+  `R/optimize_model.R::build_parameter_metadata`) and the C++
+  `FactorModel` constructor disagreed on whether type-model parameters
+  (`typeprob_*_intercept`, `type_*_loading_*`) come before or after
+  `factor_mean_*` and `se_cov_*`. The R side now matches the
+  constructor: factor_var → SE → typeprob/type_loading → factor_mean →
+  se_cov.
+
+* `src/rcpp_interface.cpp::initialize_factor_model_cpp`: `param_offset`
+  and `type_param_start` recomputed in the constructor-true order so
+  the auto-fix logic for the outcome-factor type loading writes to the
+  right slot.
+
+* `src/FactorModel.cpp::SetFactorMeanCovariates`: `factor_mean_param_start`
+  is now `nparam` at the call site (the actual append point), not a
+  precomputed offset that ignored typeprob / mixture slots.
+
+* `src/rcpp_interface.cpp::initialize_factor_model_cpp` un-fix loop:
+  the name-to-index map for `define_model_system(previous_stage = ...,
+  free_params = ...)` recognized only `factor_var_*`, `mix_*`,
+  `se_intercept`, `se_linear_*`, `se_quadratic_*`,
+  `se_intercept_type_*`, and `se_residual_var`. Names like
+  `typeprob_*_intercept`, `type_*_loading_*`, `factor_mean_*_*`, and
+  `se_cov_*` silently failed the lookup and stayed fixed in C++ while
+  R's `setup_parameter_constraints` correctly marked them free. The
+  optimizer ran on a smaller free-set than R expected, and R's
+  `estimates[free_idx] <- estimates_free` recycled, producing a clean
+  k-cycle of repeated values across covariates and type params.
+  Reported as the MH-trap regime model "7-cycle" (17 free
+  factor-distribution slots collapsing to 7 unique values).
+
+* `src/rcpp_interface.cpp` `equality_constraints` map had the same
+  coverage gap and a `typeprob_<t>_intercept` -> `type_<t>_intercept`
+  rename typo. Beyond making equality constraints on those names
+  unrecognised, the missing factor_mean and se_cov slots also caused
+  the iterator to under-count factor-level positions, so equality
+  constraints on component-level loadings, sigmas, or thresholds were
+  silently bound to factor-distribution slots whenever
+  `factor_covariates` or `se_covariates` were used.
+
+Regression tests at:
+  `tests/testthat/test-two-stage-se-types.R::"Constrained re-run via
+  free_params: SE-cov / typeprob / type_loading slots get distinct
+  values"`,
+  `tests/testthat/test-equality-constraints.R::"equality_constraints +
+  se_covariates does not corrupt component idx mapping"`, and
+  `tests/testthat/test-fix-factor-param.R::*` for the new feature.
+
 # factorana 1.2.3
 
 Combined release covering the parameter-mapping bugs introduced by the
