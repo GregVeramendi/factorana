@@ -1,3 +1,23 @@
+# factorana 1.3.4
+
+## Test infrastructure
+
+* `tests/testthat/test-interaction-factors.R`: the two FD-vs-analytical
+  numerical checks for the 3-factor linear model with full second-order
+  terms (Tests 21 and 22) now call `skip_on_cran()`, matching the rest
+  of the file (every other test there already skips on CRAN). The
+  analytical gradient and Hessian are unchanged; the tests still run
+  locally and on win-builder, so developer correctness coverage is
+  preserved.
+
+  Reason: under alternative BLAS implementations (ATLAS in particular)
+  the finite-difference reference accumulates floating-point round-off
+  differently, which on one element of the analytical Hessian pushed
+  the max relative error from roughly 0.98e-3 to 1.02e-3 against a
+  1e-3 tolerance. The analytical Hessian itself is correct; the
+  discrepancy is in the FD reference, not in factorana. This change
+  prevents the spurious failure flagged on the CRAN ATLAS check farm.
+
 # factorana 1.3.3
 
 ## Bug fixes
