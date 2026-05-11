@@ -577,9 +577,33 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
   # Track cutpoint indices per component to identify incremental thresholds
   cutpoint_counter <- list()
 
+  # Collect stale-name indices (those past the end of param_metadata$names,
+  # or with NA `types`) so we can emit a single warning at the end rather
+  # than dying inside the per-param branch logic. Stale names typically
+  # originate from previous_stage anchors that carry parameter names not
+  # present in the current model (e.g., a previous_stage with extra
+  # components, or a Stage 2 that drops a component the anchor still
+  # references). Mirrors the warn-and-skip philosophy of
+  # define_model_component() in factorana >= 1.3.1.
+  stale_names <- character(0)
+
   for (i in seq_len(n_params)) {
     param_type <- param_metadata$types[i]
     comp_id <- param_metadata$component_id[i]
+
+    if (is.na(param_type)) {
+      nm <- if (i <= length(init_params)) names(init_params)[i] else NA_character_
+      stale_names <- c(stale_names, if (is.null(nm) || is.na(nm))
+                                       sprintf("<unnamed param at position %d>", i)
+                                     else nm)
+      # Mark stale positions FIXED so they never enter free_idx and the
+      # optimizer never tries to move them. Their value stays at whatever
+      # init_params carries (typically the prior anchor's estimate).
+      param_fixed[i] <- TRUE
+      lower_bounds[i] <- init_params[i]
+      upper_bounds[i] <- init_params[i]
+      next
+    }
 
     # Fix non-identified factor variances
     if (param_type == "factor_var") {
@@ -836,6 +860,19 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
         }
       }
     }
+  }
+
+  # One-shot warning for any stale parameter names encountered (typically
+  # previous_stage anchors that reference parameters not in the current
+  # model). Truncate to first 10 names for readability.
+  if (length(stale_names) > 0L) {
+    head_names <- head(stale_names, 10L)
+    tail_msg <- if (length(stale_names) > 10L)
+                  sprintf(" ... (%d total)", length(stale_names)) else ""
+    warning(sprintf(
+      "Skipping %d previous_stage / init_params name(s) not present in the current model: %s%s",
+      length(stale_names), paste(head_names, collapse = ", "), tail_msg),
+      call. = FALSE)
   }
 
   # Apply user-fixed factor-distribution parameters from fix_factor_param().
@@ -1269,6 +1306,68 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   } else {
     # User provided init_params (assumed to be full vector)
     full_init_params <- init_params
+  }
+
+  # Reconcile full_init_params length with the current model. previous_stage
+  # anchors / user-supplied init_params can carry parameter names that no
+  # longer exist in the current model (e.g., a component dropped in
+  # 1.3.1's warn-and-skip path, or the anchor was built optimistically).
+  # The C++ side requires init_params length == nparam; otherwise
+  # SetParameterConstraintsWithValues errors with "Fixed values size mismatch".
+  #
+  # Gating by LENGTH (not name set): the reconciliation only fires when the
+  # vector has a different number of slots than the current model expects.
+  # If lengths match we trust the caller's naming, because some legacy code
+  # paths (notably multinomial logit) use a different naming convention
+  # inside initialize_parameters than build_parameter_metadata() generates,
+  # but the positional order matches and downstream code works correctly.
+  # Forcing a rename in that case silently zeros out the mlogit parameters.
+  .canonical_names <- build_parameter_metadata(model_system)$names
+  if (!is.null(.canonical_names) &&
+      length(full_init_params) != length(.canonical_names)) {
+    .input_names <- names(full_init_params)
+    if (is.null(.input_names)) {
+      # No names available — can't reconcile by name; just error clearly.
+      stop(sprintf(
+        "init_params has length %d but the current model has %d parameters; ",
+        length(full_init_params), length(.canonical_names)),
+        "names are missing so reconciliation is impossible.")
+    }
+    .stale <- setdiff(.input_names, .canonical_names)
+    if (length(.stale) > 0L) {
+      .head <- head(.stale, 10L)
+      .tail_msg <- if (length(.stale) > 10L)
+                     sprintf(" ... (%d total)", length(.stale)) else ""
+      warning(sprintf(
+        "Dropping %d previous_stage / init_params name(s) not present in the current model: %s%s",
+        length(.stale), paste(.head, collapse = ", "), .tail_msg),
+        call. = FALSE)
+    }
+    .canonical_init <- setNames(rep(0.0, length(.canonical_names)),
+                                 .canonical_names)
+    .overlap <- intersect(.canonical_names, .input_names)
+    if (length(.overlap) > 0L) {
+      .canonical_init[.overlap] <- full_init_params[.overlap]
+    }
+    .missing <- setdiff(.canonical_names, .input_names)
+    if (length(.missing) > 0L && is.null(init_params)) {
+      .src <- init_result$init_params
+      .src_overlap <- intersect(.missing, names(.src))
+      if (length(.src_overlap) > 0L) {
+        .canonical_init[.src_overlap] <- .src[.src_overlap]
+      }
+    } else if (length(.missing) > 0L) {
+      .auto <- initialize_parameters(model_system, data, verbose = FALSE)
+      .src <- .auto$init_params
+      .src_overlap <- intersect(.missing, names(.src))
+      if (length(.src_overlap) > 0L) {
+        .canonical_init[.src_overlap] <- .src[.src_overlap]
+      }
+      if (is.null(factor_variance_fixed)) {
+        factor_variance_fixed <- .auto$factor_variance_fixed
+      }
+    }
+    full_init_params <- .canonical_init
   }
 
   # Initialize factor models on each worker

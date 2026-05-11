@@ -1,3 +1,47 @@
+# factorana 1.3.3
+
+## Bug fixes
+
+* The 1.3.2 warn-and-skip for stale `previous_stage` / `init_params`
+  names was incomplete: `setup_parameter_constraints()` emitted the
+  warning and skipped the stale slots in its per-parameter branch
+  logic, but the unfiltered `full_init_params` vector was still passed
+  to the C++ estimator, which errored with
+  `"Fixed values size mismatch"` because `SetParameterConstraintsWithValues`
+  enforces `init_values.size() == nparam`.
+
+  `estimate_model_rcpp()` now reconciles `full_init_params` with the
+  current model's canonical parameter layout before any C++ call:
+  stale names (present in the anchor but not in the current model) are
+  dropped with a single warning that lists the first 10 offending
+  names, and missing names (present in the current model but not in
+  the anchor) are filled from a fresh `initialize_parameters()` pass.
+  Works for both initializer-built and user-supplied `init_params`.
+
+  Triggering scenario: anchor a Stage 2 model on a Stage 1 result, and
+  Stage 2 has fewer components than Stage 1 (e.g., because 1.3.1's
+  warn-and-skip on `define_model_component()` dropped a component
+  whose `evaluation_indicator` is all zero for the current wave).
+  Reported by the MH-trap pipeline at the wave-to-wave handoff.
+
+# factorana 1.3.2
+
+## Changes in behavior
+
+* `setup_parameter_constraints()` now warns once and skips
+  `previous_stage` / `init_params` parameter names that are not in the
+  current model, instead of detonating inside the per-parameter branch
+  logic. This mirrors the warn-and-skip applied to
+  `define_model_component()` in 1.3.1: panel-data pipelines that build
+  one anchor and reuse it across waves with slightly different
+  component lists no longer crash on the names the current model does
+  not recognize. The warning lists the first 10 stale names and a
+  total count.
+
+  Migration: callers that rely on the prior error to detect typos in
+  previous_stage anchors should grep for the new
+  `"Skipping N previous_stage / init_params name(s)"` warning.
+
 # factorana 1.3.1
 
 ## Changes in behavior
