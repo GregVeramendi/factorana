@@ -1,3 +1,26 @@
+# factorana 1.3.1
+
+## Changes in behavior
+
+* `define_model_component()` previously errored with
+  `"Evaluation subset has zero rows"` when its `evaluation_indicator`
+  selected no rows. This was a pipeline-halting failure mode for panel
+  data with wave- or cohort-specific item availability, where a given
+  component contributes nothing in some waves but should simply be
+  dropped. The function now emits a warning and returns `NULL` in that
+  case. `define_model_system()` filters NULL entries out of the
+  `components` list automatically; an end-to-end pipeline that builds
+  many components and lets some come back empty no longer needs to
+  branch around it. The hard error remains for the truly-empty-input
+  case (data already has zero rows before the eval filter).
+
+  `fix_coefficient(NULL, ...)` returns `NULL` silently so chained
+  component-mutation calls propagate the skip without crashing.
+
+  Migration: callers that catch the old error message should switch
+  to checking `is.null()` on the component or to letting
+  `define_model_system()` filter NULLs.
+
 # factorana 1.3.0
 
 ## New features
