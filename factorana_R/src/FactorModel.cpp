@@ -73,10 +73,14 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
     data.resize(nobs * nvar);
 
     // Initialize factor parameters based on structure
-    if (factor_structure == FactorStructure::SE_LINEAR) {
-        // For SE models: input factors have variance parameters, outcome factors don't
-        // Integration is over (f_1, ..., f_{k-1}, epsilon_k)
-        // Mixtures only apply to input factors
+    if (IsSEStructure()) {
+        // SE models: f_k = alpha + sum_j alpha_j f_j
+        //                  [+ sum_j alpha_qj f_j^2]   (SE_QUADRATIC / SE_FULL)
+        //                  [+ sum_{a<b} alpha_ab f_a f_b]  (SE_INTERACTIONS / SE_FULL)
+        //                  + epsilon
+        // For SE models: input factors have variance parameters, outcome factors don't.
+        // Integration is over (f_1, ..., f_{k-1}, epsilon_k). Mixtures only apply to
+        // input factors.
         n_input_factors = nfac - 1;
         n_outcome_factors = 1;
         n_factors_for_mixture = n_input_factors;
@@ -91,36 +95,15 @@ FactorModel::FactorModel(int n_obs, int n_var, int n_fac, int n_typ,
             nparam += (nmix - 1);                     // mixture log-weights
         }
 
-        // SE parameters: intercept + n_input_factors linear coefficients + residual variance
-        // When ntyp > 1, also add (ntyp-1) type-specific SE intercepts (between linear and residual var)
+        // SE parameters: intercept + linear coefs [+ quadratic coefs] [+ interaction
+        // coefs] + (ntyp-1) type-specific SE intercepts + residual variance.
+        // The type intercepts and residual variance sit AFTER the interaction block
+        // (see GetSE*Index() in FactorModel.h).
         se_param_start = nparam;
         nse_type_intercepts = (ntyp > 1) ? (ntyp - 1) : 0;
-        nse_param = 1 + n_input_factors + nse_type_intercepts + 1;  // intercept + linear + type intercepts + residual var
-        nparam += nse_param;
-
-    } else if (factor_structure == FactorStructure::SE_QUADRATIC) {
-        // SE_QUADRATIC: f_k = alpha + alpha_1*f_1 + alpha_q1*f_1^2 + ... + epsilon
-        // Integration is over (f_1, ..., f_{k-1}, epsilon_k)
-        // Mixtures only apply to input factors
-        n_input_factors = nfac - 1;
-        n_outcome_factors = 1;
-        n_factors_for_mixture = n_input_factors;
-        n_variance_per_mixture = n_input_factors;
-
-        // Factor variance parameters: only for input factors (per mixture)
-        nparam = n_input_factors * nmix;
-
-        // Mixture parameters: means and log-weights for non-reference mixtures
-        if (nmix > 1) {
-            nparam += (nmix - 1) * n_input_factors;  // mixture means
-            nparam += (nmix - 1);                     // mixture log-weights
-        }
-
-        // SE parameters: intercept + linear coefs + quadratic coefs + residual variance
-        // When ntyp > 1, also add (ntyp-1) type-specific SE intercepts (between quadratic and residual var)
-        se_param_start = nparam;
-        nse_type_intercepts = (ntyp > 1) ? (ntyp - 1) : 0;
-        nse_param = 1 + n_input_factors + n_input_factors + nse_type_intercepts + 1;  // intercept + linear + quadratic + type intercepts + residual var
+        int n_se_quad = HasSEQuadratic() ? n_input_factors : 0;
+        int n_se_inter = HasSEInteraction() ? (n_input_factors * (n_input_factors - 1)) / 2 : 0;
+        nse_param = 1 + n_input_factors + n_se_quad + n_se_inter + nse_type_intercepts + 1;
         nparam += nse_param;
 
     } else if (factor_structure == FactorStructure::CORRELATION && nfac == 2) {
@@ -365,8 +348,7 @@ void FactorModel::SetFactorMeanCovariates(const std::vector<std::vector<double>>
 
     // Determine which factors get mean covariates
     // For SE models, only input factors get covariates (outcome factor mean is from SE)
-    if (factor_structure == FactorStructure::SE_LINEAR ||
-        factor_structure == FactorStructure::SE_QUADRATIC) {
+    if (IsSEStructure()) {
         n_factors_with_mean = n_input_factors;
     } else {
         n_factors_with_mean = nfac;
@@ -397,9 +379,8 @@ void FactorModel::SetFactorMeanCovariates(const std::vector<std::vector<double>>
 void FactorModel::SetSECovariates(const std::vector<std::vector<double>>& covariate_data)
 {
     // Only valid for SE models
-    if (factor_structure != FactorStructure::SE_LINEAR &&
-        factor_structure != FactorStructure::SE_QUADRATIC) {
-        throw std::runtime_error("SE covariates are only valid for SE_LINEAR and SE_QUADRATIC factor structures");
+    if (!IsSEStructure()) {
+        throw std::runtime_error("SE covariates are only valid for SE structural-equation factor structures");
     }
 
     // Validate input dimensions
@@ -688,7 +669,25 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     // SE parameters (for structural equation models)
     double se_intercept = 0.0;
     std::vector<double> se_linear_coef(n_input_factors, 0.0);
-    std::vector<double> se_quadratic_coef(n_input_factors, 0.0);  // For SE_QUADRATIC
+    std::vector<double> se_quadratic_coef(n_input_factors, 0.0);  // For SE_QUADRATIC / SE_FULL
+    // Cross-product (interaction) coefficients for SE_INTERACTIONS / SE_FULL.
+    // se_inter_pair_a[p] < se_inter_pair_b[p] are the 0-based input-factor indices
+    // for pair p, enumerated over the upper triangle: (0,1),(0,2),...,(1,2),...
+    // This ordering must match the R-side parameter name se_interaction_<a+1>_<b+1>.
+    const int n_se_interaction = NumSEInteraction();
+    std::vector<double> se_interaction_coef(std::max(n_se_interaction, 1), 0.0);
+    std::vector<int> se_inter_pair_a(std::max(n_se_interaction, 1), 0);
+    std::vector<int> se_inter_pair_b(std::max(n_se_interaction, 1), 0);
+    if (n_se_interaction > 0) {
+        int p = 0;
+        for (int a = 0; a < n_input_factors; a++) {
+            for (int b = a + 1; b < n_input_factors; b++) {
+                se_inter_pair_a[p] = a;
+                se_inter_pair_b[p] = b;
+                p++;
+            }
+        }
+    }
     std::vector<double> se_covariate_coef;  // Coefficients for SE covariates
     // Type-specific SE intercepts: se_type_offset[ityp] is the additional intercept
     // applied to the outcome factor when evaluating under type ityp. Index 0 (reference
@@ -721,24 +720,31 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     std::vector<double> factor_var(nfac, 1.0);  // Default variances for all factors
     std::vector<double> factor_mean(nfac, 0.0);  // Default means for all factors
 
-    if (factor_structure == FactorStructure::SE_LINEAR ||
-        factor_structure == FactorStructure::SE_QUADRATIC) {
+    if (IsSEStructure()) {
         // SE models: only input factors have variance parameters
         // For nmix=1, use GetFactorVarianceIndex; for nmix>1, handled in mixture loop
         for (int ifac = 0; ifac < n_input_factors; ifac++) {
             factor_var[ifac] = std::fabs(param[GetFactorVarianceIndex(0, ifac)]);
         }
 
-        // SE parameters: intercept, linear coefficients, [quadratic coefficients], residual variance
+        // SE parameters: intercept, linear coefficients, [quadratic coefficients],
+        // [interaction coefficients], residual variance
         se_intercept = param[GetSEInterceptIndex()];
         for (int j = 0; j < n_input_factors; j++) {
             se_linear_coef[j] = param[GetSELinearIndex(j)];
         }
 
-        // SE_QUADRATIC: also extract quadratic coefficients
-        if (factor_structure == FactorStructure::SE_QUADRATIC) {
+        // SE_QUADRATIC / SE_FULL: also extract quadratic coefficients
+        if (HasSEQuadratic()) {
             for (int j = 0; j < n_input_factors; j++) {
                 se_quadratic_coef[j] = param[GetSEQuadraticIndex(j)];
+            }
+        }
+
+        // SE_INTERACTIONS / SE_FULL: extract cross-product coefficients
+        if (HasSEInteraction()) {
+            for (int p = 0; p < n_se_interaction; p++) {
+                se_interaction_coef[p] = param[GetSEInteractionIndex(p)];
             }
         }
 
@@ -829,9 +835,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     // Adaptive integration uses Stage 1 factor scores directly for the outcome factor, so
     // the SE equation (and thus type intercepts) does not apply there.
     const bool se_type_shift_enabled =
-        (nse_type_intercepts > 0) && !use_adaptive &&
-        (factor_structure == FactorStructure::SE_LINEAR ||
-         factor_structure == FactorStructure::SE_QUADRATIC);
+        (nse_type_intercepts > 0) && !use_adaptive && IsSEStructure();
     std::vector<double> type_weighted_grad(nparam, 0.0);
     std::vector<double> type_weighted_hess;
     if (iflag == 3) type_weighted_hess.resize(nparam * nparam, 0.0);
@@ -886,8 +890,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             probilk_table[intpt] = probilk;
 
             // Compute factor values at this integration point
-            if (factor_structure == FactorStructure::SE_LINEAR ||
-                factor_structure == FactorStructure::SE_QUADRATIC) {
+            if (IsSEStructure()) {
                 // SE models: integrate over (f_1, ..., f_{k-1}, epsilon)
                 // First (nfac-1) dimensions are input factors
                 for (int j = 0; j < n_input_factors; j++) {
@@ -898,13 +901,23 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 double x_eps = quad_nodes[precomp_facint[nfac - 1]];
                 double eps = sigma_eps * x_eps;
 
-                // Compute outcome factor: f_k = se_intercept + sum(se_linear_j * f_j) [+ sum(se_quadratic_j * f_j^2)] + eps
+                // Compute outcome factor:
+                //   f_k = se_intercept + sum(se_linear_j * f_j)
+                //         [+ sum(se_quadratic_j * f_j^2)] [+ sum(se_inter_ab * f_a * f_b)] + eps
                 double f_outcome = se_intercept + eps;
                 for (int j = 0; j < n_input_factors; j++) {
                     f_outcome += se_linear_coef[j] * fac_val_table[intpt][j];
-                    // SE_QUADRATIC: add quadratic terms
-                    if (factor_structure == FactorStructure::SE_QUADRATIC) {
+                    // SE_QUADRATIC / SE_FULL: add quadratic terms
+                    if (HasSEQuadratic()) {
                         f_outcome += se_quadratic_coef[j] * fac_val_table[intpt][j] * fac_val_table[intpt][j];
+                    }
+                }
+                // SE_INTERACTIONS / SE_FULL: add cross-product terms
+                if (HasSEInteraction()) {
+                    for (int p = 0; p < n_se_interaction; p++) {
+                        f_outcome += se_interaction_coef[p]
+                            * fac_val_table[intpt][se_inter_pair_a[p]]
+                            * fac_val_table[intpt][se_inter_pair_b[p]];
                     }
                 }
                 fac_val_table[intpt][nfac - 1] = f_outcome;
@@ -1124,8 +1137,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 }
 
                 // Compute factor values
-                if (factor_structure == FactorStructure::SE_LINEAR ||
-                    factor_structure == FactorStructure::SE_QUADRATIC) {
+                if (IsSEStructure()) {
                     // SE models: integrate over (f_1, ..., f_{k-1}, epsilon)
                     for (int j = 0; j < n_input_factors; j++) {
                         fac_val[j] = sigma_fac[j] * x_node_fac[j] + factor_mean[j];
@@ -1138,9 +1150,16 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     double f_outcome = se_intercept + eps;
                     for (int j = 0; j < n_input_factors; j++) {
                         f_outcome += se_linear_coef[j] * fac_val[j];
-                        // SE_QUADRATIC: add quadratic terms
-                        if (factor_structure == FactorStructure::SE_QUADRATIC) {
+                        // SE_QUADRATIC / SE_FULL: add quadratic terms
+                        if (HasSEQuadratic()) {
                             f_outcome += se_quadratic_coef[j] * fac_val[j] * fac_val[j];
+                        }
+                    }
+                    // SE_INTERACTIONS / SE_FULL: add cross-product terms
+                    if (HasSEInteraction()) {
+                        for (int p = 0; p < n_se_interaction; p++) {
+                            f_outcome += se_interaction_coef[p]
+                                * fac_val[se_inter_pair_a[p]] * fac_val[se_inter_pair_b[p]];
                         }
                     }
                     // Add SE covariate contributions
@@ -1336,8 +1355,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     // in the model (handled by setting all_params_fixed flag).
                     int model_flag;
                     if (models[imod]->GetAllParamsFixed()) {
-                        if (factor_structure == FactorStructure::SE_LINEAR ||
-                            factor_structure == FactorStructure::SE_QUADRATIC) {
+                        if (IsSEStructure()) {
                             // SE models: need factor gradients AND factor-factor Hessian
                             // for computing SE parameter derivatives.
                             // The model params are fixed, but we still need modHess for
@@ -1369,22 +1387,37 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     // ===== STEP 9: Accumulate gradients for this type =====
                     if (iflag >= 2) {
                         // Gradients w.r.t. factor variances and structure-specific parameters
-                        if (factor_structure == FactorStructure::SE_LINEAR ||
-                            factor_structure == FactorStructure::SE_QUADRATIC) {
-                            // SE models: f_k = se_intercept + Σ_j se_linear_j * f_j [+ Σ_j se_quadratic_j * f_j²] + eps
+                        if (IsSEStructure()) {
+                            // SE models: f_k = se_intercept + Σ_j se_linear_j * f_j
+                            //                  [+ Σ_j se_quadratic_j * f_j²]
+                            //                  [+ Σ_{a<b} se_inter_ab * f_a * f_b] + eps
                             // modEval contains [dens, dL/df_1, ..., dL/df_k, dL/dparams...]
                             double dL_dfk = modEval[nfac];  // Gradient w.r.t. outcome factor
 
+                            // Pre-compute ∂f_k/∂f_j for each input factor j, including the
+                            // cross-product contribution Σ_{l≠j} se_inter_{j,l} * f_l.
+                            //   ∂f_k/∂f_j = α_j + 2*α_qj*f_j + Σ_{l≠j} α_{j,l} * f_l
+                            std::vector<double> dfk_dfj_grad(n_input_factors);
+                            for (int j = 0; j < n_input_factors; j++) {
+                                dfk_dfj_grad[j] = se_linear_coef[j];
+                                if (HasSEQuadratic()) {
+                                    dfk_dfj_grad[j] += 2.0 * se_quadratic_coef[j] * fac_val[j];
+                                }
+                            }
+                            if (HasSEInteraction()) {
+                                for (int p = 0; p < n_se_interaction; p++) {
+                                    int a = se_inter_pair_a[p];
+                                    int b = se_inter_pair_b[p];
+                                    dfk_dfj_grad[a] += se_interaction_coef[p] * fac_val[b];
+                                    dfk_dfj_grad[b] += se_interaction_coef[p] * fac_val[a];
+                                }
+                            }
+
                             // Gradients w.r.t. input factor variances
-                            // ∂f_k/∂f_j = α_j + 2*α_qj*f_j  (for SE_QUADRATIC)
                             // ∂L/∂σ²_j = [∂L/∂f_j + (∂L/∂f_k) * ∂f_k/∂f_j] * (x_j / (2*σ_j))
                             for (int j = 0; j < n_input_factors; j++) {
                                 double dL_dfj = modEval[j + 1];
-                                double dfk_dfj = se_linear_coef[j];
-                                if (factor_structure == FactorStructure::SE_QUADRATIC) {
-                                    dfk_dfj += 2.0 * se_quadratic_coef[j] * fac_val[j];
-                                }
-                                double total_deriv = dL_dfj + dL_dfk * dfk_dfj;
+                                double total_deriv = dL_dfj + dL_dfk * dfk_dfj_grad[j];
                                 grad_this_type[j] += total_deriv * df_dsigma2[j];
                             }
 
@@ -1405,10 +1438,18 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                 grad_this_type[GetSELinearIndex(j)] += dL_dfk * fac_val[j];
                             }
 
-                            // SE_QUADRATIC: ∂L/∂(se_quadratic_j) = ∂L/∂f_k * f_j²
-                            if (factor_structure == FactorStructure::SE_QUADRATIC) {
+                            // SE_QUADRATIC / SE_FULL: ∂L/∂(se_quadratic_j) = ∂L/∂f_k * f_j²
+                            if (HasSEQuadratic()) {
                                 for (int j = 0; j < n_input_factors; j++) {
                                     grad_this_type[GetSEQuadraticIndex(j)] += dL_dfk * fac_val[j] * fac_val[j];
+                                }
+                            }
+
+                            // SE_INTERACTIONS / SE_FULL: ∂L/∂(se_inter_ab) = ∂L/∂f_k * f_a * f_b
+                            if (HasSEInteraction()) {
+                                for (int p = 0; p < n_se_interaction; p++) {
+                                    grad_this_type[GetSEInteractionIndex(p)] +=
+                                        dL_dfk * fac_val[se_inter_pair_a[p]] * fac_val[se_inter_pair_b[p]];
                                 }
                             }
 
@@ -1490,26 +1531,45 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                         int base_param_count_hess = param_model_count[imod] - n_type_intercepts_hess;
                         int nDimModHess = nfac + base_param_count_hess;
 
-                        if (factor_structure == FactorStructure::SE_LINEAR ||
-                            factor_structure == FactorStructure::SE_QUADRATIC) {
+                        if (IsSEStructure()) {
                             // ===== SE model Hessian =====
-                            // SE_LINEAR: f_k = α + Σ_j α_j * f_j + ε
-                            // SE_QUADRATIC: f_k = α + Σ_j α_j * f_j + Σ_j α_qj * f_j² + ε
+                            // f_k = α + Σ_j α_j f_j [+ Σ_j α_qj f_j²] [+ Σ_{a<b} α_ab f_a f_b] + ε
                             // Need chain rule: ∂²L/∂θ₁∂θ₂ = Σ_i Σ_l (∂²L/∂f_i∂f_l)(∂f_i/∂θ₁)(∂f_l/∂θ₂) + Σ_i (∂L/∂f_i)(∂²f_i/∂θ₁∂θ₂)
 
                             double dL_dfk = modEval[nfac];  // Gradient w.r.t. outcome factor
                             double x_eps = x_node_fac[nfac - 1];
 
-                            // Pre-compute derivatives
-                            // For SE_QUADRATIC: ∂f_k/∂f_j = α_j + 2*α_qj*f_j, ∂²f_k/∂f_j² = 2*α_qj
-                            // For SE_LINEAR: ∂f_k/∂f_j = α_j, ∂²f_k/∂f_j² = 0
+                            // Pre-compute derivatives of the outcome factor w.r.t. input factors.
+                            //   ∂f_k/∂f_j = α_j + 2*α_qj*f_j + Σ_{l≠j} α_{j,l} f_l
+                            //   ∂²f_k/∂f_j² = 2*α_qj   (interactions contribute 0 here)
+                            //   ∂²f_k/∂f_i∂f_j = α_{ij}  for i≠j (was 0 without interactions)
+                            // inter_coef_ij is a symmetric n_input×n_input lookup of the
+                            // cross-product coefficients (0 on the diagonal and when absent).
                             std::vector<double> dfk_dfj(n_input_factors);
                             std::vector<double> d2fk_dfj2(n_input_factors, 0.0);
+                            std::vector<double> inter_coef_ij;
+                            if (HasSEInteraction()) {
+                                inter_coef_ij.assign(n_input_factors * n_input_factors, 0.0);
+                                for (int p = 0; p < n_se_interaction; p++) {
+                                    int a = se_inter_pair_a[p];
+                                    int b = se_inter_pair_b[p];
+                                    inter_coef_ij[a * n_input_factors + b] = se_interaction_coef[p];
+                                    inter_coef_ij[b * n_input_factors + a] = se_interaction_coef[p];
+                                }
+                            }
                             for (int j = 0; j < n_input_factors; j++) {
                                 dfk_dfj[j] = se_linear_coef[j];
-                                if (factor_structure == FactorStructure::SE_QUADRATIC) {
+                                if (HasSEQuadratic()) {
                                     dfk_dfj[j] += 2.0 * se_quadratic_coef[j] * fac_val[j];
                                     d2fk_dfj2[j] = 2.0 * se_quadratic_coef[j];
+                                }
+                            }
+                            if (HasSEInteraction()) {
+                                for (int p = 0; p < n_se_interaction; p++) {
+                                    int a = se_inter_pair_a[p];
+                                    int b = se_inter_pair_b[p];
+                                    dfk_dfj[a] += se_interaction_coef[p] * fac_val[b];
+                                    dfk_dfj[b] += se_interaction_coef[p] * fac_val[a];
                                 }
                             }
 
@@ -1525,7 +1585,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                 // Diagonal: ∂²L/∂σ²_i²
                                 // = (∂²L/∂f_i²)(∂f_i/∂σ²_i)² + (∂L/∂f_i)(∂²f_i/∂σ²_i²)
                                 //   + 2(∂²L/∂f_i∂f_k)(∂f_i/∂σ²_i)(∂f_k/∂σ²_i) + (∂L/∂f_k)(∂f_k/∂f_i)(∂²f_i/∂σ²_i²)
-                                //   + (∂²L/∂f_k²)(∂f_k/∂σ²_i)² + (∂L/∂f_k)(∂²f_k/∂f_i²)(∂f_i/∂σ²_i)² (for SE_QUADRATIC)
+                                //   + (∂²L/∂f_k²)(∂f_k/∂σ²_i)² + (∂L/∂f_k)(∂²f_k/∂f_i²)(∂f_i/∂σ²_i)² (for SE_QUADRATIC / SE_FULL)
                                 double d2L_dfidfi = modHess[i * nDimModHess + i];
                                 double d2L_dfidfk = modHess[i * nDimModHess + (nfac - 1)];
                                 double d2L_dfkdfk = modHess[(nfac - 1) * nDimModHess + (nfac - 1)];
@@ -1535,8 +1595,9 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                     + 2.0 * d2L_dfidfk * df_dsigma2[i] * dfk_dvar_i
                                     + dL_dfk * dfk_dfj[i] * d2f_dsigma2_sq[i]
                                     + d2L_dfkdfk * dfk_dvar_i * dfk_dvar_i;
-                                // SE_QUADRATIC: add term for ∂²f_k/∂f_i²
-                                if (factor_structure == FactorStructure::SE_QUADRATIC) {
+                                // SE_QUADRATIC / SE_FULL: add term for ∂²f_k/∂f_i²
+                                // (interactions contribute 0 to the pure second derivative)
+                                if (HasSEQuadratic()) {
                                     contrib += dL_dfk * d2fk_dfj2[i] * df_dsigma2[i] * df_dsigma2[i];
                                 }
                                 hess_this_type[i * nparam + i] += contrib;
@@ -1547,11 +1608,18 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                     double d2L_dfjdfk = modHess[j * nDimModHess + (nfac - 1)];
                                     double dfk_dvar_j = dfk_dfj[j] * df_dsigma2[j];
 
-                                    hess_this_type[i * nparam + j] +=
-                                        d2L_dfidfj * df_dsigma2[i] * df_dsigma2[j]
+                                    double cross = d2L_dfidfj * df_dsigma2[i] * df_dsigma2[j]
                                         + d2L_dfidfk * df_dsigma2[i] * dfk_dvar_j
                                         + d2L_dfjdfk * df_dsigma2[j] * dfk_dvar_i
                                         + d2L_dfkdfk * dfk_dvar_i * dfk_dvar_j;
+                                    // SE_INTERACTIONS / SE_FULL: extra term from the mixed
+                                    // second derivative ∂²f_k/∂σ²_i∂σ²_j = α_{ij} (∂f_i/∂σ²_i)(∂f_j/∂σ²_j)
+                                    //   contributes (∂L/∂f_k) * α_{ij} * df_dsigma2[i] * df_dsigma2[j]
+                                    if (HasSEInteraction()) {
+                                        cross += dL_dfk * inter_coef_ij[i * n_input_factors + j]
+                                               * df_dsigma2[i] * df_dsigma2[j];
+                                    }
+                                    hess_this_type[i * nparam + j] += cross;
                                 }
 
                                 // Cross-terms with SE parameters
@@ -1572,8 +1640,8 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                     hess_this_type[i * nparam + se_lin_idx] += lin_contrib;
                                 }
 
-                                // SE_QUADRATIC: cross-terms with quadratic coefficients
-                                if (factor_structure == FactorStructure::SE_QUADRATIC) {
+                                // SE_QUADRATIC / SE_FULL: cross-terms with quadratic coefficients
+                                if (HasSEQuadratic()) {
                                     for (int j = 0; j < n_input_factors; j++) {
                                         int se_quad_idx = GetSEQuadraticIndex(j);
                                         // ∂²L/∂σ²_i∂(se_quadratic_j) = (∂²L/∂f_i∂f_k)(∂f_i/∂σ²_i)(f_j²) + (∂²L/∂f_k²)(∂f_k/∂σ²_i)(f_j²)
@@ -1584,6 +1652,26 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                             quad_contrib += dL_dfk * 2.0 * fac_val[j] * df_dsigma2[i];
                                         }
                                         hess_this_type[i * nparam + se_quad_idx] += quad_contrib;
+                                    }
+                                }
+
+                                // SE_INTERACTIONS / SE_FULL: cross-terms with interaction coefficients
+                                if (HasSEInteraction()) {
+                                    for (int p = 0; p < n_se_interaction; p++) {
+                                        int se_inter_idx = GetSEInteractionIndex(p);
+                                        int a = se_inter_pair_a[p];
+                                        int b = se_inter_pair_b[p];
+                                        double fa_fb = fac_val[a] * fac_val[b];
+                                        // ∂²L/∂σ²_i∂(se_inter_ab)
+                                        //   = (∂²L/∂f_i∂f_k)(∂f_i/∂σ²_i)(f_a f_b)
+                                        //   + (∂²L/∂f_k²)(∂f_k/∂σ²_i)(f_a f_b)
+                                        //   + (∂L/∂f_k)(∂²f_k/∂σ²_i∂se_inter_ab)
+                                        // The last term is f_b·df_dsigma2[i] if i==a, f_a·df_dsigma2[i] if i==b, else 0.
+                                        double inter_contrib = d2L_dfidfk * df_dsigma2[i] * fa_fb
+                                                       + d2L_dfkdfk * dfk_dvar_i * fa_fb;
+                                        if (i == a) inter_contrib += dL_dfk * fac_val[b] * df_dsigma2[i];
+                                        if (i == b) inter_contrib += dL_dfk * fac_val[a] * df_dsigma2[i];
+                                        hess_this_type[i * nparam + se_inter_idx] += inter_contrib;
                                     }
                                 }
 
@@ -1618,11 +1706,21 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                 hess_this_type[se_int_idx * nparam + se_lin_idx] += d2L_dfkdfk * fac_val[j];
                             }
 
-                            // SE_QUADRATIC: SE intercept × SE quadratic cross-terms
-                            if (factor_structure == FactorStructure::SE_QUADRATIC) {
+                            // SE_QUADRATIC / SE_FULL: SE intercept × SE quadratic cross-terms
+                            if (HasSEQuadratic()) {
                                 for (int j = 0; j < n_input_factors; j++) {
                                     int se_quad_idx = GetSEQuadraticIndex(j);
                                     hess_this_type[se_int_idx * nparam + se_quad_idx] += d2L_dfkdfk * fac_val[j] * fac_val[j];
+                                }
+                            }
+
+                            // SE_INTERACTIONS / SE_FULL: SE intercept × SE interaction cross-terms
+                            // ∂²L/∂(se_intercept)∂(se_inter_ab) = (∂²L/∂f_k²) * 1 * (f_a f_b)
+                            if (HasSEInteraction()) {
+                                for (int p = 0; p < n_se_interaction; p++) {
+                                    int se_inter_idx = GetSEInteractionIndex(p);
+                                    hess_this_type[se_int_idx * nparam + se_inter_idx] +=
+                                        d2L_dfkdfk * fac_val[se_inter_pair_a[p]] * fac_val[se_inter_pair_b[p]];
                                 }
                             }
 
@@ -1641,8 +1739,8 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                     hess_this_type[se_lin_i * nparam + se_lin_j] += d2L_dfkdfk * fac_val[i] * fac_val[j];
                                 }
 
-                                // SE_QUADRATIC: SE linear × SE quadratic cross-terms
-                                if (factor_structure == FactorStructure::SE_QUADRATIC) {
+                                // SE_QUADRATIC / SE_FULL: SE linear × SE quadratic cross-terms
+                                if (HasSEQuadratic()) {
                                     for (int j = 0; j < n_input_factors; j++) {
                                         int se_quad_idx = GetSEQuadraticIndex(j);
                                         // ∂²L/∂(se_linear_i)∂(se_quadratic_j) = (∂²L/∂f_k²) * f_i * f_j²
@@ -1650,12 +1748,22 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                     }
                                 }
 
+                                // SE_INTERACTIONS / SE_FULL: SE linear × SE interaction cross-terms
+                                // ∂²L/∂(se_linear_i)∂(se_inter_ab) = (∂²L/∂f_k²) * f_i * (f_a f_b)
+                                if (HasSEInteraction()) {
+                                    for (int p = 0; p < n_se_interaction; p++) {
+                                        int se_inter_idx = GetSEInteractionIndex(p);
+                                        hess_this_type[se_lin_i * nparam + se_inter_idx] +=
+                                            d2L_dfkdfk * fac_val[i] * fac_val[se_inter_pair_a[p]] * fac_val[se_inter_pair_b[p]];
+                                    }
+                                }
+
                                 // SE linear × SE residual var
                                 hess_this_type[se_lin_i * nparam + se_res_idx] += d2L_dfkdfk * fac_val[i] * dfk_dres_var;
                             }
 
-                            // SE_QUADRATIC: SE quadratic terms
-                            if (factor_structure == FactorStructure::SE_QUADRATIC) {
+                            // SE_QUADRATIC / SE_FULL: SE quadratic terms
+                            if (HasSEQuadratic()) {
                                 for (int i = 0; i < n_input_factors; i++) {
                                     int se_quad_i = GetSEQuadraticIndex(i);
                                     // Diagonal: (∂²L/∂f_k²) * f_i² * f_i²
@@ -1667,8 +1775,41 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                         hess_this_type[se_quad_i * nparam + se_quad_j] += d2L_dfkdfk * fac_val[i] * fac_val[i] * fac_val[j] * fac_val[j];
                                     }
 
+                                    // SE_FULL: SE quadratic × SE interaction cross-terms
+                                    // ∂²L/∂(se_quadratic_i)∂(se_inter_ab) = (∂²L/∂f_k²) * f_i² * (f_a f_b)
+                                    if (HasSEInteraction()) {
+                                        for (int p = 0; p < n_se_interaction; p++) {
+                                            int se_inter_idx = GetSEInteractionIndex(p);
+                                            hess_this_type[se_quad_i * nparam + se_inter_idx] +=
+                                                d2L_dfkdfk * fac_val[i] * fac_val[i]
+                                                * fac_val[se_inter_pair_a[p]] * fac_val[se_inter_pair_b[p]];
+                                        }
+                                    }
+
                                     // SE quadratic × SE residual var
                                     hess_this_type[se_quad_i * nparam + se_res_idx] += d2L_dfkdfk * fac_val[i] * fac_val[i] * dfk_dres_var;
+                                }
+                            }
+
+                            // SE_INTERACTIONS / SE_FULL: SE interaction terms.
+                            // Each se_inter enters f_k linearly (∂²f_k/∂se_inter² = 0), so all
+                            // contributions are (∂²L/∂f_k²) * (f_a f_b)_p * (·)_q.
+                            if (HasSEInteraction()) {
+                                for (int p = 0; p < n_se_interaction; p++) {
+                                    int se_inter_p = GetSEInteractionIndex(p);
+                                    double fab_p = fac_val[se_inter_pair_a[p]] * fac_val[se_inter_pair_b[p]];
+                                    // Diagonal: (∂²L/∂f_k²) * (f_a f_b)²
+                                    hess_this_type[se_inter_p * nparam + se_inter_p] += d2L_dfkdfk * fab_p * fab_p;
+
+                                    // Cross-terms with other SE interactions
+                                    for (int q = p + 1; q < n_se_interaction; q++) {
+                                        int se_inter_q = GetSEInteractionIndex(q);
+                                        double fab_q = fac_val[se_inter_pair_a[q]] * fac_val[se_inter_pair_b[q]];
+                                        hess_this_type[se_inter_p * nparam + se_inter_q] += d2L_dfkdfk * fab_p * fab_q;
+                                    }
+
+                                    // SE interaction × SE residual var
+                                    hess_this_type[se_inter_p * nparam + se_res_idx] += d2L_dfkdfk * fab_p * dfk_dres_var;
                                 }
                             }
 
@@ -1704,11 +1845,20 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                     hess_this_type[se_lin_idx_j * nparam + typ_idx] += d2L_dfkdfk * fac_val[j];
                                 }
 
-                                // typ_idx × se_quadratic_j (SE_QUADRATIC only; se_quad_idx < typ_idx)
-                                if (factor_structure == FactorStructure::SE_QUADRATIC) {
+                                // typ_idx × se_quadratic_j (SE_QUADRATIC / SE_FULL; se_quad_idx < typ_idx)
+                                if (HasSEQuadratic()) {
                                     for (int j = 0; j < n_input_factors; j++) {
                                         int se_quad_idx_j = GetSEQuadraticIndex(j);
                                         hess_this_type[se_quad_idx_j * nparam + typ_idx] += d2L_dfkdfk * fac_val[j] * fac_val[j];
+                                    }
+                                }
+
+                                // typ_idx × se_inter_ab (SE_INTERACTIONS / SE_FULL; se_inter_idx < typ_idx)
+                                if (HasSEInteraction()) {
+                                    for (int p = 0; p < n_se_interaction; p++) {
+                                        int se_inter_idx = GetSEInteractionIndex(p);
+                                        hess_this_type[se_inter_idx * nparam + typ_idx] +=
+                                            d2L_dfkdfk * fac_val[se_inter_pair_a[p]] * fac_val[se_inter_pair_b[p]];
                                     }
                                 }
 
@@ -1762,8 +1912,8 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                     }
                                 }
 
-                                // SE_QUADRATIC: SE quadratic × SE covariate cross-terms
-                                if (factor_structure == FactorStructure::SE_QUADRATIC) {
+                                // SE_QUADRATIC / SE_FULL: SE quadratic × SE covariate cross-terms
+                                if (HasSEQuadratic()) {
                                     for (int j = 0; j < n_input_factors; j++) {
                                         int se_quad_idx = GetSEQuadraticIndex(j);
                                         for (int m = 0; m < n_se_covariates; m++) {
@@ -1771,6 +1921,20 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                             double X_m = se_covariate_data[iobs][m];
                                             // ∂²L/∂(se_quadratic_j)∂β_m = (∂²L/∂f_k²) * f_j² * X_m
                                             hess_this_type[se_quad_idx * nparam + se_cov_idx] += d2L_dfkdfk * fac_val[j] * fac_val[j] * X_m;
+                                        }
+                                    }
+                                }
+
+                                // SE_INTERACTIONS / SE_FULL: SE interaction × SE covariate cross-terms
+                                // ∂²L/∂(se_inter_ab)∂β_m = (∂²L/∂f_k²) * (f_a f_b) * X_m
+                                if (HasSEInteraction()) {
+                                    for (int p = 0; p < n_se_interaction; p++) {
+                                        int se_inter_idx = GetSEInteractionIndex(p);
+                                        double fab = fac_val[se_inter_pair_a[p]] * fac_val[se_inter_pair_b[p]];
+                                        for (int m = 0; m < n_se_covariates; m++) {
+                                            int se_cov_idx = se_covariate_param_start + m;
+                                            double X_m = se_covariate_data[iobs][m];
+                                            hess_this_type[se_inter_idx * nparam + se_cov_idx] += d2L_dfkdfk * fab * X_m;
                                         }
                                     }
                                 }
@@ -1824,11 +1988,21 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                     hess_this_type[se_lin_idx * nparam + param_idx] += d2L_dfk_dparam * fac_val[j];
                                 }
 
-                                // SE_QUADRATIC: SE quadratic × model param
-                                if (factor_structure == FactorStructure::SE_QUADRATIC) {
+                                // SE_QUADRATIC / SE_FULL: SE quadratic × model param
+                                if (HasSEQuadratic()) {
                                     for (int j = 0; j < n_input_factors; j++) {
                                         int se_quad_idx = GetSEQuadraticIndex(j);
                                         hess_this_type[se_quad_idx * nparam + param_idx] += d2L_dfk_dparam * fac_val[j] * fac_val[j];
+                                    }
+                                }
+
+                                // SE_INTERACTIONS / SE_FULL: SE interaction × model param
+                                // ∂²L/∂(se_inter_ab)∂(model_param) = (∂²L/∂f_k∂param) * (f_a f_b)
+                                if (HasSEInteraction()) {
+                                    for (int p = 0; p < n_se_interaction; p++) {
+                                        int se_inter_idx = GetSEInteractionIndex(p);
+                                        hess_this_type[se_inter_idx * nparam + param_idx] +=
+                                            d2L_dfk_dparam * fac_val[se_inter_pair_a[p]] * fac_val[se_inter_pair_b[p]];
                                     }
                                 }
 

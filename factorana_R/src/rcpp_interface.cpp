@@ -71,7 +71,13 @@ static inline void apply_fix_factor_param(
     if (fp_names.size() != fp.size()) return;  // unnamed: nothing to do
 
     bool is_se = (fac_struct == FactorStructure::SE_LINEAR ||
-                  fac_struct == FactorStructure::SE_QUADRATIC);
+                  fac_struct == FactorStructure::SE_QUADRATIC ||
+                  fac_struct == FactorStructure::SE_INTERACTIONS ||
+                  fac_struct == FactorStructure::SE_FULL);
+    bool has_quad = (fac_struct == FactorStructure::SE_QUADRATIC ||
+                     fac_struct == FactorStructure::SE_FULL);
+    bool has_inter = (fac_struct == FactorStructure::SE_INTERACTIONS ||
+                      fac_struct == FactorStructure::SE_FULL);
     int n_var_factors = is_se ? (n_fac - 1) : n_fac;
 
     // Build the same name -> index map used by the un-fix loop.
@@ -109,9 +115,16 @@ static inline void apply_fix_factor_param(
         for (int k = 0; k < n_var_factors; k++) {
             name_to_idx["se_linear_" + std::to_string(k+1)] = idx++;
         }
-        if (fac_struct == FactorStructure::SE_QUADRATIC) {
+        if (has_quad) {
             for (int k = 0; k < n_var_factors; k++) {
                 name_to_idx["se_quadratic_" + std::to_string(k+1)] = idx++;
+            }
+        }
+        if (has_inter) {
+            for (int a = 0; a < n_var_factors; a++) {
+                for (int b = a + 1; b < n_var_factors; b++) {
+                    name_to_idx["se_interaction_" + std::to_string(a+1) + "_" + std::to_string(b+1)] = idx++;
+                }
             }
         }
         if (n_types > 1) {
@@ -208,6 +221,10 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             fac_struct = FactorStructure::SE_LINEAR;
         } else if (fac_struct_str == "SE_quadratic") {
             fac_struct = FactorStructure::SE_QUADRATIC;
+        } else if (fac_struct_str == "SE_interactions") {
+            fac_struct = FactorStructure::SE_INTERACTIONS;
+        } else if (fac_struct_str == "SE_full") {
+            fac_struct = FactorStructure::SE_FULL;
         } else if (fac_struct_str == "independent") {
             fac_struct = FactorStructure::INDEPENDENT;
         }
@@ -663,32 +680,34 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
     // - (nmix-1) * n_factors_for_mixture mixture means (for non-reference mixtures)
     // - (nmix-1) log-weights (for non-reference mixtures)
     // - SE params (if SE model)
+    bool fac_is_se = (fac_struct == FactorStructure::SE_LINEAR ||
+                      fac_struct == FactorStructure::SE_QUADRATIC ||
+                      fac_struct == FactorStructure::SE_INTERACTIONS ||
+                      fac_struct == FactorStructure::SE_FULL);
+    bool fac_has_quad = (fac_struct == FactorStructure::SE_QUADRATIC ||
+                         fac_struct == FactorStructure::SE_FULL);
+    bool fac_has_inter = (fac_struct == FactorStructure::SE_INTERACTIONS ||
+                          fac_struct == FactorStructure::SE_FULL);
     int n_factors_for_mixture = n_fac;  // Default: all factors have mixture
-    if (fac_struct == FactorStructure::SE_LINEAR || fac_struct == FactorStructure::SE_QUADRATIC) {
+    if (fac_is_se) {
         n_factors_for_mixture = n_fac - 1;  // Only input factors for SE models
     }
 
-    if (fac_struct == FactorStructure::SE_LINEAR) {
-        // SE_linear: (n_fac - 1) input factor variances + intercept + (n_fac-1) linear + [(n_types-1) type intercepts] + residual var
+    if (fac_is_se) {
+        // SE models: (n_fac-1) input factor variances + intercept + (n_fac-1) linear
+        //   [+ (n_fac-1) quadratic] [+ choose(n_fac-1,2) interaction]
+        //   + [(n_types-1) type intercepts] + residual var
         int n_input_factors = n_fac - 1;
+        int n_se_inter = fac_has_inter ? (n_input_factors * (n_input_factors - 1)) / 2 : 0;
         param_offset = n_input_factors * n_mixtures;  // Input factor variances (per mixture)
         param_offset += (n_mixtures - 1) * n_input_factors;  // Mixture means
         param_offset += (n_mixtures - 1);  // Mixture log-weights
         param_offset += 1;  // SE intercept
         param_offset += n_input_factors;  // SE linear coefficients
-        if (n_types > 1) {
-            param_offset += (n_types - 1);  // Type-specific SE intercepts
+        if (fac_has_quad) {
+            param_offset += n_input_factors;  // SE quadratic coefficients
         }
-        param_offset += 1;  // SE residual variance
-    } else if (fac_struct == FactorStructure::SE_QUADRATIC) {
-        // SE_quadratic: (n_fac - 1) input factor variances + intercept + (n_fac-1) linear + (n_fac-1) quadratic + [(n_types-1) type intercepts] + residual var
-        int n_input_factors = n_fac - 1;
-        param_offset = n_input_factors * n_mixtures;  // Input factor variances (per mixture)
-        param_offset += (n_mixtures - 1) * n_input_factors;  // Mixture means
-        param_offset += (n_mixtures - 1);  // Mixture log-weights
-        param_offset += 1;  // SE intercept
-        param_offset += n_input_factors;  // SE linear coefficients
-        param_offset += n_input_factors;  // SE quadratic coefficients
+        param_offset += n_se_inter;  // SE interaction coefficients
         if (n_types > 1) {
             param_offset += (n_types - 1);  // Type-specific SE intercepts
         }
@@ -801,7 +820,13 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
                     std::map<std::string, int> fac_name_idx;
                     int idx = 0;
                     bool is_se = (fac_struct == FactorStructure::SE_LINEAR ||
-                                  fac_struct == FactorStructure::SE_QUADRATIC);
+                                  fac_struct == FactorStructure::SE_QUADRATIC ||
+                                  fac_struct == FactorStructure::SE_INTERACTIONS ||
+                                  fac_struct == FactorStructure::SE_FULL);
+                    bool has_quad = (fac_struct == FactorStructure::SE_QUADRATIC ||
+                                     fac_struct == FactorStructure::SE_FULL);
+                    bool has_inter = (fac_struct == FactorStructure::SE_INTERACTIONS ||
+                                      fac_struct == FactorStructure::SE_FULL);
                     int n_var_factors = is_se ? (n_fac - 1) : n_fac;
 
                     // Block 1: factor variances (per mixture)
@@ -832,9 +857,14 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
                         fac_name_idx["se_intercept"] = idx++;
                         for (int k = 0; k < n_var_factors; k++)
                             fac_name_idx["se_linear_" + std::to_string(k+1)] = idx++;
-                        if (fac_struct == FactorStructure::SE_QUADRATIC) {
+                        if (has_quad) {
                             for (int k = 0; k < n_var_factors; k++)
                                 fac_name_idx["se_quadratic_" + std::to_string(k+1)] = idx++;
+                        }
+                        if (has_inter) {
+                            for (int a = 0; a < n_var_factors; a++)
+                                for (int b = a + 1; b < n_var_factors; b++)
+                                    fac_name_idx["se_interaction_" + std::to_string(a+1) + "_" + std::to_string(b+1)] = idx++;
                         }
                         if (n_types > 1) {
                             for (int t = 2; t <= n_types; t++)
@@ -1117,8 +1147,12 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         std::map<std::string, int> param_name_to_idx;
 
         // Determine n_factors_for_mixture for parameter naming
+        bool fac_is_se_eq = (fac_struct == FactorStructure::SE_LINEAR ||
+                             fac_struct == FactorStructure::SE_QUADRATIC ||
+                             fac_struct == FactorStructure::SE_INTERACTIONS ||
+                             fac_struct == FactorStructure::SE_FULL);
         int n_factors_for_mixture_eq = n_fac;
-        if (fac_struct == FactorStructure::SE_LINEAR || fac_struct == FactorStructure::SE_QUADRATIC) {
+        if (fac_is_se_eq) {
             n_factors_for_mixture_eq = n_fac - 1;
         }
 
@@ -1141,8 +1175,11 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         // constraints on loadings/sigmas/thresholds got mapped to factor-level
         // slots whenever factor_covariates or se_covariates were used.
         int idx = 0;
-        bool is_se_eq = (fac_struct == FactorStructure::SE_LINEAR ||
-                         fac_struct == FactorStructure::SE_QUADRATIC);
+        bool is_se_eq = fac_is_se_eq;
+        bool has_quad_eq = (fac_struct == FactorStructure::SE_QUADRATIC ||
+                            fac_struct == FactorStructure::SE_FULL);
+        bool has_inter_eq = (fac_struct == FactorStructure::SE_INTERACTIONS ||
+                             fac_struct == FactorStructure::SE_FULL);
         int n_var_factors_eq = is_se_eq ? (n_fac - 1) : n_fac;
 
         // Block 1: factor variances (per mixture) + correlation params
@@ -1182,9 +1219,16 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             for (int k = 0; k < n_var_factors_eq; k++) {
                 param_name_to_idx["se_linear_" + std::to_string(k + 1)] = idx++;
             }
-            if (fac_struct == FactorStructure::SE_QUADRATIC) {
+            if (has_quad_eq) {
                 for (int k = 0; k < n_var_factors_eq; k++) {
                     param_name_to_idx["se_quadratic_" + std::to_string(k + 1)] = idx++;
+                }
+            }
+            if (has_inter_eq) {
+                for (int a = 0; a < n_var_factors_eq; a++) {
+                    for (int b = a + 1; b < n_var_factors_eq; b++) {
+                        param_name_to_idx["se_interaction_" + std::to_string(a + 1) + "_" + std::to_string(b + 1)] = idx++;
+                    }
                 }
             }
             if (n_types > 1) {

@@ -136,7 +136,8 @@ fix_factor_param <- function(factor_model, name, value = NULL) {
 
     # Auto-fixed outcome-factor type loading: idempotent at 0, error otherwise.
     fs <- factor_model$factor_structure
-    if (!is.null(fs) && fs %in% c("SE_linear", "SE_quadratic") &&
+    if (!is.null(fs) &&
+        fs %in% c("SE_linear", "SE_quadratic", "SE_interactions", "SE_full") &&
         factor_model$n_types > 1L) {
       m <- regmatches(nm, regexec("^type_([0-9]+)_loading_([0-9]+)$", nm))[[1]]
       if (length(m) >= 3) {
@@ -186,7 +187,9 @@ fix_factor_param <- function(factor_model, name, value = NULL) {
   n_types <- if (is.null(fm$n_types)) 1L else as.integer(fm$n_types)
   n_mixtures <- if (is.null(fm$n_mixtures)) 1L else as.integer(fm$n_mixtures)
   fs <- if (is.null(fm$factor_structure)) "independent" else fm$factor_structure
-  is_se <- fs %in% c("SE_linear", "SE_quadratic")
+  is_se <- fs %in% c("SE_linear", "SE_quadratic", "SE_interactions", "SE_full")
+  has_quad <- fs %in% c("SE_quadratic", "SE_full")
+  has_inter <- fs %in% c("SE_interactions", "SE_full")
   n_var_factors <- if (is_se) (n_factors - 1L) else n_factors
 
   out <- character(0)
@@ -223,9 +226,16 @@ fix_factor_param <- function(factor_model, name, value = NULL) {
     for (k in seq_len(n_var_factors)) {
       out <- c(out, sprintf("se_linear_%d", k))
     }
-    if (fs == "SE_quadratic") {
+    if (has_quad) {
       for (k in seq_len(n_var_factors)) {
         out <- c(out, sprintf("se_quadratic_%d", k))
+      }
+    }
+    if (has_inter && n_var_factors >= 2L) {
+      for (a in seq_len(n_var_factors - 1L)) {
+        for (b in (a + 1L):n_var_factors) {
+          out <- c(out, sprintf("se_interaction_%d_%d", a, b))
+        }
       }
     }
     if (n_types > 1L) {

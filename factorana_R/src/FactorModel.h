@@ -10,10 +10,12 @@
 
 // Factor structure types
 enum class FactorStructure {
-    INDEPENDENT,   // Factors are independent
-    CORRELATION,   // Correlated factors via Cholesky (2 factors only)
-    SE_LINEAR,     // Structural equation: f_k = alpha + alpha_1*f_1 + ... + epsilon
-    SE_QUADRATIC   // SE with quadratic terms: f_k = alpha + alpha_1*f_1 + alpha_q1*f_1^2 + ... + epsilon
+    INDEPENDENT,      // Factors are independent
+    CORRELATION,      // Correlated factors via Cholesky (2 factors only)
+    SE_LINEAR,        // Structural equation: f_k = alpha + alpha_1*f_1 + ... + epsilon
+    SE_QUADRATIC,     // SE with quadratic terms: f_k = alpha + alpha_1*f_1 + alpha_q1*f_1^2 + ... + epsilon
+    SE_INTERACTIONS,  // SE with linear + cross-product terms: f_k = alpha + sum_j alpha_j f_j + sum_{a<b} alpha_ab f_a f_b + epsilon
+    SE_FULL           // SE with linear + quadratic + cross-product terms
 };
 
 class FactorModel {
@@ -302,22 +304,46 @@ private:
     // inserted AFTER the linear (and quadratic) coefficients and BEFORE se_residual_var:
     //   se_intercept_type_{t} at GetSETypeInterceptIndex(t - 2) for t = 2..ntyp
     //   se_residual_var shifts by (ntyp - 1) slots to make room.
+    // Structure predicates and SE term counts.
+    // SE parameter block layout (Option A ordering):
+    //   se_intercept | se_linear[0..n_input-1] | [se_quadratic[0..n_input-1]]
+    //   | [se_interaction[0..n_pairs-1]] | se_type_intercepts | se_residual_var
+    // where quadratic terms are present for SE_QUADRATIC / SE_FULL and
+    // cross-product (interaction) terms are present for SE_INTERACTIONS / SE_FULL.
+    // n_pairs = n_input_factors * (n_input_factors - 1) / 2.
+    bool IsSEStructure() const {
+        return factor_structure == FactorStructure::SE_LINEAR ||
+               factor_structure == FactorStructure::SE_QUADRATIC ||
+               factor_structure == FactorStructure::SE_INTERACTIONS ||
+               factor_structure == FactorStructure::SE_FULL;
+    }
+    bool HasSEQuadratic() const {
+        return factor_structure == FactorStructure::SE_QUADRATIC ||
+               factor_structure == FactorStructure::SE_FULL;
+    }
+    bool HasSEInteraction() const {
+        return factor_structure == FactorStructure::SE_INTERACTIONS ||
+               factor_structure == FactorStructure::SE_FULL;
+    }
+    int NumSEQuadratic() const { return HasSEQuadratic() ? n_input_factors : 0; }
+    int NumSEInteraction() const {
+        return HasSEInteraction() ? (n_input_factors * (n_input_factors - 1)) / 2 : 0;
+    }
+
     int GetSEInterceptIndex() const { return se_param_start; }
     int GetSELinearIndex(int j) const { return se_param_start + 1 + j; }
     int GetSEQuadraticIndex(int j) const { return se_param_start + 1 + n_input_factors + j; }
+    // pair: 0-based index into the upper-triangle enumeration (0,1),(0,2),...,(1,2),...
+    int GetSEInteractionIndex(int pair) const {
+        return se_param_start + 1 + n_input_factors + NumSEQuadratic() + pair;
+    }
     int GetSETypeInterceptIndex(int ityp_offset) const {
         // ityp_offset: 0-based offset among non-reference types (0 = type 2, 1 = type 3, ...)
-        if (factor_structure == FactorStructure::SE_QUADRATIC) {
-            return se_param_start + 1 + 2 * n_input_factors + ityp_offset;
-        } else {
-            return se_param_start + 1 + n_input_factors + ityp_offset;
-        }
+        return se_param_start + 1 + n_input_factors + NumSEQuadratic() + NumSEInteraction() + ityp_offset;
     }
     int GetSEResidualVarIndex() const {
-        int base = (factor_structure == FactorStructure::SE_QUADRATIC)
-            ? (se_param_start + 1 + 2 * n_input_factors)
-            : (se_param_start + 1 + n_input_factors);
-        return base + nse_type_intercepts;
+        return se_param_start + 1 + n_input_factors + NumSEQuadratic() + NumSEInteraction()
+               + nse_type_intercepts;
     }
 };
 

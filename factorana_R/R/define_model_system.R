@@ -160,7 +160,7 @@ define_model_system <- function(components, factor, previous_stage = NULL, weigh
     # For SE_linear/SE_quadratic Stage 2: allow different factor structures
     # as long as n_factors matches. This enables 2-stage estimation where
     # Stage 1 uses independent factors and Stage 2 uses SE structure.
-    se_structures <- c("SE_linear", "SE_quadratic")
+    se_structures <- c("SE_linear", "SE_quadratic", "SE_interactions", "SE_full")
     allow_different_structure <- FALSE
 
     if (!identical(prev_ms$factor, factor)) {
@@ -174,7 +174,8 @@ define_model_system <- function(components, factor, previous_stage = NULL, weigh
         message("  Factor distribution parameters will use Stage 2 structure")
       } else {
         stop("Factor model in previous_stage must be identical to current factor model, ",
-             "unless Stage 2 uses SE_linear or SE_quadratic with matching n_factors")
+             "unless Stage 2 uses an SE structure (SE_linear, SE_quadratic, ",
+             "SE_interactions, SE_full) with matching n_factors")
       }
     }
 

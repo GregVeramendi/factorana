@@ -70,13 +70,20 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
       n_factors <- model_system$factor$n_factors
       factor_structure <- model_system$factor$factor_structure
 
-      # Start with factor structure parameters for Stage 2
-      if (factor_structure == "SE_linear") {
+      # Start with factor structure parameters for Stage 2.
+      # All SE structures share the same parameter block, ordered to match the
+      # C++ FactorModel layout (see GetSE*Index() in FactorModel.h):
+      #   factor_var_* | se_intercept | se_linear_* | [se_quadratic_*]
+      #   | [se_interaction_a_b] | [se_intercept_type_t] | se_residual_var
+      .is_se <- factor_structure %in% c("SE_linear", "SE_quadratic",
+                                        "SE_interactions", "SE_full")
+      .has_quad <- factor_structure %in% c("SE_quadratic", "SE_full")
+      .has_inter <- factor_structure %in% c("SE_interactions", "SE_full")
+      if (.is_se) {
         # Factor variances for input factors only (n_factors - 1)
         init_params <- rep(1.0, n_factors - 1)
         param_names <- paste0("factor_var_", seq_len(n_factors - 1))
 
-        # SE parameters
         n_input_factors <- n_factors - 1
         init_params <- c(init_params, 0.0)  # se_intercept
         param_names <- c(param_names, "se_intercept")
@@ -86,8 +93,24 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
           param_names <- c(param_names, paste0("se_linear_", j))
         }
 
+        if (.has_quad) {
+          for (j in seq_len(n_input_factors)) {
+            init_params <- c(init_params, 0.0)  # se_quadratic_j
+            param_names <- c(param_names, paste0("se_quadratic_", j))
+          }
+        }
+
+        if (.has_inter && n_input_factors >= 2L) {
+          for (a in seq_len(n_input_factors - 1L)) {
+            for (b in (a + 1L):n_input_factors) {
+              init_params <- c(init_params, 0.0)  # se_interaction_a_b
+              param_names <- c(param_names, paste0("se_interaction_", a, "_", b))
+            }
+          }
+        }
+
         # Type-specific SE intercepts (only when n_types > 1)
-        # Order must match C++: between linear coefs and se_residual_var
+        # Order must match C++: after the interaction block, before se_residual_var
         if (n_types > 1L) {
           for (t in 2:n_types) {
             init_params <- c(init_params, 0.0)
@@ -99,39 +122,9 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
         param_names <- c(param_names, "se_residual_var")
 
         if (verbose) {
-          message(sprintf("SE_linear structure: f_%d = intercept + linear_coefs * f_1..%d + epsilon",
-                          n_factors, n_input_factors))
+          message(sprintf("%s structure: f_%d = intercept + structural terms over f_1..%d + epsilon",
+                          factor_structure, n_factors, n_input_factors))
         }
-      } else if (factor_structure == "SE_quadratic") {
-        # Similar handling for SE_quadratic
-        init_params <- rep(1.0, n_factors - 1)
-        param_names <- paste0("factor_var_", seq_len(n_factors - 1))
-
-        n_input_factors <- n_factors - 1
-        init_params <- c(init_params, 0.0)  # se_intercept
-        param_names <- c(param_names, "se_intercept")
-
-        for (j in seq_len(n_input_factors)) {
-          init_params <- c(init_params, 0.5)  # se_linear_j
-          param_names <- c(param_names, paste0("se_linear_", j))
-        }
-
-        for (j in seq_len(n_input_factors)) {
-          init_params <- c(init_params, 0.0)  # se_quadratic_j
-          param_names <- c(param_names, paste0("se_quadratic_", j))
-        }
-
-        # Type-specific SE intercepts (only when n_types > 1)
-        # Order must match C++: between quadratic coefs and se_residual_var
-        if (n_types > 1L) {
-          for (t in 2:n_types) {
-            init_params <- c(init_params, 0.0)
-            param_names <- c(param_names, paste0("se_intercept_type_", t))
-          }
-        }
-
-        init_params <- c(init_params, 1.0)  # se_residual_var
-        param_names <- c(param_names, "se_residual_var")
       }
 
       # Parameter-ordering invariant (see build_parameter_metadata() comment
@@ -314,15 +307,18 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
     factor_structure <- model_system$factor$factor_structure
     if (is.null(factor_structure)) factor_structure <- "independent"
 
-    if (factor_structure == "SE_linear") {
-      # SE_linear: f_k = alpha + alpha_1*f_1 + ... + epsilon
-      # For SE_linear, only input factors (n_factors - 1) have variance parameters
-      # Mixtures apply to input factors; epsilon is always single normal
+    .is_se <- factor_structure %in% c("SE_linear", "SE_quadratic",
+                                      "SE_interactions", "SE_full")
+    .has_quad <- factor_structure %in% c("SE_quadratic", "SE_full")
+    .has_inter <- factor_structure %in% c("SE_interactions", "SE_full")
+    if (.is_se) {
+      # SE models: f_k = alpha + sum_j alpha_j f_j [+ sum_j alpha_qj f_j^2]
+      #                  [+ sum_{a<b} alpha_ab f_a f_b] + epsilon
+      # Only input factors (n_factors - 1) have variance parameters.
+      # Mixtures apply to input factors; epsilon is always single normal.
       n_input_factors <- n_factors - 1
 
-      # For SE models, we need to rebuild init_params/param_names to only include input factors
-      # Current state: nmix * n_factors variances + (nmix-1)*n_factors means + (nmix-1) log-weights
-      # Target state: nmix * n_input_factors variances + (nmix-1)*n_input_factors means + (nmix-1) log-weights + SE params
+      # Rebuild init_params/param_names to only include input factors.
       init_params_new <- numeric(0)
       param_names_new <- character(0)
 
@@ -358,95 +354,34 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
       # Update factor_variance_fixed (only applies to input factors)
       factor_variance_fixed <- factor_variance_fixed[1:n_input_factors]
 
-      # SE parameters: intercept, linear coefficients, residual variance
-      # SE intercept (initialize to 0)
-      init_params <- c(init_params, 0.0)
+      # SE parameters, ordered to match the C++ FactorModel layout:
+      #   se_intercept | se_linear_* | [se_quadratic_*] | [se_interaction_a_b]
+      #   | [se_intercept_type_t] | se_residual_var
+      init_params <- c(init_params, 0.0)  # se_intercept
       param_names <- c(param_names, "se_intercept")
 
-      # SE linear coefficients (initialize to reasonable values)
       for (j in seq_len(n_input_factors)) {
-        init_params <- c(init_params, 0.5)
+        init_params <- c(init_params, 0.5)  # se_linear_j
         param_names <- c(param_names, paste0("se_linear_", j))
       }
 
-      # Type-specific SE intercepts (only when n_types > 1)
-      # Order must match C++: between linear coefs and se_residual_var
-      if (n_types > 1L) {
-        for (t in 2:n_types) {
-          init_params <- c(init_params, 0.0)
-          param_names <- c(param_names, paste0("se_intercept_type_", t))
+      if (.has_quad) {
+        for (j in seq_len(n_input_factors)) {
+          init_params <- c(init_params, 0.0)  # se_quadratic_j
+          param_names <- c(param_names, paste0("se_quadratic_", j))
         }
       }
 
-      # SE residual variance (initialize to 1.0)
-      init_params <- c(init_params, 1.0)
-      param_names <- c(param_names, "se_residual_var")
-
-      if (verbose) {
-        message(sprintf("SE_linear structure: f_%d = intercept + linear_coefs * f_1..%d + epsilon",
-                        n_factors, n_input_factors))
-      }
-
-    } else if (factor_structure == "SE_quadratic") {
-      # SE_quadratic: f_k = alpha + alpha_1*f_1 + alpha_q1*f_1^2 + ... + epsilon
-      # Similar to SE_linear but with quadratic terms added
-      n_input_factors <- n_factors - 1
-
-      # Rebuild init_params/param_names for SE_quadratic (same as SE_linear)
-      init_params_new <- numeric(0)
-      param_names_new <- character(0)
-
-      # Input factor variances (one per input factor per mixture)
-      for (imix in seq_len(n_mixtures)) {
-        for (ifac in seq_len(n_input_factors)) {
-          init_params_new <- c(init_params_new, 1.0)
-          param_names_new <- c(param_names_new,
-                               if (n_mixtures == 1) paste0("factor_var_", ifac)
-                               else paste0("mix", imix, "_factor_var_", ifac))
-        }
-      }
-
-      # Input factor means (for non-reference mixtures)
-      if (n_mixtures > 1) {
-        for (imix in seq_len(n_mixtures - 1)) {
-          for (ifac in seq_len(n_input_factors)) {
-            init_mean <- if (imix == 1) 0.5 else if (imix == 2) -0.5 else 0.0
-            init_params_new <- c(init_params_new, init_mean)
-            param_names_new <- c(param_names_new, paste0("mix", imix, "_factor_mean_", ifac))
+      if (.has_inter && n_input_factors >= 2L) {
+        for (a in seq_len(n_input_factors - 1L)) {
+          for (b in (a + 1L):n_input_factors) {
+            init_params <- c(init_params, 0.0)  # se_interaction_a_b
+            param_names <- c(param_names, paste0("se_interaction_", a, "_", b))
           }
         }
-        # Mixture log-weights
-        for (imix in seq_len(n_mixtures - 1)) {
-          init_params_new <- c(init_params_new, 0.0)
-          param_names_new <- c(param_names_new, paste0("mix", imix, "_logweight"))
-        }
-      }
-
-      init_params <- init_params_new
-      param_names <- param_names_new
-
-      # Update factor_variance_fixed (only applies to input factors)
-      factor_variance_fixed <- factor_variance_fixed[1:n_input_factors]
-
-      # SE parameters: intercept, linear coefficients, quadratic coefficients, residual variance
-      # SE intercept (initialize to 0)
-      init_params <- c(init_params, 0.0)
-      param_names <- c(param_names, "se_intercept")
-
-      # SE linear coefficients (initialize to reasonable values)
-      for (j in seq_len(n_input_factors)) {
-        init_params <- c(init_params, 0.5)
-        param_names <- c(param_names, paste0("se_linear_", j))
-      }
-
-      # SE quadratic coefficients (initialize to 0 - neutral starting point)
-      for (j in seq_len(n_input_factors)) {
-        init_params <- c(init_params, 0.0)
-        param_names <- c(param_names, paste0("se_quadratic_", j))
       }
 
       # Type-specific SE intercepts (only when n_types > 1)
-      # Order must match C++: between quadratic coefs and se_residual_var
       if (n_types > 1L) {
         for (t in 2:n_types) {
           init_params <- c(init_params, 0.0)
@@ -459,8 +394,8 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
       param_names <- c(param_names, "se_residual_var")
 
       if (verbose) {
-        message(sprintf("SE_quadratic structure: f_%d = intercept + linear_coefs * f_1..%d + quadratic_coefs * f_1^2..%d + epsilon",
-                        n_factors, n_input_factors, n_input_factors))
+        message(sprintf("%s structure: f_%d = intercept + structural terms over f_1..%d + epsilon",
+                        factor_structure, n_factors, n_input_factors))
       }
 
     } else if (factor_structure == "correlation" && n_factors == 2) {
@@ -488,7 +423,8 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
     # (via se_intercept_type_{t}), so the type probability model is needed even when
     # no measurement component sets use_types = TRUE.
     .fs_for_types <- model_system$factor$factor_structure
-    if (!is.null(.fs_for_types) && .fs_for_types %in% c("SE_linear", "SE_quadratic") &&
+    if (!is.null(.fs_for_types) &&
+        .fs_for_types %in% c("SE_linear", "SE_quadratic", "SE_interactions", "SE_full") &&
         n_types > 1L) {
       any_uses_types <- TRUE
     }
@@ -517,7 +453,7 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
     if (!is.null(factor_covariates) && length(factor_covariates) > 0) {
       # Determine which factors get mean covariates
       # For SE models, only input factors get covariates (outcome factor mean is from SE)
-      if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
+      if (factor_structure %in% c("SE_linear", "SE_quadratic", "SE_interactions", "SE_full")) {
         n_factors_with_mean <- n_factors - 1
       } else {
         n_factors_with_mean <- n_factors

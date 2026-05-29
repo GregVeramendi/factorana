@@ -130,14 +130,20 @@ build_parameter_metadata <- function(model_system) {
   factor_structure <- model_system$factor$factor_structure
   if (is.null(factor_structure)) factor_structure <- "independent"
 
+  # Structural-equation predicates (linear / quadratic / interactions / full)
+  .is_se <- factor_structure %in% c("SE_linear", "SE_quadratic",
+                                    "SE_interactions", "SE_full")
+  .has_quad <- factor_structure %in% c("SE_quadratic", "SE_full")
+  .has_inter <- factor_structure %in% c("SE_interactions", "SE_full")
+
   # Determine number of factors with variance parameters
-  if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
+  if (.is_se) {
     n_factors_for_mixture <- n_factors - 1L  # Only input factors
   } else {
     n_factors_for_mixture <- n_factors
   }
 
-  if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
+  if (.is_se) {
     # SE models: only first (n_factors - 1) have variance parameters
     n_input_factors <- n_factors - 1
     for (imix in seq_len(n_mixtures)) {
@@ -181,12 +187,25 @@ build_parameter_metadata <- function(model_system) {
       component_id <- c(component_id, 0)
     }
 
-    # SE quadratic coefficients (for SE_quadratic only)
-    if (factor_structure == "SE_quadratic") {
+    # SE quadratic coefficients (for SE_quadratic / SE_full)
+    if (.has_quad) {
       for (j in seq_len(n_input_factors)) {
         param_names <- c(param_names, sprintf("se_quadratic_%d", j))
         param_types <- c(param_types, "se_quadratic")
         component_id <- c(component_id, 0)
+      }
+    }
+
+    # SE interaction (cross-product) coefficients (for SE_interactions / SE_full)
+    # Enumerated over the upper triangle of input factors: (1,2),(1,3),...,(2,3),...
+    # to match the C++ FactorModel layout and the name se_interaction_<a>_<b>.
+    if (.has_inter && n_input_factors >= 2L) {
+      for (a in seq_len(n_input_factors - 1L)) {
+        for (b in (a + 1L):n_input_factors) {
+          param_names <- c(param_names, sprintf("se_interaction_%d_%d", a, b))
+          param_types <- c(param_types, "se_interaction")
+          component_id <- c(component_id, 0)
+        }
       }
     }
 
@@ -270,7 +289,8 @@ build_parameter_metadata <- function(model_system) {
   # SE_linear / SE_quadratic with ntyp > 1 implies types at the structural level
   # (se_intercept_type_{t}), so the type probability model is needed here too.
   .fs_opt <- model_system$factor$factor_structure
-  if (!is.null(.fs_opt) && .fs_opt %in% c("SE_linear", "SE_quadratic") &&
+  if (!is.null(.fs_opt) &&
+      .fs_opt %in% c("SE_linear", "SE_quadratic", "SE_interactions", "SE_full") &&
       !is.null(n_types) && n_types > 1L) {
     any_uses_types <- TRUE
   }
@@ -295,7 +315,7 @@ build_parameter_metadata <- function(model_system) {
   factor_covariates <- model_system$factor$factor_covariates
   if (!is.null(factor_covariates) && length(factor_covariates) > 0) {
     # Determine how many factors get mean covariates
-    if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
+    if (.is_se) {
       n_factors_with_mean <- n_factors - 1L  # Only input factors
     } else {
       n_factors_with_mean <- n_factors

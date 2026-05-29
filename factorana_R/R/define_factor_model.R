@@ -10,8 +10,13 @@
 #' @param factor_structure Character. Structure of factor dependencies. Options:
 #'   - `"independent"` (default): Factors are independent
 #'   - `"correlation"`: Correlated factors via Cholesky decomposition (2 factors only)
-#'   - `"SE_linear"`: Structural equation f_k = alpha + alpha_1*f_1 + ... + epsilon
-#'   - `"SE_quadratic"`: Adds quadratic terms: f_k = alpha + alpha_1*f_1 + alpha_q1*f_1^2 + ... + epsilon
+#'   - `"SE_linear"`: Structural equation `f_k = alpha + alpha_1 f_1 + ... + epsilon`
+#'   - `"SE_quadratic"`: Adds quadratic terms: `f_k = alpha + alpha_1 f_1 + alpha_q1 f_1^2 + ... + epsilon`
+#'   - `"SE_interactions"`: Adds cross-product terms `alpha_ab f_a f_b` for input factor pairs a < b
+#'   - `"SE_full"`: Adds both quadratic and cross-product terms.
+#'   Cross-product terms require at least two input factors (n_factors >= 3); with a
+#'   single input factor `"SE_interactions"` downgrades to `"SE_linear"` and `"SE_full"`
+#'   downgrades to `"SE_quadratic"`.
 #' @param n_mixtures Integer. Number of discrete mixtures (default = 1, allowed: 1-3)
 #' @param factor_covariates Character vector. Names of covariates that shift factor means.
 #'   When specified, the factor distribution becomes f_i ~ N((X_i - mean(X)) * gamma, Sigma)
@@ -21,12 +26,13 @@
 #'   **Note:** All covariates are automatically demeaned internally to ensure the overall
 #'   factor mean is zero (required for identification). Including an intercept/constant
 #'   has no effect since it becomes zero after demeaning.
-#'   For SE_linear/SE_quadratic structures, covariates only affect input factor means
+#'   For SE structural-equation structures, covariates only affect input factor means
 #'   (not the outcome factor which is determined by the structural equation).
 #' @param se_covariates Character vector. Names of covariates that directly affect the
-#'   outcome factor in SE_linear/SE_quadratic models. When specified, the structural
+#'   outcome factor in SE models. When specified, the structural
 #'   equation becomes f_k = intercept + sum(alpha_j * f_j) + sum(beta_m * X_m) + epsilon.
-#'   Only valid for factor_structure = "SE_linear" or "SE_quadratic".
+#'   Valid for any SE structural-equation factor structure (SE_linear, SE_quadratic,
+#'   SE_interactions, SE_full).
 #'   All covariates are automatically demeaned internally for identification.
 #'
 #' @return An object of class "factor_model"
@@ -52,17 +58,35 @@ define_factor_model <- function(n_factors,
   if (!n_mixtures %in% 1:3) stop("n_mixtures should be between 1-3") #currently this is the case, might change later
 
   # Validate factor_structure
-  valid_structures <- c("independent", "correlation", "SE_linear", "SE_quadratic")
+  valid_structures <- c("independent", "correlation", "SE_linear", "SE_quadratic",
+                        "SE_interactions", "SE_full")
   if (!factor_structure %in% valid_structures) {
     stop("factor_structure must be one of: ", paste(valid_structures, collapse = ", "))
   }
+
+  # Cross-product (interaction) terms in the structural equation require at least
+  # two input factors (n_factors >= 3). With a single input factor there are no
+  # distinct pairs to interact, so SE_interactions collapses to SE_linear and
+  # SE_full collapses to SE_quadratic. Silently downgrade with a one-line message,
+  # mirroring define_model_component()'s factor_spec downgrade behavior.
+  if (factor_structure %in% c("SE_interactions", "SE_full") && (n_factors - 1L) < 2L) {
+    downgraded <- if (factor_structure == "SE_interactions") "SE_linear" else "SE_quadratic"
+    message(sprintf(
+      "factor_structure '%s' needs at least 2 input factors (n_factors >= 3); downgrading to '%s'.",
+      factor_structure, downgraded))
+    factor_structure <- downgraded
+  }
+
+  # Convenience predicate: any structural-equation structure
+  is_se_structure <- factor_structure %in% c("SE_linear", "SE_quadratic",
+                                             "SE_interactions", "SE_full")
 
   # Validate factor_structure requirements
   if (factor_structure == "correlation" && n_factors > 2) {
     stop("Correlated factor models are currently only supported for n_factors = 2. ",
          "Models with 3+ correlated factors are not yet implemented.")
   }
-  if (factor_structure %in% c("SE_linear", "SE_quadratic") && n_factors < 2) {
+  if (is_se_structure && n_factors < 2) {
     stop("Structural equation models require at least 2 factors (1 input + 1 outcome).")
   }
 
@@ -99,8 +123,9 @@ define_factor_model <- function(n_factors,
 
   # Validate se_covariates
   if (!is.null(se_covariates)) {
-    if (!factor_structure %in% c("SE_linear", "SE_quadratic")) {
-      stop("se_covariates is only valid for factor_structure = 'SE_linear' or 'SE_quadratic'")
+    if (!is_se_structure) {
+      stop("se_covariates is only valid for SE structural-equation factor structures ",
+           "(SE_linear, SE_quadratic, SE_interactions, SE_full)")
     }
     if (!is.character(se_covariates)) {
       stop("se_covariates must be a character vector of covariate names")
@@ -130,7 +155,7 @@ define_factor_model <- function(n_factors,
   # For SE models, only input factors have mean parameters (outcome factor mean
   # is determined by the structural equation)
   n_factor_cov <- if (!is.null(factor_covariates)) length(factor_covariates) else 0L
-  if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
+  if (is_se_structure) {
     # Only input factors get covariate effects on mean
     n_factors_with_mean <- n_factors - 1L
   } else {
@@ -146,7 +171,7 @@ define_factor_model <- function(n_factors,
 
   if (factor_structure == "correlation") {
     f_nvariance <- n_factors * (n_factors + 1L) / 2L
-  } else if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
+  } else if (is_se_structure) {
     # For SE models: only input factors (first k-1) have variance parameters
     # The last factor's distribution is determined by the structural equation
     f_nvariance <- n_factors - 1L
@@ -164,12 +189,17 @@ define_factor_model <- function(n_factors,
   # For SE_quadratic: adds (k-1) quadratic coefficients (for f_1^2, f_2^2, ...)
   # Total: 1 + (k-1) + (k-1) + 1 = 2k parameters, e.g., 4 for 2-factor model
 
-  if (factor_structure == "SE_linear") {
-    n_input_factors <- n_factors - 1L
-    nse_param <- 1L + n_input_factors + 1L  # intercept + linear coefs + residual var
-  } else if (factor_structure == "SE_quadratic") {
-    n_input_factors <- n_factors - 1L
-    nse_param <- 1L + n_input_factors + n_input_factors + 1L  # intercept + linear + quadratic + residual var
+  # Number of cross-product (interaction) coefficients: choose(n_input, 2).
+  n_input_factors <- n_factors - 1L
+  n_se_quadratic <- if (factor_structure %in% c("SE_quadratic", "SE_full")) n_input_factors else 0L
+  n_se_interaction <- if (factor_structure %in% c("SE_interactions", "SE_full")) {
+    as.integer(n_input_factors * (n_input_factors - 1L) / 2L)
+  } else {
+    0L
+  }
+  if (is_se_structure) {
+    # intercept + linear coefs [+ quadratic coefs] [+ interaction coefs] + residual var
+    nse_param <- 1L + n_input_factors + n_se_quadratic + n_se_interaction + 1L
   } else {
     nse_param <- 0L
   }
@@ -188,7 +218,7 @@ define_factor_model <- function(n_factors,
   #
   # For SE models, mixture means only apply to input factors (n_factors - 1)
   # since the outcome factor is determined by the structural equation.
-  n_factors_for_mixture <- if (factor_structure %in% c("SE_linear", "SE_quadratic")) {
+  n_factors_for_mixture <- if (is_se_structure) {
     n_factors - 1L
   } else {
     n_factors
@@ -255,6 +285,12 @@ print.factor_model <- function(x, ...) {
   } else if (x$factor_structure == "SE_quadratic") {
     cat("  Structural equation: f_k = alpha + alpha_1*f_1 + alpha_q1*f_1^2 + ... + epsilon\n")
     cat("  SE parameters:", x$nse_param, "(intercept, linear coefs, quadratic coefs, residual var)\n")
+  } else if (x$factor_structure == "SE_interactions") {
+    cat("  Structural equation: f_k = alpha + sum_j alpha_j*f_j + sum_{a<b} alpha_ab*f_a*f_b + epsilon\n")
+    cat("  SE parameters:", x$nse_param, "(intercept, linear coefs, interaction coefs, residual var)\n")
+  } else if (x$factor_structure == "SE_full") {
+    cat("  Structural equation: f_k = alpha + sum_j alpha_j*f_j + sum_j alpha_qj*f_j^2 + sum_{a<b} alpha_ab*f_a*f_b + epsilon\n")
+    cat("  SE parameters:", x$nse_param, "(intercept, linear coefs, quadratic coefs, interaction coefs, residual var)\n")
   }
   if (!is.null(x$factor_covariates) && length(x$factor_covariates) > 0) {
     cat("Factor mean covariates:", paste(x$factor_covariates, collapse = ", "), "\n")

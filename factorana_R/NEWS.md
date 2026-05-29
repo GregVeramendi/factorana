@@ -1,3 +1,31 @@
+# factorana 1.4.0
+
+## New features
+
+* `define_factor_model()` gains two structural-equation factor structures
+  that add cross-product (interaction) terms between input factors, giving
+  parity with the `factor_spec = "interactions"` / `"full"` options already
+  available for observed components:
+
+  - `factor_structure = "SE_interactions"`: linear plus cross-product terms,
+    `f_out = a + sum_j a_j f_j + sum_{a<b} a_ab f_a f_b + epsilon`.
+  - `factor_structure = "SE_full"`: linear, quadratic, and cross-product
+    terms together.
+
+  The cross-product coefficients are named `se_interaction_<a>_<b>` for input
+  factors `a < b` (one per distinct pair, i.e. `choose(n_input, 2)` of them).
+  The analytical gradient and Hessian integrate the cross-products through the
+  same Gauss-Hermite quadrature already used for the linear and quadratic
+  terms, preserving full-information consistency. `fix_factor_param()`,
+  equality constraints, `se_covariates`, latent types, and two-stage
+  `previous_stage` estimation all work with the new structures.
+
+  Cross-product terms require at least two input factors (`n_factors >= 3`).
+  With a single input factor there are no distinct pairs to interact, so
+  `"SE_interactions"` silently downgrades to `"SE_linear"` and `"SE_full"` to
+  `"SE_quadratic"` with a one-line message, mirroring the `factor_spec`
+  downgrade behavior of `define_model_component()`.
+
 # factorana 1.3.4
 
 ## Test infrastructure

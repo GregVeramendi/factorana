@@ -22,8 +22,13 @@ define_factor_model(
 \itemize{
 \item \code{"independent"} (default): Factors are independent
 \item \code{"correlation"}: Correlated factors via Cholesky decomposition (2 factors only)
-\item \code{"SE_linear"}: Structural equation f_k = alpha + alpha_1*f_1 + ... + epsilon
-\item \code{"SE_quadratic"}: Adds quadratic terms: f_k = alpha + alpha_1\emph{f_1 + alpha_q1}f_1^2 + ... + epsilon
+\item \code{"SE_linear"}: Structural equation \verb{f_k = alpha + alpha_1 f_1 + ... + epsilon}
+\item \code{"SE_quadratic"}: Adds quadratic terms: \verb{f_k = alpha + alpha_1 f_1 + alpha_q1 f_1^2 + ... + epsilon}
+\item \code{"SE_interactions"}: Adds cross-product terms \verb{alpha_ab f_a f_b} for input factor pairs a < b
+\item \code{"SE_full"}: Adds both quadratic and cross-product terms.
+Cross-product terms require at least two input factors (n_factors >= 3); with a
+single input factor \code{"SE_interactions"} downgrades to \code{"SE_linear"} and \code{"SE_full"}
+downgrades to \code{"SE_quadratic"}.
 }}
 
 \item{n_mixtures}{Integer. Number of discrete mixtures (default = 1, allowed: 1-3)}
@@ -36,13 +41,14 @@ The covariates must be present in the data passed to \code{estimate_model_rcpp()
 \strong{Note:} All covariates are automatically demeaned internally to ensure the overall
 factor mean is zero (required for identification). Including an intercept/constant
 has no effect since it becomes zero after demeaning.
-For SE_linear/SE_quadratic structures, covariates only affect input factor means
+For SE structural-equation structures, covariates only affect input factor means
 (not the outcome factor which is determined by the structural equation).}
 
 \item{se_covariates}{Character vector. Names of covariates that directly affect the
-outcome factor in SE_linear/SE_quadratic models. When specified, the structural
+outcome factor in SE models. When specified, the structural
 equation becomes f_k = intercept + sum(alpha_j * f_j) + sum(beta_m * X_m) + epsilon.
-Only valid for factor_structure = "SE_linear" or "SE_quadratic".
+Valid for any SE structural-equation factor structure (SE_linear, SE_quadratic,
+SE_interactions, SE_full).
 All covariates are automatically demeaned internally for identification.}
 }
 \value{
