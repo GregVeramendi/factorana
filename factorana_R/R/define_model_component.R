@@ -328,6 +328,33 @@ define_model_component <- function(name,
         stop("oprobit outcome must be integer-like or an ordered factor.")
       # map to contiguous 1..J and mark ordered
       u   <- sort(unique(na.omit(as.integer(y_sub))))
+      # Guard against silent likelihood corruption. The C++ ordered-probit
+      # evaluator uses the raw outcome value directly as the category index
+      # (1..num_choices) and indexes the threshold parameters by it. The
+      # component does not store its data and the estimation pipeline does not
+      # recode the outcome, so any non-contiguous or 0-indexed coding reaches
+      # C++ unchanged: a value above num_choices reads threshold parameters out
+      # of bounds (into the next component's parameters), and a 0-indexed value
+      # is off by one. The local remap below is only used for validation here,
+      # not at estimation. Require an exact contiguous 1..num_choices set on the
+      # evaluation subset so these mis-codings can never pass silently.
+      if (!identical(u, seq_len(num_choices))) {
+        if (length(u) == 0L) {
+          stop(sprintf("Component '%s': oprobit outcome '%s' has no non-missing observations on the evaluation subset.",
+                       name, outcome))
+        } else if (min(u) < 1L) {
+          stop(sprintf("Component '%s': oprobit outcome '%s' must be coded as contiguous 1-indexed integers 1..%d. Found minimum value %d. 0-indexed data is not supported at estimation; recode with `outcome <- outcome + 1`.",
+                       name, outcome, num_choices, min(u)))
+        } else if (max(u) > num_choices) {
+          stop(sprintf("Component '%s': oprobit outcome '%s' has value(s) exceeding num_choices = %d (maximum observed = %d). Recode to contiguous 1..%d.",
+                       name, outcome, num_choices, max(u), num_choices))
+        } else {
+          missing_cats <- setdiff(seq_len(num_choices), u)
+          stop(sprintf("Component '%s': oprobit outcome '%s' has no observations in categor%s %s (declared num_choices = %d). Recode the outcome to a contiguous 1..%d set (and set num_choices to %d) before estimating. Empty categories cannot currently be estimated.",
+                       name, outcome, if (length(missing_cats) == 1L) "y" else "ies",
+                       paste(missing_cats, collapse = ", "), num_choices, length(u), length(u)))
+        }
+      }
       map <- match(as.integer(y_sub), u)
       y_sub <- ordered(map)
     }
@@ -457,7 +484,10 @@ define_model_component <- function(name,
         stop("Logit outcomes must be 1-indexed (1, 2, ..., K). Found minimum value: ", min_val,
              "\n  If your data uses 0/1 coding, add 1 to convert: data$outcome <- data$outcome + 1")
       }
-      if (!all(unique_vals == seq(min_val, max_val))) {
+      # Length check short-circuits the elementwise comparison so it never
+      # recycles a shorter vector (which would warn and compare incorrectly).
+      if (length(unique_vals) != (max_val - min_val + 1L) ||
+          !all(unique_vals == seq(min_val, max_val))) {
         stop("Logit outcomes must be contiguous integers. Found: ", paste(unique_vals, collapse = ", "))
       }
 

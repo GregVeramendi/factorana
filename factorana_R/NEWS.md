@@ -1,3 +1,32 @@
+# factorana 1.4.1
+
+## Bug fixes
+
+* Ordered probit now rejects mis-coded outcomes at component construction
+  instead of silently corrupting the likelihood at estimation. The C++
+  ordered-probit evaluator uses the outcome value directly as the category
+  index (1..num_choices) and indexes the threshold parameters by it, but the
+  component does not store its data and the estimation pipeline does not recode
+  the outcome. A value above num_choices therefore read threshold parameters
+  out of bounds (into the next component's parameters), and a 0-indexed value
+  was off by one, in both cases producing a wrong log-likelihood with no error.
+  `define_model_component()` now requires an exact contiguous 1..num_choices
+  coding on the evaluation subset and stops with an actionable message
+  (naming the offending value or empty category) otherwise. The previous
+  category-count check only caught a subset of these cases.
+
+* Multinomial logit: fixed a spurious "longer object length is not a multiple
+  of shorter object length" warning in the contiguous-outcome check, which
+  recycled vectors of different lengths. The check now compares lengths first.
+  Standard multinomial logit already rejected non-contiguous, 0-indexed, and
+  empty-category codings; regression tests now lock that behavior in alongside
+  the new ordered-probit guard.
+
+Note: native support for *estimating* ordered-probit or multinomial-logit
+models with one or more empty categories (warn-and-collapse rather than error)
+is not yet implemented; it requires recoding the outcome to a contiguous set in
+the estimation pipeline, since the component does not retain its data.
+
 # factorana 1.4.0
 
 ## New features
