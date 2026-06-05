@@ -1,3 +1,29 @@
+# factorana 1.5.0
+
+## New features
+
+* Robust and cluster-robust standard errors via a new post-hoc
+  `vcov_factorana(object, data, type = c("hessian", "robust", "cluster"),
+  cluster = ...)`, with a `robust_se()` convenience wrapper. The estimator is
+  the sandwich `V = H^{-1} B H^{-1}`: the bread `H^{-1}` is the inverse observed
+  information already computed at fit time, and the meat `B` is built from the
+  per-observation scores of the marginal (factor-integrated) log-likelihood
+  (`B = sum_i g_i g_i'` for robust, `B = sum_c s_c s_c'` for cluster). A new C++
+  routine (`evaluate_obs_scores_cpp`) returns the per-observation score matrix;
+  it reuses the score already formed inside the likelihood and is only computed
+  on request, so estimation speed is unchanged. Validated against
+  `sandwich::vcovHC` and `sandwich::vcovCL` on a GLM-equivalent model to within
+  machine precision.
+
+  Notes: one factorana row is one independent unit whose measurements are
+  integrated jointly over the latent factors, so clustering is meaningful only
+  when a cluster groups several rows (households, schools, or stacked
+  person-wave rows in a long-format second stage); with one row per cluster the
+  cluster estimator reduces to the robust one. For two-stage fits these
+  standard errors treat the first-stage parameters and plug-in factor scores as
+  known and so understate uncertainty; a both-stages bootstrap (planned) is the
+  honest route there.
+
 # factorana 1.4.1
 
 ## Bug fixes

@@ -73,6 +73,15 @@ private:
     std::vector<double> obs_weights;   // Weight per observation (default: all 1.0)
     bool use_weights;                  // Whether observation weights are set
 
+    // Per-observation score storage (for sandwich / cluster-robust SEs).
+    // When compute_obs_scores is true, CalcLkhd (iflag >= 2) stores each
+    // observation's free-parameter score d(log L_i)/d(theta_free) into
+    // obs_scores as a row-major nobs x nparam_free matrix. Disabled during
+    // optimization so the hot path is unaffected; enabled once at the MLE.
+    bool compute_obs_scores = false;
+    std::vector<double> obs_scores;            // nobs * nparam_free, row-major
+    std::vector<double> obs_full_grad_scratch; // size nparam, reused per obs
+
     // Adaptive integration (for second-stage estimation with factor scores)
     bool use_adaptive;                 // Whether adaptive integration is enabled
     std::vector<std::vector<int>> obs_nquad;     // Per-obs, per-factor quadrature point counts
@@ -221,6 +230,10 @@ public:
     int GetNParam() const { return nparam; }
     int GetNParamFree() const { return nparam_free; }
     const std::vector<bool>& GetParamFixed() const { return param_fixed; }
+
+    // Per-observation score output (for sandwich / cluster-robust SEs).
+    void SetComputeObsScores(bool b) { compute_obs_scores = b; }
+    const std::vector<double>& GetObsScores() const { return obs_scores; }
 
 private:
     // Helper: Map free parameters to full parameter vector

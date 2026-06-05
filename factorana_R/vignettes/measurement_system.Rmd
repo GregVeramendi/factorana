@@ -152,6 +152,55 @@ Factor variances are near the true values (1.0 for the cognitive factor and
 0.64 = 0.8^2 for the non-cognitive factor); loadings recover the simulated
 values (cog2 ≈ 0.9, cog3 ≈ 0.7, nc2 ≈ 1.1, nc3 ≈ 0.8).
 
+## Robust standard errors
+
+The standard errors shown by `components_table()` come from the inverse
+observed information (model-based). For inference that does not lean on the
+measurement model being exactly correct, `vcov_factorana()` returns a sandwich
+(Huber-White) robust or cluster-robust covariance matrix from the same fit, and
+`robust_se()` is a convenience wrapper returning the standard errors directly.
+
+```{r}
+# Robust (Huber-White) standard errors, over the full parameter vector
+se_robust <- robust_se(fit, dat, type = "robust")
+
+# Compare model-based vs robust SEs for the free parameters
+free <- fit$free_idx
+data.frame(
+  parameter = names(fit$estimates)[free],
+  estimate  = round(fit$estimates[free], 3),
+  se_model  = round(fit$std_errors[free], 3),
+  se_robust = round(se_robust[free], 3),
+  row.names = NULL
+)
+```
+
+The full covariance matrix (for example to build Wald tests or linear
+combinations) is available directly:
+
+```{r}
+V <- vcov_factorana(fit, dat, type = "robust")
+dim(V)
+```
+
+For clustered data, pass a cluster id (a column name in the data or a vector of
+length `nrow(dat)`). Each factorana row is one independent unit whose
+indicators are integrated jointly over the latent factors, so the factor
+already captures the within-row dependence; clustering changes the standard
+errors only when a cluster groups several rows (for example several pupils per
+school, siblings in a household, or stacked person-wave rows in a long-format
+second stage):
+
+```{r, eval = FALSE}
+# cluster-robust SEs, clustering by a school id column in the data
+se_cluster <- robust_se(fit, dat, type = "cluster", cluster = "school_id")
+```
+
+The dynamic factor vignette shows a cluster-robust example on panel data. Note
+that for two-stage fits these standard errors treat the first-stage measurement
+parameters as known and so understate uncertainty; a both-stages bootstrap is
+the honest route there.
+
 ## Factor scores
 
 Posterior mean factor scores for each observation can be recovered from the
@@ -177,3 +226,5 @@ cor(fscores$factor_2, f_noncog)
   ordered probit) and options for factor interactions and type intercepts.
 - `?estimate_model_rcpp` — full list of estimator options, including parallel
   estimation, checkpointing, and adaptive integration for two-stage workflows.
+- `?vcov_factorana` — robust and cluster-robust standard errors for a fitted
+  model.

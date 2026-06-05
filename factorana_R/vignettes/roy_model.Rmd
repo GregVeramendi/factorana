@@ -184,6 +184,28 @@ equations recover (1.0, 1.2, 0.8); the wage equations recover roughly 0.5 in
 sector 0 and 1.0 in sector 1, capturing the positive selection on ability into
 the high-return sector.
 
+## Robust standard errors
+
+This is a single-stage full-information fit, so sandwich (Huber-White) robust
+standard errors are exact (no first-stage uncertainty to account for).
+`robust_se()` returns them for the whole parameter vector:
+
+```{r}
+se_robust <- robust_se(fit, dat, type = "robust")
+
+free <- fit$free_idx
+data.frame(
+  parameter = names(fit$estimates)[free],
+  se_model  = round(fit$std_errors[free], 3),
+  se_robust = round(se_robust[free], 3),
+  row.names = NULL
+)
+```
+
+If individuals are grouped (for example by region or cohort), use
+`vcov_factorana(fit, dat, type = "cluster", cluster = "region")` for
+cluster-robust inference. See `?vcov_factorana` for details.
+
 ## Recover factor scores
 
 Given the fitted model, we can back out each individual's posterior mean

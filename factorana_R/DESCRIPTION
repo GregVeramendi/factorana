@@ -1,7 +1,7 @@
 Package: factorana
 Type: Package
 Title: Factor Model Estimation with Latent Variables
-Version: 1.4.1
+Version: 1.5.0
 Authors@R: c(
     person("Greg", "Veramendi", email = "greg.veramendi@gmail.com",
            role = c("aut", "cre")),
@@ -36,6 +36,7 @@ Suggests:
     knitr,
     nloptr,
     rmarkdown,
+    sandwich,
     testthat (>= 3.0.0),
     trustOptim
 VignetteBuilder: knitr

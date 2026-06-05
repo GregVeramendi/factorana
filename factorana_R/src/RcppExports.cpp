@@ -50,6 +50,18 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// evaluate_obs_scores_cpp
+NumericMatrix evaluate_obs_scores_cpp(SEXP fm_ptr, NumericVector params);
+RcppExport SEXP _factorana_evaluate_obs_scores_cpp(SEXP fm_ptrSEXP, SEXP paramsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type fm_ptr(fm_ptrSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type params(paramsSEXP);
+    rcpp_result_gen = Rcpp::wrap(evaluate_obs_scores_cpp(fm_ptr, params));
+    return rcpp_result_gen;
+END_RCPP
+}
 // evaluate_loglik_only_cpp
 double evaluate_loglik_only_cpp(SEXP fm_ptr, NumericVector params);
 RcppExport SEXP _factorana_evaluate_loglik_only_cpp(SEXP fm_ptrSEXP, SEXP paramsSEXP) {
@@ -146,6 +158,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_factorana_gauss_hermite_quadrature", (DL_FUNC) &_factorana_gauss_hermite_quadrature, 1},
     {"_factorana_initialize_factor_model_cpp", (DL_FUNC) &_factorana_initialize_factor_model_cpp, 4},
     {"_factorana_evaluate_likelihood_cpp", (DL_FUNC) &_factorana_evaluate_likelihood_cpp, 4},
+    {"_factorana_evaluate_obs_scores_cpp", (DL_FUNC) &_factorana_evaluate_obs_scores_cpp, 2},
     {"_factorana_evaluate_loglik_only_cpp", (DL_FUNC) &_factorana_evaluate_loglik_only_cpp, 2},
     {"_factorana_get_parameter_info_cpp", (DL_FUNC) &_factorana_get_parameter_info_cpp, 1},
     {"_factorana_extract_free_params_cpp", (DL_FUNC) &_factorana_extract_free_params_cpp, 2},

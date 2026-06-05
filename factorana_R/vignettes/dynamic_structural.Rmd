@@ -231,6 +231,44 @@ is the whole point of the workflow. The slope β, residual variance
 σ²_ε, and input factor variance σ²_f₁ also recover within their
 standard errors.
 
+## Cluster-robust standard errors
+
+The standard errors above are model-based (inverse observed
+information). When individuals are grouped (for example pupils within
+schools, or siblings within households) and that grouping induces
+dependence the model does not capture, `vcov_factorana()` provides
+cluster-robust standard errors. Pass `cluster` as the name of a
+grouping column in the data (or a vector of length `nrow(dat)`).
+
+Here we attach a synthetic school id (50 schools) and cluster on it:
+
+```{r}
+set.seed(7)
+dat$school <- sample(1:50, n, replace = TRUE)
+
+se_cluster <- robust_se(result_stage2, dat, type = "cluster", cluster = "school")
+
+ps <- c("factor_var_1", "se_intercept", "se_linear_1", "se_residual_var")
+data.frame(
+  param      = ps,
+  se_model   = round(unname(result_stage2$std_errors[ps]), 4),
+  se_cluster = round(unname(se_cluster[ps]),                4),
+  row.names  = NULL
+)
+```
+
+Because the schools were assigned at random here, the cluster-robust
+and model-based standard errors are close; with genuine within-cluster
+dependence the cluster-robust values would typically be larger.
+
+**Two-stage caveat.** These standard errors are computed on the Stage 2
+fit and treat the Stage 1 measurement parameters (loadings, sigmas,
+intercepts) as known. They therefore understate the total uncertainty
+(the generated-regressor problem). For honest two-stage inference,
+resample clusters and re-run *both* stages in a bootstrap; a
+single-stage robust or cluster-robust covariance is exact only when the
+measurement system is not itself estimated.
+
 ## Notes on generalisation
 
 - **More than two periods.** `period_prefixes` can have length

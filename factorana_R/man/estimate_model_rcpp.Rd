@@ -101,5 +101,11 @@ ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 1)
 result <- estimate_model_rcpp(ms, dat, control = ctrl,
   optimizer = "nlminb", parallel = FALSE, verbose = FALSE)
 result$estimates
+# Robust (Huber-White) standard errors from the same fit:
+robust_se(result, dat, type = "robust")
 }
+}
+\seealso{
+\code{\link[=vcov_factorana]{vcov_factorana()}} and \code{\link[=robust_se]{robust_se()}} for robust and cluster-robust
+standard errors from a fitted model.
 }

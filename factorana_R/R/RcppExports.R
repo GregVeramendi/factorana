@@ -40,6 +40,24 @@ evaluate_likelihood_cpp <- function(fm_ptr, params, compute_gradient = FALSE, co
     .Call(`_factorana_evaluate_likelihood_cpp`, fm_ptr, params, compute_gradient, compute_hessian)
 }
 
+#' Per-observation scores for sandwich / cluster-robust standard errors
+#'
+#' Evaluates the model at the supplied FREE parameters and returns the
+#' per-observation score matrix d(log L_i)/d(theta_free), i.e. the gradient of
+#' each observation's marginal (factor-integrated) log-likelihood with respect
+#' to the free parameters. Rows are observations (in the FactorModel's data
+#' order), columns are free parameters. Summing the rows reproduces the total
+#' gradient returned by \code{evaluate_likelihood_cpp}. This is the "meat"
+#' ingredient of a sandwich covariance estimator.
+#'
+#' @param fm_ptr External pointer to FactorModel object
+#' @param params Vector of FREE parameters (typically the MLE)
+#' @return Numeric matrix (nobs x nparam_free) of per-observation scores
+#' @export
+evaluate_obs_scores_cpp <- function(fm_ptr, params) {
+    .Call(`_factorana_evaluate_obs_scores_cpp`, fm_ptr, params)
+}
+
 #' Evaluate log-likelihood only (for optimization)
 #'
 #' @param fm_ptr External pointer to FactorModel object

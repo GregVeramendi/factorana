@@ -797,6 +797,15 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
         full_hessL.resize(nparam * nparam, 0.0);
     }
 
+    // Per-observation score output: only when explicitly requested (at the MLE)
+    // and when gradients are being computed. Zeroed so underflow observations
+    // contribute a zero score row.
+    const bool store_scores = compute_obs_scores && iflag >= 2;
+    if (store_scores) {
+        obs_scores.assign(static_cast<size_t>(nobs) * nparam_free, 0.0);
+        obs_full_grad_scratch.assign(nparam, 0.0);
+    }
+
     // ===== STEP 4: Compute default number of integration points =====
     // (may be overridden per-observation in adaptive mode)
     int nint_points_default = 1;
@@ -3341,6 +3350,26 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 for (size_t gi = 0; gi < gradparlist.size(); gi++) {
                     int ipar = gradparlist[gi];
                     full_gradL[ipar] += obs_weight * totalgrad[ipar] / totalprob;
+                }
+
+                // Per-observation score for sandwich / cluster-robust SEs:
+                // build this observation's full-parameter score, then map it
+                // through the same tie-aggregation + fixed-param drop that
+                // ExtractFreeGradient applies to the summed gradient. Stored as
+                // row iobs of the nobs x nparam_free matrix.
+                if (store_scores) {
+                    for (size_t gi = 0; gi < gradparlist.size(); gi++) {
+                        int ipar = gradparlist[gi];
+                        obs_full_grad_scratch[ipar] = obs_weight * totalgrad[ipar] / totalprob;
+                    }
+                    std::vector<double> obs_free;
+                    ExtractFreeGradient(obs_full_grad_scratch, obs_free);
+                    std::copy(obs_free.begin(), obs_free.end(),
+                              obs_scores.begin() + static_cast<size_t>(iobs) * nparam_free);
+                    // Reset only the touched entries for the next observation.
+                    for (size_t gi = 0; gi < gradparlist.size(); gi++) {
+                        obs_full_grad_scratch[gradparlist[gi]] = 0.0;
+                    }
                 }
             }
 

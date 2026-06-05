@@ -1197,7 +1197,11 @@ print_adaptive_quadrature_summary <- function(factor_ses, factor_vars, threshold
 #' result <- estimate_model_rcpp(ms, dat, control = ctrl,
 #'   optimizer = "nlminb", parallel = FALSE, verbose = FALSE)
 #' result$estimates
+#' # Robust (Huber-White) standard errors from the same fit:
+#' robust_se(result, dat, type = "robust")
 #' }
+#' @seealso [vcov_factorana()] and [robust_se()] for robust and cluster-robust
+#'   standard errors from a fitted model.
 #' @export
 estimate_model_rcpp <- function(model_system, data, init_params = NULL,
                                 control = NULL, optimizer = "nlminb",
@@ -2033,6 +2037,11 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   std_errors <- rep(NA, length(estimates))
   names(std_errors) <- names(estimates)
 
+  # Free-parameter covariance (inverse observed information). Retained on the
+  # result so the post-hoc vcov_factorana() can reuse this "bread" without
+  # recomputing the Hessian. NULL if the SE computation below fails.
+  cov_free <- NULL
+
   tryCatch({
     # C++ returns Hessian for FREE params only as upper triangle vector
     # Convert to full symmetric matrix
@@ -2227,7 +2236,16 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     optimization_time = optimization_time_secs,
     model_system = model_system,
     optimizer = optimizer,
-    equality_constraints = model_system$equality_constraints
+    equality_constraints = model_system$equality_constraints,
+    # Ingredients for post-hoc robust / cluster-robust covariance (vcov_factorana):
+    #   cov_free  - free-parameter inverse-information "bread" (NULL if SE failed)
+    #   free_idx  - positions of free parameters in the full estimate vector
+    #   estimates_free - free-parameter MLE (order matches cov_free / scores)
+    #   n_quad    - quadrature points used, so scores are recomputed at the same grid
+    cov_free = cov_free,
+    free_idx = param_constraints$free_idx,
+    estimates_free = estimates_free,
+    n_quad = n_quad
   )
   class(result) <- "factorana_result"
   result
