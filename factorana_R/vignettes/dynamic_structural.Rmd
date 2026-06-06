@@ -269,6 +269,44 @@ resample clusters and re-run *both* stages in a bootstrap; a
 single-stage robust or cluster-robust covariance is exact only when the
 measurement system is not itself estimated.
 
+## Bootstrap for honest two-stage standard errors
+
+A cluster bootstrap that re-runs *both* stages on each resample accounts
+for the first-stage uncertainty. `bootstrap_factorana_multistage()`
+drives this in one call: it resamples clusters, and for each replicate
+fits Stage 1 and then Stage 2 chained on that replicate's own Stage 1
+fit. Each `(stage, sample)` fit is saved to disk and skipped if it
+already exists, so the run is restartable and the per-sample work can be
+scattered across a compute cluster with `bootstrap_fit_sample()`.
+
+```{r, eval = FALSE}
+stage_builders <- list(
+  # Stage 1: the measurement system (prev_fits is empty for the first stage)
+  function(prev_fits, data) dyn$model_system,
+  # Stage 2: SE_linear, chaining on THIS replicate's Stage 1 fit
+  function(prev_fits, data) {
+    prev <- build_dynamic_previous_stage(
+      dyn = dyn, stage1_result = prev_fits[[1]], data = data, anchor_period = 1L)
+    fm2 <- define_factor_model(n_factors = 2, factor_structure = "SE_linear")
+    define_model_system(components = list(), factor = fm2, previous_stage = prev)
+  }
+)
+
+boot <- bootstrap_factorana_multistage(
+  stage_builders, dat, R = 500, cluster = "person",
+  dir = "boot_run", control = ctrl,
+  optimizer = "nlminb", parallel = FALSE, verbose = FALSE
+)
+
+boot$final$boot_se   # Stage 2 bootstrap standard errors (include Stage 1 uncertainty)
+boot$final$ci        # percentile intervals
+```
+
+For a multi-node run, generate the samples once with
+`generate_bootstrap_samples()` and call `bootstrap_fit_sample()` from an
+array job (one task per sample, per stage), then summarise with
+`collect_bootstrap()`.
+
 ## Notes on generalisation
 
 - **More than two periods.** `period_prefixes` can have length

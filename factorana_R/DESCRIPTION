@@ -1,7 +1,7 @@
 Package: factorana
 Type: Package
 Title: Factor Model Estimation with Latent Variables
-Version: 1.5.0
+Version: 1.6.0
 Authors@R: c(
     person("Greg", "Veramendi", email = "greg.veramendi@gmail.com",
            role = c("aut", "cre")),

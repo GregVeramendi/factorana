@@ -1,3 +1,36 @@
+# factorana 1.6.0
+
+## New features
+
+* Bootstrap inference, designed for the "estimate one stage at a time, across
+  many bootstrap samples, on a compute cluster" workflow (matching the legacy
+  backend). Resampling uses integer frequency weights (cluster or row
+  multiplicities) rather than physically duplicating rows: estimating with
+  these weights is numerically identical to estimating on the expanded data
+  (verified) and reuses the existing per-observation weight machinery, so a
+  cluster drawn k times simply gets weight k with no duplicate-id bookkeeping.
+
+  Four building blocks, all restartable and distributable:
+
+  - `generate_bootstrap_samples()` draws and persists the resampling weights
+    once (reproducible across nodes and restarts).
+  - `bootstrap_fit_sample()` estimates one stage for one sample and writes
+    `stage_dir/sample_<id>.rds`; it skips if that file exists, so each
+    (stage, sample) is an idempotent unit of work to scatter across a cluster
+    and resume after interruptions. Zero-weight rows are dropped and the rest
+    carry their integer frequency weight; set `previous_stage` for later stages
+    to chain each replicate on its own earlier-stage fit.
+  - `collect_bootstrap()` reads the finished samples and returns the bootstrap
+    covariance, bootstrap standard errors, and percentile confidence intervals.
+  - `bootstrap_factorana()` is a single-node convenience driver over the above;
+    `bootstrap_factorana_multistage()` drives a chained multi-stage bootstrap in
+    one call (looping samples x stages, chaining each replicate on its own
+    earlier stage, skipping later stages when an earlier one fails to converge).
+
+  For panel / two-stage models the bootstrap is the honest route to standard
+  errors that account for first-stage (measurement) uncertainty, which the
+  sandwich estimator omits.
+
 # factorana 1.5.0
 
 ## New features
