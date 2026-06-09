@@ -218,6 +218,24 @@ cor(fscores$factor_1, f_cog)
 cor(fscores$factor_2, f_noncog)
 ```
 
+## Simulate from the fitted model
+
+`simulate_factor_model()` generates new data from a fitted (or fully specified)
+model: it resamples rows of `data` to supply any covariates, draws fresh latent
+factors from the model's distribution, and draws each indicator from its model.
+The simulated outcome columns are named after the components' outcome variables,
+so the result is directly re-estimable with the same model system (useful for
+parametric-bootstrap or recovery checks).
+
+```{r}
+sim <- simulate_factor_model(fit, dat, n = 300, seed = 1)
+head(sim[, c("xid", "factor_1", "factor_2", "cog1", "nc1")])
+```
+
+With `detail = TRUE` (the default) the output also carries, per component, the
+linear predictor (`<name>_Vobs`), the shock (`<name>_eps`), and (for discrete
+components) the choice probabilities.
+
 ## Where to go next
 
 - `vignette("roy_model", package = "factorana")` — an applied example with a
@@ -226,5 +244,6 @@ cor(fscores$factor_2, f_noncog)
   ordered probit) and options for factor interactions and type intercepts.
 - `?estimate_model_rcpp` — full list of estimator options, including parallel
   estimation, checkpointing, and adaptive integration for two-stage workflows.
+- `?simulate_factor_model` — simulate data from a fitted or specified model.
 - `?vcov_factorana` — robust and cluster-robust standard errors for a fitted
   model.

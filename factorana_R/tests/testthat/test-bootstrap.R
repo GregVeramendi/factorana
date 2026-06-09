@@ -220,3 +220,43 @@ test_that("bootstrap_factorana_multistage drives a two-stage bootstrap in one ca
   expect_lt(proc.time()[3] - t0, 8)
   expect_equal(boot_b$final$boot_se, boot$final$boot_se)
 })
+
+test_that("bootstrap fits are identical in parallel and serial mode", {
+  skip_on_cran()
+  skip_on_os("windows")  # FORK cluster required for load_all + parallel
+  dat <- make_boot_data(n = 300, seed = 3)
+  ms <- build_1f_system(dat)
+  samples <- generate_bootstrap_samples(dat, R = 3, cluster = "school", seed = 123)
+  ds <- file.path(tempdir(), paste0("bps_", as.integer(Sys.time()) %% 100000))
+  dp <- file.path(tempdir(), paste0("bpp_", as.integer(Sys.time()) %% 100000))
+  on.exit(unlink(c(ds, dp), recursive = TRUE), add = TRUE)
+  ctrl1 <- define_estimation_control(n_quad_points = 8, num_cores = 1)
+  ctrl2 <- define_estimation_control(n_quad_points = 8, num_cores = 2)
+
+  f_ser <- readRDS(bootstrap_fit_sample(ms, dat, samples, 1, ds, control = ctrl1,
+                                        optimizer = "nlminb", parallel = FALSE, verbose = FALSE))
+  f_par <- readRDS(bootstrap_fit_sample(ms, dat, samples, 1, dp, control = ctrl2,
+                                        optimizer = "nlminb", parallel = TRUE, verbose = FALSE))
+  expect_equal(f_ser$convergence, 0)
+  expect_equal(f_par$convergence, 0)
+  # Weighted estimation must give the same answer whether the (weighted) data is
+  # split across workers or not.
+  expect_equal(unname(f_par$estimates[names(f_ser$estimates)]),
+               unname(f_ser$estimates), tolerance = 1e-6)
+})
+
+test_that("bootstrap_factorana runs end-to-end with parallel estimation", {
+  skip_on_cran()
+  skip_on_os("windows")
+  dat <- make_boot_data(n = 250, seed = 3)
+  ms <- build_1f_system(dat)
+  ctrl <- define_estimation_control(n_quad_points = 8, num_cores = 2)
+  bdir <- file.path(tempdir(), paste0("bpe_", as.integer(Sys.time()) %% 100000))
+  on.exit(unlink(bdir, recursive = TRUE), add = TRUE)
+  boot <- bootstrap_factorana(ms, dat, R = 8, cluster = "school", stage_dir = bdir,
+                              control = ctrl, seed = 1, optimizer = "nlminb",
+                              parallel = TRUE, verbose = FALSE)
+  expect_equal(boot$n_total, 8)
+  expect_gte(boot$n_converged, 7)
+  expect_true(all(is.finite(boot$boot_se)))
+})

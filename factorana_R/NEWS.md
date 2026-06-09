@@ -1,3 +1,49 @@
+# factorana 1.7.0
+
+## New features
+
+* `simulate_factor_model()` generates data from a fitted or fully specified
+  factorana model, following the legacy simulation algorithm: for each
+  simulated unit a base row is drawn from `data` (with optional weights) to
+  supply the covariates, the latent factor(s) are drawn from the model's
+  unconditional distribution, the latent type is drawn from the type model, and
+  each component's outcome is drawn from its model given the covariates and
+  factors. Output is "full detail" like the legacy `simulation_data.csv`: the
+  resampled covariates, the drawn factors (and type / mixture component when
+  present), and per component the linear predictor, the shock, the choice
+  probabilities, and the simulated outcome. The outcome column is named after
+  the component's outcome variable so the simulated data is directly
+  re-estimable with the same model system.
+
+  Supported: all four model types (linear, probit, binary and multinomial
+  logit, ordered probit); latent types (`n_types > 1`); mixtures of normals
+  (`n_mixtures > 1`); and the correlated and structural-equation
+  (`SE_linear`/`SE_quadratic`/`SE_interactions`/`SE_full`) factor structures.
+  Validated by parameter recovery (simulate from known parameters, re-estimate,
+  recover) for every model type and factor structure. Endogenous regressors and
+  the goodness-of-fit mode are not yet implemented.
+
+# factorana 1.7.0
+
+## New features
+
+* `simulate_factor_model()` simulates data from a fitted or fully specified
+  factorana model, following the legacy simulation algorithm: for each unit a
+  base row is resampled from the supplied data (with optional weights) to
+  provide the covariates X, the latent factor(s) are drawn from the model's
+  unconditional distribution, the latent type is drawn from the type model, and
+  each component's outcome is drawn from its model. Supports all four model
+  types (linear, probit, logit including multinomial, ordered probit), latent
+  types, mixtures of normals, and the independent, correlated, and structural
+  (`SE_*`) factor structures. The result is a data frame with the resampled
+  covariates, the drawn factors and type, and per component the simulated
+  outcome plus (when `detail = TRUE`) the linear predictor, shock, and choice
+  probabilities, like the legacy `simulation_data.csv`. The simulated outcome
+  column is named after the component's outcome variable, so the result can be
+  re-estimated with the same model system. Validated by parameter recovery
+  (simulate from known parameters, re-estimate, recover) for every model type
+  and for the SE structural structure.
+
 # factorana 1.6.0
 
 ## New features
