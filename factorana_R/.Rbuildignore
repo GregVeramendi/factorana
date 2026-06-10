@@ -29,3 +29,4 @@
 ^dynamic_model_example\.R~$
 ^doc$
 ^Meta$
+^cran-comments\.md$
