@@ -1,3 +1,29 @@
+# factorana 1.7.1
+
+## Bug fixes
+
+* `robust_se()` now returns a *named* vector, as documented. It previously
+  computed `sqrt(pmax(0, diag(V)))`, and `pmax()` copies attributes from its
+  first argument (the scalar `0`), which dropped the parameter names; name-based
+  indexing of the result then silently returned `NA`. Fixed by ordering the
+  parameter vector first (`sqrt(pmax(diag(V), 0))`), with a regression test on
+  the naming contract.
+
+## Usability
+
+* `define_model_component()`: `covariates` now defaults to `NULL`, so a pure
+  measurement item no longer needs `covariates = NULL` spelled out. The
+  documentation also makes the factor-assignment convention explicit (the
+  length-`n_factors` `loading_normalization` vector: `0` off-factor, `1` anchor,
+  `NA` free), and adds a `factor_index` convenience argument for assigning an
+  item to a single factor (`factor_index = 2, loading_normalization = 1` is
+  shorthand for `c(0, 1, 0)` in a 3-factor model).
+
+* `vcov_factorana()` now verifies that the `data` it is given matches the data
+  the model was fit on (same rows, same order) via a lightweight fingerprint
+  stored on the fit, and errors with a clear message otherwise. This catches the
+  "right shape, wrong rows" case that the free-parameter-count check could not.
+
 # factorana 1.7.0
 
 ## New features
@@ -22,27 +48,6 @@
   Validated by parameter recovery (simulate from known parameters, re-estimate,
   recover) for every model type and factor structure. Endogenous regressors and
   the goodness-of-fit mode are not yet implemented.
-
-# factorana 1.7.0
-
-## New features
-
-* `simulate_factor_model()` simulates data from a fitted or fully specified
-  factorana model, following the legacy simulation algorithm: for each unit a
-  base row is resampled from the supplied data (with optional weights) to
-  provide the covariates X, the latent factor(s) are drawn from the model's
-  unconditional distribution, the latent type is drawn from the type model, and
-  each component's outcome is drawn from its model. Supports all four model
-  types (linear, probit, logit including multinomial, ordered probit), latent
-  types, mixtures of normals, and the independent, correlated, and structural
-  (`SE_*`) factor structures. The result is a data frame with the resampled
-  covariates, the drawn factors and type, and per component the simulated
-  outcome plus (when `detail = TRUE`) the linear predictor, shock, and choice
-  probabilities, like the legacy `simulation_data.csv`. The simulated outcome
-  column is named after the component's outcome variable, so the result can be
-  re-estimated with the same model system. Validated by parameter recovery
-  (simulate from known parameters, re-estimate, recover) for every model type
-  and for the SE structural structure.
 
 # factorana 1.6.0
 

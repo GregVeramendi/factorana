@@ -5,7 +5,9 @@
 #' @param outcome Character. Name of the outcome variable.
 #' @param factor model. Object of Class factor_model.
 #' @param evaluation_indicator Character (optional). Variable used for evaluation subsample.
-#' @param covariates List of Character vectors. Names of covariates.
+#' @param covariates Character vector. Names of covariate columns in `data`
+#'   (include `"intercept"` for an intercept). Defaults to `NULL` (no
+#'   covariates), so a pure measurement item needs no `covariates` argument.
 #' @param model_type Character. Type of model (e.g., "linear", "logit", "probit").
 #' @param intercept Logical. Whether to include an intercept (default = TRUE).
 #' @param num_choices Integer. Number of choices (for multinomial models).
@@ -17,11 +19,23 @@
 #'   correction variables. These provide rank-and-choice-specific adjustments to the
 #'   linear predictor. Data layout: (num_choices-1) * nrank columns, accessed as
 #'   rankshare_var + (num_choices-1)*irank + icat for irank=0..nrank-1, icat=0..num_choices-2.
-#' @param loading_normalization Numeric vector of length `n_factors` (optional).
-#'   Component-specific loading constraints. Overrides factor model normalization.
+#' @param loading_normalization Numeric vector of length `n_factors`. This is how
+#'   an item is assigned to factor(s): one entry per factor, with the convention
+#'   - `0`  --> item does not load on that factor (off-factor),
+#'   - `1`  --> loading fixed at 1 (the anchor that sets the factor's scale),
 #'   - `NA` --> loading is free (estimated).
-#'   - numeric value --> loading is fixed at that value (e.g. `1` for identification).
-#'   If NULL, uses the factor model's default normalization.
+#'   For example, in a 3-factor model `c(NA, 0, 0)` means the item loads freely on
+#'   factor 1 only, and `c(1, 0, 0)` makes it the anchor for factor 1. Each factor
+#'   needs exactly one anchor (a `1`) somewhere in the system for identification.
+#'   If `NULL` (default), all loadings are free. See also `factor_index` for a
+#'   shorthand when an item loads on a single factor.
+#' @param factor_index Integer (optional). Convenience for assigning an item to a
+#'   single factor: the item loads only on factor `factor_index` (all other
+#'   factors fixed at 0), and `loading_normalization` is then interpreted as the
+#'   single value at that position (`NA` for a free loading, `1` for the anchor,
+#'   or a fixed number). For instance `factor_index = 2, loading_normalization = 1`
+#'   is shorthand for `loading_normalization = c(0, 1, 0)` in a 3-factor model.
+#'   Leave `NULL` to specify the full vector directly.
 #' @param factor_spec Character. Specification for factor terms in linear predictor.
 #'   - `"linear"` (default): Only linear factor terms (lambda * f)
 #'   - `"quadratic"`: Linear + quadratic terms (lambda * f + lambda_quad * f^2)
@@ -44,6 +58,16 @@
 #' mc <- define_model_component("Y", dat, "y", fm,
 #'   covariates = "intercept", model_type = "linear",
 #'   loading_normalization = 1)
+#'
+#' # Multi-factor: assign an item to a factor with the length-n_factors vector.
+#' dat2 <- data.frame(y1 = rnorm(50), y2 = rnorm(50))
+#' fm2 <- define_factor_model(n_factors = 2)
+#' # item loads on factor 1 only, as its anchor (loading fixed at 1):
+#' a1 <- define_model_component("a1", dat2, "y1", fm2,
+#'   loading_normalization = c(1, 0))
+#' # item loads freely on factor 2 only -- same thing via factor_index:
+#' a2 <- define_model_component("a2", dat2, "y2", fm2,
+#'   factor_index = 2, loading_normalization = NA_real_)
 #' @export
 
 define_model_component <- function(name,
@@ -51,7 +75,7 @@ define_model_component <- function(name,
                                    outcome,
                                    factor,
                                    evaluation_indicator = NULL,
-                                   covariates,
+                                   covariates = NULL,
                                    model_type = c("linear", "logit", "probit", "oprobit"),
                                    intercept = TRUE,
                                    num_choices = 2,
@@ -59,6 +83,7 @@ define_model_component <- function(name,
                                    exclude_chosen = TRUE,
                                    rankshare_var = NULL,
                                    loading_normalization = NULL,
+                                   factor_index = NULL,
                                    factor_spec = c("linear", "quadratic", "interactions", "full"),
                                    use_types = FALSE,
                                    skip_collinearity_check = FALSE) {
@@ -91,6 +116,29 @@ define_model_component <- function(name,
 
   k <- as.integer(factor$n_factors)
   if (is.na(k) || k < 0L) stop("factor$n_factors must be a non-negative integer")
+
+  # Convenience: `factor_index` assigns the item to a single factor. The item
+  # loads only on factor `factor_index`, with every other factor's loading
+  # fixed at 0; `loading_normalization` is then the single value at that
+  # position (NA = free loading, 1 = anchor / scale normalization, or a fixed
+  # number). This is shorthand for the full length-n_factors vector convention
+  # (0 = off-factor, 1 = anchor, NA = free).
+  if (!is.null(factor_index)) {
+    if (k < 1L) stop("`factor_index` requires a factor model with n_factors >= 1.")
+    factor_index <- as.integer(factor_index)
+    if (length(factor_index) != 1L || is.na(factor_index) ||
+        factor_index < 1L || factor_index > k) {
+      stop("`factor_index` must be a single integer in 1..", k, ".")
+    }
+    if (length(loading_normalization) > 1L) {
+      stop("When `factor_index` is given, `loading_normalization` must be a single ",
+           "value (NA for a free loading, 1 for an anchor, or a fixed number), not ",
+           "a length-", length(loading_normalization), " vector.")
+    }
+    scalar_load <- if (is.null(loading_normalization)) NA_real_ else loading_normalization
+    loading_normalization <- rep(0, k)
+    loading_normalization[factor_index] <- scalar_load
+  }
 
   # Component-specific normalization (defaults to all free)
   if (is.null(loading_normalization)) {

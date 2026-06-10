@@ -1,6 +1,6 @@
 ## Submission summary
 
-This is a feature update (version 1.7.0). Since the version currently on CRAN
+This is a feature update (version 1.7.1). Since the version currently on CRAN
 it adds, with documentation and tests:
 
 * `simulate_factor_model()`: simulate data from a fitted or specified model.

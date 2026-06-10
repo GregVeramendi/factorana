@@ -2245,7 +2245,11 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     cov_free = cov_free,
     free_idx = param_constraints$free_idx,
     estimates_free = estimates_free,
-    n_quad = n_quad
+    n_quad = n_quad,
+    # Fingerprint of the model-relevant columns, so post-hoc tools
+    # (vcov_factorana) can verify they were handed the same data (same rows,
+    # same order) the model was fit on.
+    data_fingerprint = .factorana_data_fingerprint(model_system, data)
   )
   class(result) <- "factorana_result"
   result

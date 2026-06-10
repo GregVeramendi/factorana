@@ -10,7 +10,7 @@ define_model_component(
   outcome,
   factor,
   evaluation_indicator = NULL,
-  covariates,
+  covariates = NULL,
   model_type = c("linear", "logit", "probit", "oprobit"),
   intercept = TRUE,
   num_choices = 2,
@@ -18,6 +18,7 @@ define_model_component(
   exclude_chosen = TRUE,
   rankshare_var = NULL,
   loading_normalization = NULL,
+  factor_index = NULL,
   factor_spec = c("linear", "quadratic", "interactions", "full"),
   use_types = FALSE,
   skip_collinearity_check = FALSE
@@ -34,7 +35,9 @@ define_model_component(
 
 \item{evaluation_indicator}{Character (optional). Variable used for evaluation subsample.}
 
-\item{covariates}{List of Character vectors. Names of covariates.}
+\item{covariates}{Character vector. Names of covariate columns in \code{data}
+(include \code{"intercept"} for an intercept). Defaults to \code{NULL} (no
+covariates), so a pure measurement item needs no \code{covariates} argument.}
 
 \item{model_type}{Character. Type of model (e.g., "linear", "logit", "probit").}
 
@@ -53,13 +56,26 @@ correction variables. These provide rank-and-choice-specific adjustments to the
 linear predictor. Data layout: (num_choices-1) * nrank columns, accessed as
 rankshare_var + (num_choices-1)*irank + icat for irank=0..nrank-1, icat=0..num_choices-2.}
 
-\item{loading_normalization}{Numeric vector of length \code{n_factors} (optional).
-Component-specific loading constraints. Overrides factor model normalization.
+\item{loading_normalization}{Numeric vector of length \code{n_factors}. This is how
+an item is assigned to factor(s): one entry per factor, with the convention
 \itemize{
+\item \code{0}  --> item does not load on that factor (off-factor),
+\item \code{1}  --> loading fixed at 1 (the anchor that sets the factor's scale),
 \item \code{NA} --> loading is free (estimated).
-\item numeric value --> loading is fixed at that value (e.g. \code{1} for identification).
-If NULL, uses the factor model's default normalization.
+For example, in a 3-factor model \code{c(NA, 0, 0)} means the item loads freely on
+factor 1 only, and \code{c(1, 0, 0)} makes it the anchor for factor 1. Each factor
+needs exactly one anchor (a \code{1}) somewhere in the system for identification.
+If \code{NULL} (default), all loadings are free. See also \code{factor_index} for a
+shorthand when an item loads on a single factor.
 }}
+
+\item{factor_index}{Integer (optional). Convenience for assigning an item to a
+single factor: the item loads only on factor \code{factor_index} (all other
+factors fixed at 0), and \code{loading_normalization} is then interpreted as the
+single value at that position (\code{NA} for a free loading, \code{1} for the anchor,
+or a fixed number). For instance \verb{factor_index = 2, loading_normalization = 1}
+is shorthand for \code{loading_normalization = c(0, 1, 0)} in a 3-factor model.
+Leave \code{NULL} to specify the full vector directly.}
 
 \item{factor_spec}{Character. Specification for factor terms in linear predictor.
 \itemize{
@@ -92,4 +108,14 @@ fm <- define_factor_model(n_factors = 1)
 mc <- define_model_component("Y", dat, "y", fm,
   covariates = "intercept", model_type = "linear",
   loading_normalization = 1)
+
+# Multi-factor: assign an item to a factor with the length-n_factors vector.
+dat2 <- data.frame(y1 = rnorm(50), y2 = rnorm(50))
+fm2 <- define_factor_model(n_factors = 2)
+# item loads on factor 1 only, as its anchor (loading fixed at 1):
+a1 <- define_model_component("a1", dat2, "y1", fm2,
+  loading_normalization = c(1, 0))
+# item loads freely on factor 2 only -- same thing via factor_index:
+a2 <- define_model_component("a2", dat2, "y2", fm2,
+  factor_index = 2, loading_normalization = NA_real_)
 }

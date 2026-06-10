@@ -125,3 +125,37 @@ test_that("vcov_factorana works on a genuine latent-factor model", {
   se_mod <- res$std_errors[free]
   expect_true(all(se_rob / se_mod > 0.25 & se_rob / se_mod < 4))
 })
+
+test_that("robust_se returns a named vector (name-based indexing works)", {
+  skip_on_cran()
+  dat <- make_logit_glm_data(n = 600)
+  res <- fit_glm_equiv(dat)
+  expect_equal(res$convergence, 0)
+
+  se <- robust_se(res, dat, type = "robust")
+  # the naming contract: one named entry per model parameter
+  expect_named(se, names(res$estimates))
+  # name-based indexing must not silently return NA for free parameters
+  free <- res$free_idx
+  expect_false(anyNA(se[names(res$estimates)[free]]))
+
+  # cluster path keeps names too
+  se_cl <- robust_se(res, dat, type = "cluster", cluster = "cl")
+  expect_named(se_cl, names(res$estimates))
+})
+
+test_that("vcov_factorana rejects mismatched data (fingerprint guard)", {
+  skip_on_cran()
+  dat <- make_logit_glm_data(n = 500)
+  res <- fit_glm_equiv(dat)
+  expect_equal(res$convergence, 0)
+
+  # same data: fine
+  expect_silent(invisible(vcov_factorana(res, dat, type = "robust")))
+  # same shape, different row order: caught
+  expect_error(vcov_factorana(res, dat[sample(nrow(dat)), ], type = "robust"),
+               "does not match")
+  # same shape, different rows: caught
+  expect_error(vcov_factorana(res, dat[sample(nrow(dat), replace = TRUE), ], type = "robust"),
+               "does not match")
+})

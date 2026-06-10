@@ -1,3 +1,39 @@
+# Lightweight, order-sensitive fingerprint of the model-relevant columns of a
+# data frame. Used to detect that the data passed to vcov_factorana() (or the
+# bootstrap) is the same data, in the same row order, that a model was fit on.
+# Only columns the model references are hashed, so adding/removing unrelated
+# columns does not trip the check.
+.factorana_data_fingerprint <- function(model_system, data) {
+  cols <- unique(unlist(lapply(model_system$components, function(co)
+    c(co$outcome, co$covariates, co$evaluation_indicator))))
+  if (!is.null(model_system$weights)) cols <- c(cols, model_system$weights)
+  cols <- sort(intersect(cols, names(data)))
+  nr <- nrow(data)
+  if (length(cols) == 0L) return(list(nrow = nr, cols = character(0), s1 = 0, s2 = 0))
+  m <- suppressWarnings(vapply(data[cols], function(v) as.numeric(v),
+                               numeric(nr)))
+  m[!is.finite(m)] <- 0
+  idx <- seq_len(nr)
+  list(nrow = nr, cols = cols,
+       s1 = sum(m),                 # value sum
+       s2 = sum(m * idx))           # index-weighted sum (order-sensitive)
+}
+
+# Compare two fingerprints; returns a short reason string on mismatch, else "".
+.factorana_fingerprint_mismatch <- function(fp_fit, fp_now) {
+  if (is.null(fp_fit)) return("")  # fits from older versions carry no fingerprint
+  if (fp_fit$nrow != fp_now$nrow) {
+    return(sprintf("different number of rows (fit: %d, supplied: %d)",
+                   fp_fit$nrow, fp_now$nrow))
+  }
+  if (!identical(fp_fit$cols, fp_now$cols)) return("different model columns")
+  tol <- 1e-6 * (1 + abs(fp_fit$s1) + abs(fp_fit$s2))
+  if (abs(fp_fit$s1 - fp_now$s1) > tol || abs(fp_fit$s2 - fp_now$s2) > tol) {
+    return("same shape but different row contents or order")
+  }
+  ""
+}
+
 #' Robust and cluster-robust covariance for a fitted factorana model
 #'
 #' Computes a sandwich (Huber-White) or cluster-robust covariance matrix for a
@@ -84,6 +120,17 @@ vcov_factorana <- function(object, data,
          "used at estimation.")
   }
 
+  # Guard against passing a different (or reordered) data frame than the one the
+  # model was fit on: the free-parameter-count check below only catches gross
+  # shape mismatches, not "right shape, wrong rows".
+  mismatch <- .factorana_fingerprint_mismatch(
+    object$data_fingerprint, .factorana_data_fingerprint(object$model_system, data))
+  if (nzchar(mismatch)) {
+    stop("`data` does not match the data this model was fit on (", mismatch,
+         "). Pass the same data frame, with the same rows in the same order, ",
+         "that was used in estimate_model_rcpp().")
+  }
+
   data_mat <- as.matrix(data)
   fm_ptr <- initialize_factor_model_cpp(object$model_system, data_mat,
                                         as.integer(n_quad), estimates)
@@ -158,5 +205,8 @@ robust_se <- function(object, data,
   type <- match.arg(type)
   V <- vcov_factorana(object, data, type = type, cluster = cluster,
                       n_quad = n_quad, finite_sample = finite_sample)
-  sqrt(pmax(0, diag(V)))
+  # pmax(diag(V), 0): the parameter-vector argument comes first so the result
+  # keeps its names (pmax() copies attributes from its first argument; a leading
+  # scalar 0 would drop them).
+  sqrt(pmax(diag(V), 0))
 }
