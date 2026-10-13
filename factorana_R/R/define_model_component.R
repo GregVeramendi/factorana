@@ -348,6 +348,18 @@ define_model_component <- function(name,
     } else {
       stop("`evaluation_indicator` must be logical or 0/1 numeric.")
     }
+    # Every value must be 0 or 1 (FALSE or TRUE). The C++ likelihood skips a row
+    # only when its indicator is 0. The checks below use the rows equal to 1. Any
+    # other value, NA included, would let a row into the likelihood unchecked.
+    bad_ei <- is.na(ei) | !(ei %in% c(0, 1))
+    if (any(bad_ei)) {
+      stop(sprintf(paste0(
+        "Component '%s': evaluation_indicator '%s' must be 0 or 1 in every row. ",
+        "%d row(s) hold another value (%s)."),
+        name, evaluation_indicator, sum(bad_ei),
+        paste(format(utils::head(unique(ei[bad_ei]), 5)), collapse = ", ")),
+        call. = FALSE)
+    }
     if (sum(idx) == 0L) {
       warning(sprintf(
         "Component '%s' is skipped: evaluation_indicator '%s' has no TRUE/1 rows.",

@@ -7,6 +7,12 @@
   outside 1 to `num_choices`, is skipped as an unused rank. Converting `NA` to an
   integer was undefined behavior in C++. Results for valid ranks are unchanged.
 
+* **Evaluation indicators must be 0 or 1** (`define_model_component()`). The
+  function now stops when an evaluation indicator holds any other value, `NA`
+  included. The C++ likelihood skips a row only when its indicator is 0, while the
+  R checks used only the rows equal to 1. A value such as 2 or `NA` let a row into
+  the likelihood unchecked. The check runs once, when the component is defined.
+
 # factorana 1.7.1
 
 ## Bug fixes
