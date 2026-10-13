@@ -1,3 +1,12 @@
+# factorana 1.8.0
+
+## Bug fixes
+
+* **Exploded logit: missing ranks** (`src/Model.cpp`). The likelihood now tests each
+  rank's value before converting it to an integer. A missing rank (`NA`), or a value
+  outside 1 to `num_choices`, is skipped as an unused rank. Converting `NA` to an
+  integer was undefined behavior in C++. Results for valid ranks are unchanged.
+
 # factorana 1.7.1
 
 ## Bug fixes

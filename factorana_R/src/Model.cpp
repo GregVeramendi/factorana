@@ -1022,21 +1022,25 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
             rank_outcome = data[iobs_offset + outcome_indices[irank]];
         }
 
-        // Observed choice (0-indexed: 0, 1, ..., numchoice-1)
-        int obsCat = int(rank_outcome) - 1;  // Convert from 1-indexed to 0-indexed
-
-        // Skip invalid ranks (missing choices indicated by value not in 1..numchoice)
-        if (obsCat < 0 || obsCat >= numchoice) {
+        // Skip invalid ranks (missing choices indicated by value not in 1..numchoice).
+        // The test runs on the double, before any conversion to int. Converting NaN
+        // (a missing value from R) or an out-of-range value to int is undefined
+        // behavior in C++. Every comparison with NaN is false. NaN therefore fails
+        // the test and counts as an invalid rank.
+        if (!(rank_outcome >= 1.0 && rank_outcome < numchoice + 1.0)) {
             if (numrank == 1) {
                 // For standard logit, invalid choice is an error
-                Rf_warning("Invalid multinomial choice %d (must be 1 to %d)",
-                           int(rank_outcome), numchoice);
+                Rf_warning("Invalid multinomial choice %g (must be 1 to %d)",
+                           rank_outcome, numchoice);
                 modEval[0] = 1e-100;
                 return;
             }
             // For exploded logit, skip this rank (individual didn't use all ranks)
             continue;
         }
+
+        // Observed choice (0-indexed: 0, 1, ..., numchoice-1)
+        int obsCat = int(rank_outcome) - 1;  // Convert from 1-indexed to 0-indexed
 
         // Load rank-share corrections for this rank (if ranksharevar is provided)
         // Layout: ranksharevar_idx + (numchoice-1)*irank + icat for icat=0..numchoice-2
