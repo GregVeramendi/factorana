@@ -396,3 +396,30 @@ group), R optimizer time (`optimization_time`, 8 workers), both on -O2 builds. A
   wage1_type_3_intercept x wage1_x1), which slows or misdirects Newton steps there. That is consistent with the
   convergence trouble seen in production and with the help that scaling the start values by 0.001 gave, but the mini
   model cannot prove that link.
+
+## T8 addendum (November 2): why the one-point floor is 0.029 of full time in R but 0.008 in legacy
+Single-core evaluation of the education-stage system (26 components, 176 free parameters, N = 2001, replication 1;
+legacy TestCode with ADAPT builds, R `t8_eval_timing.R`), likelihood / gradient / Hessian seconds:
+
+| Mode | Points / person | Legacy | R |
+|---|---|---|---|
+| Full quadrature | 512 | 1.57 / 2.44 / 50.5 | 0.95 / 1.60 / 22.9 |
+| Adaptive, ML scores, t 0.5 (production) | 3.1 | 0.01 / 0.02 / 0.40 | 0.006 / 0.011 / 0.209 |
+| Adaptive, posterior SE, t 0.5 | 8.1 | 0.02 / 0.04 / 0.92 | 0.016 / 0.027 / 0.431 |
+| Adaptive, posterior SE, t 1.0 | 1.0 | 0.01 / 0.00 / 0.20 | 0.002 / 0.004 / 0.110 |
+
+- The integration simplifies at least as well in R as in legacy: from full quadrature to one point the Hessian drops
+  250-fold in legacy and 208-fold in R, the likelihood 157-fold and 475-fold, and R is about twice as fast as legacy
+  on every row of this (fixed-measurement) system.
+- Iterations: R takes 6 nlminb iterations for every adaptive variant and for full quadrature; legacy takes 10 Ipopt
+  iterations. Per iteration on 8 workers / ranks: R 0.139 s at one point per person, legacy 0.033 s at three points.
+- The gap is doParallel's per-call overhead. At t = 1.0 the R fit takes 1.01 s of optimizer time on ONE core and 0.83 s
+  on eight workers (6 iterations each): the compute per iteration is about 0.12 s single-core, so eight workers cannot
+  gain, and each iteration pays about 0.12 s for three foreach round trips that ship a 176 x 176 Hessian from every
+  worker. Legacy's MPI reduce costs little, so its per-iteration time falls from about 0.21 s to 0.033 s. At t = 0.5
+  eight workers give R 2.7x (3.80 s to 1.42 s), and at full quadrature the overhead is negligible.
+- The two "time vs full" columns also have different denominators: legacy's full run is 10 iterations x 3.84 s, R's is
+  6 iterations x 5.15 s.
+- Consequence for HJV: the overhead is fixed per iteration (a few round trips plus Hessian serialization, which grows
+  with the parameter count squared), while the compute per iteration grows with N, so at production size the adaptive
+  stage runs at the compute ratio, near parity or better. The floor only matters when a whole stage takes a second.

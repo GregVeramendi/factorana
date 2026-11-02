@@ -21,6 +21,9 @@ using namespace std;
 #ifndef NTYPES
 #define NTYPES 1
 #endif
+#ifndef ATHRESH
+#define ATHRESH 0.5
+#endif
 #if NTYPES > 1
 #define DTAG "_t" STR(NTYPES)   // data file suffix
 #define WTAG "t" STR(NTYPES)    // working directory tag
@@ -57,7 +60,7 @@ void init(int mpirank) {
   mymodel.SetObsIndex("id");
 #ifdef ADAPT
   mymodel.SetFactorScores();            // reads factor_predictions.txt from the working directory
-  mymodel.SetAdaptIntThresh(0.5);
+  mymodel.SetAdaptIntThresh(ATHRESH);   // default 0.5; override with -DATHRESH=<t>
 #endif
 #ifdef PRIOR
   mymodel.SetIncludePriorFactorScore();   // posterior-mode scores (R default); legacy default is ML scores

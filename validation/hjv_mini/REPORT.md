@@ -109,7 +109,12 @@ two add little: t = 0.7 already puts 1.2 points on the average person and gives 
 deviation 0.27 SE), because with the posterior SE a factor gets 3 points only when its SE exceeds t, and few SEs exceed
 0.7. Raising t above 0.5 therefore saves at most a third of a time that is already 4.5 percent of full quadrature, and
 doubles the deviation. Thresholds at or above 1 all give one point per person, the floor, since the posterior SE never
-exceeds the prior SD.
+exceeds the prior SD. The floor sits at 2.9 percent of full time in R against 0.8 percent in legacy not because the
+integration simplifies less in R (single-core, one Hessian evaluation falls from 22.9 s to 0.11 s in R and from 50.5 s
+to 0.20 s in legacy, so R is faster on every row) but because each optimizer iteration pays about 0.12 s of doParallel
+round-trip and serialization cost, which equals the whole compute per iteration at this size; eight workers do not
+speed up the one-point fit at all (1.01 s on one core, 0.83 s on eight). That cost is fixed per iteration, so at HJV's
+sample size the adaptive stage runs at the compute ratio.
 
 ## Latent types and the joint final stage (T9)
 
