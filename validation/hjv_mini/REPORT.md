@@ -109,12 +109,16 @@ two add little: t = 0.7 already puts 1.2 points on the average person and gives 
 deviation 0.27 SE), because with the posterior SE a factor gets 3 points only when its SE exceeds t, and few SEs exceed
 0.7. Raising t above 0.5 therefore saves at most a third of a time that is already 4.5 percent of full quadrature, and
 doubles the deviation. Thresholds at or above 1 all give one point per person, the floor, since the posterior SE never
-exceeds the prior SD. The floor sits at 2.9 percent of full time in R against 0.8 percent in legacy not because the
-integration simplifies less in R (single-core, one Hessian evaluation falls from 22.9 s to 0.11 s in R and from 50.5 s
-to 0.20 s in legacy, so R is faster on every row) but because each optimizer iteration pays about 0.12 s of doParallel
-round-trip and serialization cost, which equals the whole compute per iteration at this size; eight workers do not
-speed up the one-point fit at all (1.01 s on one core, 0.83 s on eight). That cost is fixed per iteration, so at HJV's
-sample size the adaptive stage runs at the compute ratio.
+exceeds the prior SD. At N = 2,001 the whole adaptive stage takes about a second, so its "time vs full" ratios are dominated by fixed
+per-iteration costs and timer resolution and should not be compared across codes. At N = 20,000 (same education stage,
+176 free parameters, 8 workers or ranks) the recommended setting, posterior SE with t = 0.5 and 7.9 points per person,
+takes 5.6 s of optimizer time in R (6 iterations) against 5.3 s in legacy (8 iterations); one point per person takes
+2.0 s against 1.1 s; the production setting 3.2 s against 2.1 s. Single-core, one Hessian evaluation falls 58-fold from
+full quadrature to t = 0.5 in both codes (505 to 8.8 s legacy, 237 to 4.2 s R), so the adaptive rule simplifies the
+integration identically, and R is about twice as fast per evaluation on every row. Eight workers give R 6.3-fold at
+t = 0.5 at this size (1.2-fold for one point at N = 2,001), which is where the small-sample floor came from: a fixed
+per-iteration cost of `doParallel` round trips and Hessian transfer that grows with the parameter count squared, not
+with N or with the points per person, while the compute per iteration grows with both.
 
 ## Latent types and the joint final stage (T9)
 

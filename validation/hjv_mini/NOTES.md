@@ -423,3 +423,35 @@ legacy TestCode with ADAPT builds, R `t8_eval_timing.R`), likelihood / gradient 
 - Consequence for HJV: the overhead is fixed per iteration (a few round trips plus Hessian serialization, which grows
   with the parameter count squared), while the compute per iteration grows with N, so at production size the adaptive
   stage runs at the compute ratio, near parity or better. The floor only matters when a whole stage takes a second.
+
+## T8 at scale (November 2): N = 20,000, education stage, both codes (`run_t8_big.sh`, `t8_big_r.R`)
+The N = 2,001 floor numbers above are at timer resolution and dominated by fixed costs; these replace them.
+Stage 1 (8 cores / ranks): R 153.6 s (13 iterations), legacy 623 s (44 iterations). Scores: R posterior mode with posterior
+SE 1.6 s on 8 cores, legacy ML scores 27 s serial.
+
+Single-core evaluation of the education-stage system (176 free parameters), likelihood / gradient / Hessian seconds:
+
+| Mode | Points / person | Legacy | R | R / legacy |
+|---|---|---|---|---|
+| Full quadrature | 512 | 16.7 / 24.9 / 505 | 9.5 / 16.4 / 237 | 0.57 / 0.66 / 0.47 |
+| Adaptive, ML scores, t 0.5 (production) | 2.9 | 0.09 / 0.13 / 3.81 | 0.057 / 0.097 / 1.94 | 0.63 / 0.75 / 0.51 |
+| Adaptive, posterior SE, t 0.5 | 7.9 | 0.24 / 0.37 / 8.76 | 0.148 / 0.254 / 4.15 | 0.62 / 0.69 / 0.47 |
+| Adaptive, posterior SE, t 1.0 | 1.0 | 0.04 / 0.06 / 2.24 | 0.022 / 0.041 / 1.10 | 0.55 / 0.68 / 0.49 |
+
+The adaptive rule simplifies the integration identically in the two codes: one Hessian evaluation falls 58-fold from
+full quadrature to t 0.5 in both (505 to 8.76 s, 237 to 4.15 s) and about 220-fold to one point. R is about twice as
+fast on every row.
+
+Adaptive education stage to convergence, optimizer time (Ipopt seconds / nlminb optimization_time), 8 ranks / workers:
+
+| Setting | Legacy (iterations) | R, 8 workers (iterations) | R, 1 core | R parallel gain |
+|---|---|---|---|---|
+| Posterior SE, t 0.5 (7.9 points) | 5.26 s (8) | 5.58 s (6) | 35.3 s | 6.3x |
+| Posterior SE, t 1.0 (1 point) | 1.14 s (8) | 1.96 s (6) | 9.0 s | 4.6x |
+| ML scores, t 0.5 (2.9 points, production) | 2.13 s (7) | 3.15 s (7) | not run | |
+
+At this size the fixed per-iteration cost of doParallel is a minor share: eight workers give 6.3x at t 0.5 (1.2x at
+N = 2,001 for one point), and the recommended setting runs at parity with legacy (5.6 against 5.3 s). The one-point
+floor is still 1.7 times legacy (2.0 against 1.1 s) because per-iteration overhead remains visible when the compute per
+iteration is about a second; it is irrelevant at the stage level. Compute per iteration scales with N times the points
+per person (times components and types), the overhead with the number of iterations and the parameter count squared.
