@@ -388,3 +388,11 @@ group), R optimizer time (`optimization_time`, 8 workers), both on -O2 builds. A
 - Going from 0.5 to the floor saves a third of an already small time (1.4 s to 0.9 s, 4.5 to 2.9 percent of full
   quadrature) and doubles the deviation from full quadrature (0.14 to 0.27 SE on average, 1.2 to 2.2 SE at most).
   The fixed per-person cost (every component evaluated at least once) dominates at that end.
+- Hessians AT the converged typed optimum (`t9_hess_at_opt.R`, legacy TestCode and R evaluated at legacy run B's
+  estimates): the same 12 elements differ, but now by at most 3.3e-5 (relative 8.2e-7). The legacy error is therefore a
+  term proportional to the score of the typed linear component, which vanishes at the MLE. Consequences: SEs from the two
+  Hessians at the optimum agree to 1.1e-7, legacy's reported SEs equal R's to 2.9e-7, and both codes converge to the
+  same point (7e-9). The error only distorts Ipopt's curvature away from the optimum (at the truth, -20 against -145 on
+  wage1_type_3_intercept x wage1_x1), which slows or misdirects Newton steps there. That is consistent with the
+  convergence trouble seen in production and with the help that scaling the start values by 0.001 gave, but the mini
+  model cannot prove that link.

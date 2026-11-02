@@ -147,8 +147,11 @@ against an external reference and carried four defects, all fixed in 1.8.0 and n
 
 Two legacy findings came out as well. First, the legacy Hessian is wrong on the cross terms between a type intercept
 and a regressor in typed linear outcomes (12 elements here; a finite difference of the shared gradient confirms the R
-values to all printed digits). It does not move the optimum but perturbs Ipopt's steps and the inverse-Hessian SEs of
-those parameters. Second, `Est_outcomes` multiplies every value read from `init_par.txt` by `loadingMultiplier`
+values to all printed digits). The error is proportional to the score, so it vanishes at the optimum: evaluated at the
+converged estimates the two Hessians agree to 3e-5 and the reported SEs to 3e-7, and both codes converge to the same
+point. Away from the optimum the curvature is off (at the truth, -20 against -145 on one element), which can slow or
+misdirect Ipopt's Newton steps. That is consistent with the convergence trouble legacy showed in production and with
+the help that scaling the start values by 0.001 gave, although the mini model cannot prove the link. Second, `Est_outcomes` multiplies every value read from `init_par.txt` by `loadingMultiplier`
 (0.001), and stage 1 cannot run with `ntypes > 1` when the type model sits in a skipped group.
 
 ## Recommendation
