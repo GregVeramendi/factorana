@@ -1,0 +1,177 @@
+Working Directory set to:results2/
+
+Reading in Variable Table: tiny_varlist.txt
+There are 6 variables.
+Found 2000 observations in file tiny.raw.
+
+****Linear model for M1 model
+ Model groups (estimation, printing):    0,    0 
+ Outcome:           M1
+ Missing:         none
+ Regressors: const, x1, x2
+ Normalizations for factors: none
+
+****Linear model for M2 model
+ Model groups (estimation, printing):    0,    0 
+ Outcome:           M2
+ Missing:         none
+ Regressors: const, x1, x2
+ Normalizations for factors: none
+
+****Linear model for M3 model
+ Model groups (estimation, printing):    0,    0 
+ Outcome:           M3
+ Missing:         none
+ Regressors: const, x1, x2
+ Normalizations for factors: none
+
+***TMinLkhd::ResetFitInfo() with 16 parameters and 16 free.
+Factor #0 is not normalized: Fixing variance to 1.0 for factor #0
+***TMinLkhd::ResetFitInfo() with 16 parameters and 15 free.
+***** Estimating Measurement System *******
+
+********Initial parameter values:
+Models with normalizations are:
+fac #0: Variance fixed to 1.0
+
+****Factors*************
+  0. Factor1 sigma:    1.000 +/-    0.000   
+
+****M1 model Model*************
+  1.         const:    0.000 +/-    0.040   
+  2.            x1:    0.000 +/-    0.040   
+  3.            x2:   -0.001 +/-    0.040   
+  4. Fac1 loading :    0.000 +/-    0.010   
+  5. 1/Precision  :    1.209 +/-    0.605   
+     N            :     2000 
+
+****M2 model Model*************
+  6.         const:    0.000 +/-    0.036   
+  7.            x1:    0.000 +/-    0.036   
+  8.            x2:    0.001 +/-    0.036   
+  9. Fac1 loading :    0.000 +/-    0.010   
+ 10. 1/Precision  :    1.084 +/-    0.542   
+     N            :     2000 
+
+****M3 model Model*************
+ 11.         const:    0.000 +/-    0.044   
+ 12.            x1:   -0.000 +/-    0.044   
+ 13.            x2:    0.001 +/-    0.044   
+ 14. Fac1 loading :    0.000 +/-    0.010   
+ 15. 1/Precision  :    1.334 +/-    0.667   
+     N            :     2000 
+Ok, now minimizing all parameters!
+Initial Likelihood=8654.35
+Minimizing 15 parameters while fixing 1 (nfreeparam=15).
+Evaluating Likelihood
+Likelihood at initial par=8654.3485.
+Calculating the Likelihood took   0.0100 seconds.
+Calculating the Gradient   took   0.0000 seconds.
+Calculating the Hessian    took   0.0100 seconds.
+******************ok now minimizing with ipopt
+
+******************************************************************************
+This program contains Ipopt, a library for large-scale nonlinear optimization.
+ Ipopt is released as open source code under the Eclipse Public License (EPL).
+         For more information visit https://github.com/coin-or/Ipopt
+******************************************************************************
+
+This is Ipopt version 3.14.20, running with linear solver MUMPS 5.6.2.
+
+Number of nonzeros in equality constraint Jacobian...:        0
+Number of nonzeros in inequality constraint Jacobian.:        0
+Number of nonzeros in Lagrangian Hessian.............:      120
+
+Total number of variables............................:       15
+                     variables with only lower bounds:        0
+                variables with lower and upper bounds:        0
+                     variables with only upper bounds:        0
+Total number of equality constraints.................:        0
+Total number of inequality constraints...............:        0
+        inequality constraints with only lower bounds:        0
+   inequality constraints with lower and upper bounds:        0
+        inequality constraints with only upper bounds:        0
+
+iter    objective    inf_pr   inf_du lg(mu)  ||d||  lg(rg) alpha_du alpha_pr  ls
+   0  8.6543485e+03 0.00e+00 5.84e+02   0.0 0.00e+00    -  0.00e+00 0.00e+00   0
+   1  8.5825003e+03 0.00e+00 5.00e+02 -11.0 4.99e-02   4.0 1.00e+00 1.00e+00f  1
+   2  8.4637413e+03 0.00e+00 3.51e+02 -11.0 1.05e-01   3.5 1.00e+00 1.00e+00f  1
+   3  8.4336347e+03 0.00e+00 3.03e+02 -11.0 3.41e-02   3.9 1.00e+00 1.00e+00f  1
+   4  8.3827773e+03 0.00e+00 2.10e+02 -11.0 7.14e-02   3.5 1.00e+00 1.00e+00f  1
+   5  8.3700515e+03 0.00e+00 1.80e+02 -11.0 2.28e-02   3.9 1.00e+00 1.00e+00f  1
+   6  8.3487292e+03 0.00e+00 1.23e+02 -11.0 4.72e-02   3.4 1.00e+00 1.00e+00f  1
+   7  8.3433304e+03 0.00e+00 1.06e+02 -11.0 1.51e-02   3.8 1.00e+00 1.00e+00f  1
+   8  8.3311754e+03 0.00e+00 7.29e+01 -11.0 3.13e-02   3.4 1.00e+00 1.00e+00f  1
+   9  8.3253976e+03 0.00e+00 9.02e+01 -11.0 1.44e-02   3.8 1.00e+00 1.00e+00f  1
+iter    objective    inf_pr   inf_du lg(mu)  ||d||  lg(rg) alpha_du alpha_pr  ls
+  10  7.7145872e+03 0.00e+00 7.54e+02 -11.0 6.50e-01   3.3 1.00e+00 1.00e+00f  1
+  11  6.8209744e+03 0.00e+00 7.85e+02 -11.0 1.18e+00   2.8 1.00e+00 5.00e-01f  2
+  12  6.7643516e+03 0.00e+00 1.49e+02 -11.0 1.10e-01    -  1.00e+00 1.00e+00f  1
+  13  6.7609667e+03 0.00e+00 9.90e+00 -11.0 2.38e-02    -  1.00e+00 1.00e+00f  1
+  14  6.7609527e+03 0.00e+00 5.23e-02 -11.0 1.76e-03    -  1.00e+00 1.00e+00f  1
+  15  6.7609527e+03 0.00e+00 1.45e-06 -11.0 9.48e-06    -  1.00e+00 1.00e+00f  1
+  16  6.7609527e+03 0.00e+00 7.93e-13 -11.0 2.65e-10    -  1.00e+00 1.00e+00f  1
+
+Number of Iterations....: 16
+
+                                   (scaled)                 (unscaled)
+Objective...............:   6.7609526796822729e+03    6.7609526796822729e+03
+Dual infeasibility......:   7.9269923958236177e-13    7.9269923958236177e-13
+Constraint violation....:   0.0000000000000000e+00    0.0000000000000000e+00
+Variable bound violation:   0.0000000000000000e+00    0.0000000000000000e+00
+Complementarity.........:   0.0000000000000000e+00    0.0000000000000000e+00
+Overall NLP error.......:   7.9269923958236177e-13    7.9269923958236177e-13
+
+
+Number of objective function evaluations             = 22
+Number of objective gradient evaluations             = 17
+Number of equality constraint evaluations            = 0
+Number of inequality constraint evaluations          = 0
+Number of equality constraint Jacobian evaluations   = 0
+Number of inequality constraint Jacobian evaluations = 0
+Number of Lagrangian Hessian evaluations             = 16
+Total seconds in IPOPT                               = 0.302
+
+EXIT: Optimal Solution Found.
+MINLKHD_NLP::finalize_solution
+
+
+Final Objective value
+f(x*) = 6760.95
+Minimization done. Calculating Standard Errors...
+Lkhd= 6760.95
+Inverting Hessian...
+Final Likelihood=6760.95
+Status from Ipopt: 0
+
+********Parameter values:
+Models with normalizations are:
+fac #0: Variance fixed to 1.0
+
+****Factors*************
+  0. Factor1 sigma:    1.000 +/-    0.000   
+
+****M1 model Model*************
+  1.         const:    0.498 +/-    0.034   
+  2.            x1:    0.310 +/-    0.025   
+  3.            x2:   -0.229 +/-    0.052   
+  4. Fac1 loading :    0.954 +/-    0.019   
+  5. 1/Precision  :    0.610 +/-    0.016   
+     N            :     2000 
+
+****M2 model Model*************
+  6.         const:   -0.064 +/-    0.031   
+  7.            x1:    0.205 +/-    0.023   
+  8.            x2:    0.348 +/-    0.047   
+  9. Fac1 loading :    0.736 +/-    0.020   
+ 10. 1/Precision  :    0.720 +/-    0.013   
+     N            :     2000 
+
+****M3 model Model*************
+ 11.         const:    0.208 +/-    0.038   
+ 12.            x1:   -0.283 +/-    0.028   
+ 13.            x2:    0.066 +/-    0.057   
+ 14. Fac1 loading :    1.085 +/-    0.020   
+ 15. 1/Precision  :    0.600 +/-    0.016   
+     N            :     2000 
+Minimization took 0.34 s.

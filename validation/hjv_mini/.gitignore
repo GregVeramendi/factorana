@@ -1,0 +1,16 @@
+# Generated data, run outputs and binaries of the legacy-vs-R validation suite.
+# Everything needed to regenerate them is in the scripts and NOTES.md.
+data/
+results/
+ipopt.out
+prob_*
+!prob_hjv_mini.cc
+*.o
+*.a
+legacy_build/obj/
+legacy_build/log/
+tiny/prob_tiny*
+!tiny/prob_tiny.cc
+!tiny/prob_tiny2.cc
+tiny/results/
+tiny/ipopt.out
