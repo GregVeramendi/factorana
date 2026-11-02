@@ -5,10 +5,15 @@
 #
 # Stage 1: Measurement system (16 linear/probit models)
 # Stage 2: Estimate factor scores (using Stage 1 results)
-# Stage 3: Education choices (fixed Stage 1 + new education models)
-# Stage 4: Labor market outcomes (fixed Stages 1+3 + new labor market models)
+# Stage 3: Education choices (fixed Stage 1 + new education models), single type
+# Stage 4: Labor market outcomes (fixed Stages 1+3 + new labor market models), single type
+# Stage 5: Education and labor market models estimated JOINTLY with N_TYPES latent types
+#          (fixed Stage 1), the layout of the legacy bin/prob_hjv.cc final stage:
+#          a type-probability logit (intercept + loadings on all three factors) and
+#          type-specific intercepts in every outcome model (per alternative for logits),
+#          none in the measurement system. Stages 3 and 4 remain the single-type path.
 #
-# 3-factor model with 8 quadrature points, no correlation, single type
+# 3-factor model with 8 quadrature points, no correlation
 
 # Make sure we find the library in Rscript:
 .libPaths(c("/opt/R/4.4.2/lib/R/library", .libPaths()))
@@ -20,14 +25,23 @@ library(haven)
 # STAGE SELECTION - Modify this to run different stages
 # =============================================================================
 
-# Which stage to estimate (1, 2, 3, or 4)
+# Which stage to estimate (1, 2, 3, 4, or 5)
 STAGE_TO_RUN <- 1
+
+# Number of latent types for the joint final stage (Stage 5). The factor model must be the
+# same object in every stage (define_model_system checks it against previous_stage), so
+# N_TYPES applies to all stages: Stages 1 and 2 do not use types and are numerically
+# unchanged (factorana >= 1.8.0 collapses an unused type dimension), but Stage 1 results
+# saved with a different N_TYPES cannot be reused for Stage 5. Set N_TYPES <- 1 to turn
+# types off everywhere.
+N_TYPES <- 8
+USE_TYPES <- (STAGE_TO_RUN == 5 && N_TYPES > 1)   # type intercepts in the outcome models (Stage 5 only)
 
 # Directory for saving/loading results
 RESULTS_DIR <- "/home/Projects/MajorChoice/intdata/MajorChoice"
 
 # =============================================================================
-# ADAPTIVE QUADRATURE OPTIONS (for Stages 3 and 4 only)
+# ADAPTIVE QUADRATURE OPTIONS (for Stages 3 to 5)
 # =============================================================================
 # Adaptive quadrature uses the Stage 2 factor scores and their SEs to set the
 # number of integration points per person and factor:
@@ -44,7 +58,7 @@ RESULTS_DIR <- "/home/Projects/MajorChoice/intdata/MajorChoice"
 #     about four times the cost; threshold 1.0 is one point per person).
 # Requires factorana >= 1.8.0 and an optimized build (R CMD INSTALL, not load_all()).
 
-USE_ADAPTIVE_QUADRATURE <- TRUE   # Adaptive integration for stages 3 and 4
+USE_ADAPTIVE_QUADRATURE <- TRUE   # Adaptive integration for stages 3 to 5
 ADAPTIVE_THRESHOLD <- 0.5         # Smaller = more points; 0.3 matches full quadrature at ~4x the cost
 ADAPTIVE_MAX_QUAD <- 8            # Maximum quadrature points per factor (8 as in the legacy runs)
 
@@ -53,7 +67,8 @@ stage_result_files <- list(
   stage1 = file.path(RESULTS_DIR, "hjv_stage1_results.rds"),
   stage2 = file.path(RESULTS_DIR, "hjv_stage2_factorscores.rds"),
   stage3 = file.path(RESULTS_DIR, "hjv_stage3_results.rds"),
-  stage4 = file.path(RESULTS_DIR, "hjv_stage4_results.rds")
+  stage4 = file.path(RESULTS_DIR, "hjv_stage4_results.rds"),
+  stage5 = file.path(RESULTS_DIR, "hjv_stage5_results.rds")
 )
 
 cat("\n", rep("=", 70), "\n", sep = "")
@@ -95,10 +110,10 @@ bkgnd1990_nocons <- setdiff(bkgnd1990, "constant")
 # Define Factor Model
 # =============================================================================
 
-# 3-factor model, single type (n_types = 1)
+# 3-factor model; N_TYPES latent types (used by Stage 5 only, see above)
 fm <- define_factor_model(
   n_factors = 3,
-  n_types = 1  # Single type = no unobserved discrete heterogeneity
+  n_types = N_TYPES
 )
 
 # =============================================================================
@@ -462,9 +477,9 @@ q(save = "no")
 # STAGE 3: Education Choices (with fixed Stage 1)
 # =============================================================================
 
-if (STAGE_TO_RUN == 3) {
+if (STAGE_TO_RUN %in% c(3, 5)) {
 
-cat("\n--- Building Stage 3: Education Choices ---\n")
+cat("\n--- Building Stage", STAGE_TO_RUN, ": Education Choices ---\n")
 
 # Load Stage 1 results
 stage1_file <- stage_result_files$stage1
@@ -492,7 +507,7 @@ cat("  Factor scores for", nrow(factor_scores_s1), "observations\n\n")
 # Use factor model from previous stage (must be identical object for define_model_system)
 fm <- stage1_result$model_system$factor
 
-# Define only Stage 3 components (education choices)
+# Define the education components (Stage 3 alone, or the first part of Stage 5)
 components <- list()
 
 # -----------------------------------------------------------------------------
@@ -500,6 +515,7 @@ components <- list()
 # -----------------------------------------------------------------------------
 
 components$advmath <- define_model_component(
+  use_types = USE_TYPES,
   name = "advmath",
   data = dat,
   outcome = "advmath",
@@ -515,6 +531,7 @@ components$advmath <- define_model_component(
 # -----------------------------------------------------------------------------
 
 components$adveng <- define_model_component(
+  use_types = USE_TYPES,
   name = "adveng",
   data = dat,
   outcome = "adveng",
@@ -530,6 +547,7 @@ components$adveng <- define_model_component(
 # -----------------------------------------------------------------------------
 
 components$HS_track <- define_model_component(
+  use_types = USE_TYPES,
   name = "HS_track",
   data = dat,
   outcome = "HS_track",
@@ -567,6 +585,7 @@ components$HS_track <- fix_coefficient(components$HS_track, "hstrk2IV", 0.0, cho
 # -----------------------------------------------------------------------------
 
 components$educDapply <- define_model_component(
+  use_types = USE_TYPES,
   name = "educDapply",
   data = dat,
   outcome = "applyCollege",
@@ -585,6 +604,7 @@ components$educDapply <- define_model_component(
 # -----------------------------------------------------------------------------
 
 components$Dswesat <- define_model_component(
+  use_types = USE_TYPES,
   name = "Dswesat",
   data = dat,
   outcome = "Dswesat",
@@ -603,6 +623,7 @@ components$Dswesat <- define_model_component(
 # -----------------------------------------------------------------------------
 
 components$swesat <- define_model_component(
+  use_types = USE_TYPES,
   name = "swesat",
   data = dat,
   outcome = "swesat_total",
@@ -648,6 +669,7 @@ enrollmaj_indic <- paste0("Denroll", 2:13)
 major_apply_outcomes <- paste0("major_apply", 1:13)
 
 components$educDapplication <- define_model_component(
+  use_types = USE_TYPES,
   name = "educDapplication",
   data = dat,
   outcome = major_apply_outcomes,
@@ -706,6 +728,7 @@ for (ichoice in 2:13) {
 # -----------------------------------------------------------------------------
 
 components$educDadmitenroll <- define_model_component(
+  use_types = USE_TYPES,
   name = "educDadmitenroll",
   data = dat,
   outcome = "enroll",
@@ -723,6 +746,7 @@ components$educDadmitenroll <- define_model_component(
 # -----------------------------------------------------------------------------
 
 components$educDSwitchtoMajor <- define_model_component(
+  use_types = USE_TYPES,
   name = "educDSwitchtoMajor",
   data = dat,
   outcome = "DSwitchMajor",
@@ -827,6 +851,7 @@ for (imajor in 1:12) {
   ind_var <- paste0("ind_DGradColl", imajor)
 
   components[[comp_name]] <- define_model_component(
+    use_types = USE_TYPES,
     name = comp_name,
     data = dat,
     outcome = outcome_var,
@@ -840,14 +865,16 @@ for (imajor in 1:12) {
   )
 }
 
-cat("Stage 3 new components:", length(components), "\n")
+cat("Education components:", length(components), "\n")
 
-# Define model system with previous_stage (Stage 1 fixed)
-ms <- define_model_system(
-  components = components,
-  factor = fm,
-  previous_stage = stage1_result
-)
+if (STAGE_TO_RUN == 3) {
+  # Define model system with previous_stage (Stage 1 fixed)
+  ms <- define_model_system(
+    components = components,
+    factor = fm,
+    previous_stage = stage1_result
+  )
+}
 
 } # End of Stage 3 definition
 
@@ -855,10 +882,11 @@ ms <- define_model_system(
 # STAGE 4: Labor Market Outcomes (with fixed Stages 1+3)
 # =============================================================================
 
+if (STAGE_TO_RUN %in% c(4, 5)) {
+
+cat("\n--- Building Stage", STAGE_TO_RUN, ": Labor Market Outcomes ---\n")
+
 if (STAGE_TO_RUN == 4) {
-
-cat("\n--- Building Stage 4: Labor Market Outcomes ---\n")
-
 # Load Stage 3 results (which includes Stage 1 as previous_stage)
 stage3_file <- stage_result_files$stage3
 if (!file.exists(stage3_file)) {
@@ -887,6 +915,7 @@ fm <- stage3_result$model_system$factor
 
 # Define only Stage 4 components (labor market outcomes)
 components <- list()
+} # Stage 5 keeps stage1_result, the factor scores and the education components from the block above
 
 # Income measures
 income_meas <- c("logpvdispinc", "logwage")
@@ -925,6 +954,7 @@ for (imeas in 1:2) {
 
     # Create model component
     components[[comp_name]] <- define_model_component(
+      use_types = USE_TYPES,
       name = comp_name,
       data = dat,
       outcome = outcome_var,
@@ -937,16 +967,42 @@ for (imeas in 1:2) {
   }
 }
 
-cat("Stage 4 new components:", length(components), "\n")
+cat("Components after the labor market block:", length(components), "\n")
 
-# Define model system with previous_stage (Stages 1+3 fixed)
+if (STAGE_TO_RUN == 4) {
+  # Define model system with previous_stage (Stages 1+3 fixed)
+  ms <- define_model_system(
+    components = components,
+    factor = fm,
+    previous_stage = stage3_result
+  )
+}
+
+} # End of Stage 4 definition
+
+# =============================================================================
+# STAGE 5: Education and Labor Market Jointly with Latent Types (fixed Stage 1)
+# =============================================================================
+# Production layout of bin/prob_hjv.cc: one estimation group holding every education and
+# labor market model, each with type-specific intercepts (use_types = TRUE above), plus the
+# type-probability logit (typeprob_<t>_intercept, type_<t>_loading_<k>) that factorana adds
+# as soon as one component uses types. The measurement system (Stage 1) is fixed and has no
+# type intercepts. Type labels are arbitrary: two runs can converge to the same optimum with
+# the types permuted, so compare typed fits up to that permutation.
+
+if (STAGE_TO_RUN == 5) {
+
+cat("\n--- Building Stage 5: Education + Labor Market jointly,", N_TYPES, "latent types ---\n")
+if (N_TYPES < 2) stop("Stage 5 is the typed joint final stage; set N_TYPES >= 2, or run Stages 3 and 4 for the single-type path.")
+cat("Stage 5 new components:", length(components), "(all with type intercepts)\n")
+
 ms <- define_model_system(
   components = components,
   factor = fm,
-  previous_stage = stage3_result
+  previous_stage = stage1_result
 )
 
-} # End of Stage 4 definition
+} # End of Stage 5 definition
 
 # =============================================================================
 # Print Model System Summary
@@ -1066,4 +1122,5 @@ cat("Parameter estimates saved to:", params_csv_path, "\n")
 cat("\nStage", STAGE_TO_RUN, "estimation complete!\n")
 if (STAGE_TO_RUN < 4) {
   cat("\nTo run the next stage, set STAGE_TO_RUN <-", STAGE_TO_RUN + 1, "and re-run this script.\n")
+  if (STAGE_TO_RUN == 2) cat("Stage 5 (education + labor market jointly with", N_TYPES, "types) can be run directly after Stage 2.\n")
 }
