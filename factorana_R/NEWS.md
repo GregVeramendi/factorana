@@ -1,6 +1,68 @@
 # factorana 1.8.0
 
+## New features
+
+* **Endogenous regressors in simulation.** `simulate_factor_model()` can now feed
+  a component's *simulated* outcome into another component's covariates, porting
+  the legacy C++ `TModel::SetEndogenousRegs` / `Sim` mechanism. Declare the link
+  on the consuming component with the new `endogenous` argument of
+  `define_model_component()`, naming the producer component's outcome(s):
+
+  ```r
+  # B's covariate `yA` is the simulated outcome of component A
+  mB <- define_model_component("B", data, "yB", fm,
+          covariates = c("intercept", "yA"), model_type = "linear",
+          loading_normalization = NA_real_, endogenous = "yA")
+  ```
+
+  A linear or probit producer feeds its value into a covariate of the same name.
+  A discrete producer (multinomial logit or ordered probit) named `nm` with `K`
+  categories feeds the one-hot dummies `nm1`, ..., `nmK`. Each dummy equals 1 when
+  the simulated category equals its index. A bare `nm` covariate receives the
+  integer category. Components are simulated in dependency order, so their listing
+  order does not matter. A cyclic dependency is an error. A missing producer
+  outcome gives `NA` in its consumers.
+
+  Estimation treats the endogenous regressor as an observed column. With linear
+  indicators and no excluded covariates, a consumer that loads on its producer's
+  factor needs at least four indicators on that factor.
+
 ## Bug fixes
+
+* **Multinomial logit with latent types used one type intercept for all alternatives.**
+  The parameter layout defines one type-specific intercept per non-reference alternative
+  (`<comp>_c<k>_type_<t>_intercept`), but `Model::Eval()` received a single value per type
+  and added it to every alternative's index, and the gradient and Hessian treated the block as
+  if it held `n_types - 1` intercepts. With more than two alternatives the typed likelihood,
+  its derivatives and `fix_type_intercepts(choice = )` were therefore wrong (binary models and
+  binary logit were unaffected). Found by comparing against the legacy C++ code on a simulated
+  model with three types. The intercepts are now applied, differentiated and fixed per
+  alternative, and `initialize_parameters()` keeps a fixed per-alternative intercept in the
+  parameter vector (value 0) instead of dropping it, so the R and C++ layouts agree.
+  Regression test: `tests/testthat/test-types-mnl.R`.
+
+* **Typed components after an untyped `previous_stage`.** `initialize_parameters()` reused the
+  previous stage's parameter vector as is, so when a later stage added components with
+  `use_types = TRUE` the vector lacked the type-probability parameters, `estimate_model_rcpp()`
+  fell back to by-name reconciliation, and the multinomial logit parameters (named differently
+  by `build_parameter_metadata()`) lost their starting values and constraints. On a simulated
+  three-type model the fit stopped 32.6 log-likelihood units below the optimum that the legacy
+  code reached, with a residual standard deviation on its lower bound. The type-probability
+  block is now inserted after the factor-level parameters, and the metadata names for
+  multinomial logit parameters follow the user-facing `<comp>_c<k>_...` convention, so both
+  paths produce identical names (the `fix_coefficient()` lookup parses that convention). On the
+  C++ side `initialize_factor_model_cpp()` fixed every factor-level parameter under
+  `previous_stage`, including a type-probability block that the earlier stage never had; those
+  parameters now stay free when the anchor carries no `typeprob_*` name, so R and C++ agree on
+  the free-parameter set (checked on typed and untyped two-stage systems).
+
+* **`n_types > 1` without typed components.** `initialize_factor_model_cpp()` allocated the
+  type-probability parameters whenever the factor model had `n_types > 1`, while the R side
+  adds them only when some component has `use_types = TRUE`. The first stage of a typed
+  pipeline (measurement system without type intercepts, outcome stage with them) therefore
+  failed with "Fixed values size mismatch", and a stage that did run looped over types that
+  could not differ. The C++ side now collapses to one type when no component uses types.
+  Regression test: `tests/testthat/test-types-unused.R`.
 
 * **Exploded logit: missing ranks** (`src/Model.cpp`). The likelihood now tests each
   rank's value before converting it to an integer. A missing rank (`NA`), or a value
@@ -12,6 +74,17 @@
   included. The C++ likelihood skips a row only when its indicator is 0, while the
   R checks used only the rows equal to 1. A value such as 2 or `NA` let a row into
   the likelihood unchecked. The check runs once, when the component is defined.
+
+## Bug fixes
+
+* `define_model_system(previous_stage = )` can now be chained: a fit produced with
+  `previous_stage` is accepted as `previous_stage` by a later stage. The function
+  stores bookkeeping fields (`variance_fixed`, `variance_value`) in the factor model
+  it returns, and the factor-model identity check compared those too, so a third
+  stage failed with "Factor model in previous_stage must be identical". The check
+  now compares the specification only. `variance_value` also holds one value per
+  factor instead of the first factor only. Regression test in
+  `test-previous-stage-chain.R`.
 
 # factorana 1.7.1
 

@@ -252,6 +252,32 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
         Rcpp::stop("Data must have column names for variable indexing");
     }
 
+    List components = model_system["components"];
+
+    // Pre-scan: check if any component uses types (needed for type loadings)
+    bool any_uses_types = false;
+    for (int i = 0; i < components.size(); i++) {
+        List comp = components[i];
+        if (comp.containsElementNamed("use_types") && !Rf_isNull(comp["use_types"])) {
+            if (as<bool>(comp["use_types"])) {
+                any_uses_types = true;
+                break;
+            }
+        }
+    }
+    // SE_linear / SE_quadratic with n_types > 1 implies types at the structural level
+    // (se_intercept_type_{t}), so the type probability model parameters are needed
+    // even when no measurement component has use_types = TRUE.
+    if (!any_uses_types && n_types > 1 &&
+        (fac_struct == FactorStructure::SE_LINEAR ||
+         fac_struct == FactorStructure::SE_QUADRATIC)) {
+        any_uses_types = true;
+    }
+    // Without any typed component the type probability model has no parameters on the R side
+    // (initialize_parameters.R, optimize_model.R), so the C++ model must not allocate them either,
+    // and it must not loop over types that cannot differ. Collapse to a single type here.
+    if (!any_uses_types) n_types = 1;
+
     // Create FactorModel object using new constructor with factor_structure
     Rcpp::XPtr<FactorModel> fm(
         new FactorModel(n_obs, n_var, n_fac, n_types, n_mixtures, fac_struct, n_quad),
@@ -418,27 +444,6 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
     std::vector<bool> factor_identified(n_fac, false);
 
     // Add model components
-    List components = model_system["components"];
-
-    // Pre-scan: check if any component uses types (needed for type loadings)
-    bool any_uses_types = false;
-    for (int i = 0; i < components.size(); i++) {
-        List comp = components[i];
-        if (comp.containsElementNamed("use_types") && !Rf_isNull(comp["use_types"])) {
-            if (as<bool>(comp["use_types"])) {
-                any_uses_types = true;
-                break;
-            }
-        }
-    }
-    // SE_linear / SE_quadratic with n_types > 1 implies types at the structural level
-    // (se_intercept_type_{t}), so the type probability model parameters are needed
-    // even when no measurement component has use_types = TRUE.
-    if (!any_uses_types && n_types > 1 &&
-        (fac_struct == FactorStructure::SE_LINEAR ||
-         fac_struct == FactorStructure::SE_QUADRATIC)) {
-        any_uses_types = true;
-    }
     for (int i = 0; i < components.size(); i++) {
         List comp = components[i];
 
@@ -798,6 +803,30 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
                 param_fixed_vec[j] = true;
             }
 
+            // The type-probability parameters are NEW when the previous stage had no typed component
+            // (its anchor carries no typeprob_* name). They must stay free, as R's
+            // setup_parameter_constraints() leaves them: fixing them here while R counts them free
+            // shifts every free-parameter slot after them (bounds, gradient, Hessian, estimates).
+            if (n_types > 1 && any_uses_types) {
+                bool anchor_has_types = false;
+                if (prev_stage_info.containsElementNamed("all_param_values") &&
+                    !Rf_isNull(prev_stage_info["all_param_values"])) {
+                    NumericVector apv = prev_stage_info["all_param_values"];
+                    if (!Rf_isNull(apv.names())) {
+                        CharacterVector an = apv.names();
+                        for (int q = 0; q < an.size(); q++) {
+                            if (std::string(an[q]).rfind("typeprob_", 0) == 0) { anchor_has_types = true; break; }
+                        }
+                    }
+                }
+                if (!anchor_has_types) {
+                    for (int t = 0; t < n_types - 1; t++) {
+                        param_fixed_vec[fm->TypeProbInterceptIndex(t)] = false;
+                        for (int k = 0; k < n_fac; k++) param_fixed_vec[fm->TypeLoadingIndex(t, k)] = false;
+                    }
+                }
+            }
+
             // Selectively un-fix parameters listed in free_param_names.
             // This enables "fix all measurement params but free factor_var"
             // workflows via define_model_system(free_params = c("factor_var_1")).
@@ -1074,19 +1103,21 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
                 !Rf_isNull(comp["fixed_type_intercepts"])) {
                 List fixed_type_ints = comp["fixed_type_intercepts"];
 
-                // Calculate base parameters (everything except type intercepts)
-                // Type intercepts are at the end of the component's parameter block
-                int n_type_intercepts = (n_types > 1) ? (n_types - 1) : 0;
+                // Base parameters = everything except the type intercepts, which sit at the end of the
+                // component's block, choice-major: base + (choice - 1) * (n_types - 1) + (type - 2), with one
+                // choice block per non-reference alternative of a multinomial logit and one block otherwise.
+                int n_blocks = (mtype == ModelType::LOGIT && n_choice > 2) ? (n_choice - 1) : 1;
+                int n_type_intercepts = (n_types > 1) ? n_blocks * (n_types - 1) : 0;
                 int base_params = n_params_comp - n_type_intercepts;
 
                 for (int fti_idx = 0; fti_idx < fixed_type_ints.size(); fti_idx++) {
                     List fti = fixed_type_ints[fti_idx];
                     int type_num = as<int>(fti["type"]);  // 2-indexed (type 2, 3, ...)
-
-                    // Type intercept index within component: base_params + (type_num - 2)
-                    // type_num is 2..n_types, so offset is 0..(n_types-2)
-                    int type_intercept_offset = type_num - 2;  // 0-indexed
-                    int param_idx = param_offset + base_params + type_intercept_offset;
+                    int choice_block = 0;                  // fix_type_intercepts() stores choice (1-indexed) for multinomial logit
+                    if (n_blocks > 1 && fti.containsElementNamed("choice") && !Rf_isNull(fti["choice"])) {
+                        choice_block = as<int>(fti["choice"]) - 1;
+                    }
+                    int param_idx = param_offset + base_params + choice_block * (n_types - 1) + (type_num - 2);
 
                     // Mark as fixed
                     if (param_idx >= 0 && param_idx < total_params) {

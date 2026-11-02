@@ -825,6 +825,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     int max_ngrad = 1 + nfac + max_model_params;  // Maximum gradient size for any model
     int max_hess_dim = nfac + max_model_params;   // Maximum Hessian dimension
     std::vector<double> modEval(max_ngrad, 0.0);
+    std::vector<double> type_int_buf;        // per-choice type intercepts handed to Model::Eval
     std::vector<double> modHess;
     if (iflag == 3) {
         modHess.resize(max_hess_dim * max_hess_dim, 0.0);
@@ -1347,14 +1348,18 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                 for (size_t imod = 0; imod < models.size(); imod++) {
                     int firstpar = param_model_start[imod];
 
-                    // Get type-specific intercept for types > 1 (only if model uses types)
-                    // Type 1 (ityp=0) is reference with intercept = 0
-                    double type_intercept = 0.0;
+                    // Type-specific intercepts for types > 1 (only if the model uses types). Type 1 (ityp = 0)
+                    // is the reference with intercept 0. They sit after the base parameters, choice-major:
+                    // base + c * (ntyp - 1) + (ityp - 1), one block per non-reference choice of a
+                    // multinomial logit and a single block otherwise.
+                    const double* type_int_ptr = nullptr;
                     if (ityp > 0 && ntyp > 1 && models[imod]->GetUseTypes()) {
-                        // Type intercepts are stored after base model parameters
-                        // ityp-1 because type 1 is reference (no intercept)
-                        int intercept_offset = GetTypeInterceptIndex(ityp - 1, imod);
-                        type_intercept = param[firstpar + intercept_offset];
+                        int nblk = TypeInterceptBlocks(imod);
+                        type_int_buf.resize(nblk);
+                        for (int c = 0; c < nblk; c++) {
+                            type_int_buf[c] = param[firstpar + GetTypeInterceptIndex(ityp - 1, imod, c)];
+                        }
+                        type_int_ptr = type_int_buf.data();
                     }
 
                     // If all parameters are fixed for this model, only compute likelihood (flag=1)
@@ -1388,7 +1393,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                     }
 
                     models[imod]->Eval(iobs_offset, data, param, firstpar, fac_val,
-                                      modEval, modHess, model_flag, type_intercept, free_indices_ptr);
+                                      modEval, modHess, model_flag, type_int_ptr, free_indices_ptr);
 
                     // Multiply likelihood for this type
                     prob_this_type *= modEval[0];
@@ -1514,20 +1519,22 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                         // Gradients w.r.t. model parameters (base params only, not type intercepts)
                         // param_model_count includes type intercepts (if model uses types), but modEval only has base params
                         bool model_uses_types = models[imod]->GetUseTypes();
-                        int n_type_intercepts = (ntyp > 1 && model_uses_types) ? (ntyp - 1) : 0;
+                        int n_type_blocks = TypeInterceptBlocks(imod);
+                        int n_type_intercepts = (ntyp > 1 && model_uses_types) ? n_type_blocks * (ntyp - 1) : 0;
                         int base_param_count = param_model_count[imod] - n_type_intercepts;
                         for (int iparam = 0; iparam < base_param_count; iparam++) {
                             grad_this_type[firstpar + iparam] += modEval[1 + nfac + iparam];
                         }
 
-                        // Gradient w.r.t. this type's intercept (only for types > 1 and if model uses types)
-                        // The gradient equals dL/d(linear_predictor) * 1
-                        // For models with an intercept covariate (=1), this equals the base intercept gradient
+                        // Gradient w.r.t. this type's intercepts (types > 1, model uses types): one per choice
+                        // block. It equals dL/d(linear predictor of that block), which is the gradient of the
+                        // block's first regressor coefficient when that regressor is the intercept (= 1).
                         if (ntyp > 1 && ityp > 0 && model_uses_types) {
-                            int type_intercept_idx = firstpar + base_param_count + (ityp - 1);
-                            // modEval[1 + nfac + 0] is gradient w.r.t. first covariate coefficient
-                            // When first covariate is intercept (=1), this equals dL/d(linear_predictor)
-                            grad_this_type[type_intercept_idx] += modEval[1 + nfac + 0];
+                            int nparamchoice = base_param_count / n_type_blocks;
+                            for (int c = 0; c < n_type_blocks; c++) {
+                                int type_intercept_idx = firstpar + GetTypeInterceptIndex(ityp - 1, imod, c);
+                                grad_this_type[type_intercept_idx] += modEval[1 + nfac + c * nparamchoice + 0];
+                            }
                         }
                     }
 
@@ -1536,7 +1543,8 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                         // Note: modHess from Model::Eval() only includes base parameters,
                         // not type-specific intercepts
                         bool model_uses_types_hess = models[imod]->GetUseTypes();
-                        int n_type_intercepts_hess = (ntyp > 1 && model_uses_types_hess) ? (ntyp - 1) : 0;
+                        int n_type_blocks_hess = TypeInterceptBlocks(imod);
+                        int n_type_intercepts_hess = (ntyp > 1 && model_uses_types_hess) ? n_type_blocks_hess * (ntyp - 1) : 0;
                         int base_param_count_hess = param_model_count[imod] - n_type_intercepts_hess;
                         int nDimModHess = nfac + base_param_count_hess;
 
@@ -2227,41 +2235,42 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                         }
 
                         // ===== STEP 9b: Add Hessian terms for type-specific intercepts =====
-                        // Type-specific intercepts have the same derivative structure as base intercept.
-                        // The Hessian contribution mirrors that of the base intercept (index 0 in model params).
+                        // A type intercept has the derivative structure of its choice block's intercept
+                        // regressor (the block's first regressor, = 1), at position pc = nfac + c * nparamchoice
+                        // in modHess. Blocks of the same type interact through the logit denominator; blocks of
+                        // different types never do (only one type is active per evaluation).
                         if (ntyp > 1 && ityp > 0 && model_uses_types_hess) {
-                            int type_intercept_idx = firstpar + base_param_count_hess + (ityp - 1);
+                            int nparamchoice_h = base_param_count_hess / n_type_blocks_hess;
+                            for (int c = 0; c < n_type_blocks_hess; c++) {
+                                int type_intercept_idx = firstpar + GetTypeInterceptIndex(ityp - 1, imod, c);
+                                int pc = nfac + c * nparamchoice_h;
 
-                            // Diagonal term: d²L/d(type_intercept)² = d²L/d(intercept)²
-                            // In modHess, intercept is at position (nfac, nfac) -> index nfac * nDimModHess + nfac
-                            double hess_intercept_diag = modHess[nfac * nDimModHess + nfac];
-                            hess_this_type[type_intercept_idx * nparam + type_intercept_idx] += hess_intercept_diag;
+                                // Diagonal term: d²L/d(type_intercept_c)² = d²L/d(intercept_c)²
+                                hess_this_type[type_intercept_idx * nparam + type_intercept_idx] += modHess[pc * nDimModHess + pc];
 
-                            // Cross-terms with factor variances: d²L/d(type_intercept)d(factor_var_k)
-                            for (int k = 0; k < nfac; k++) {
-                                // modHess[k * nDimModHess + nfac] = d²L/df_k d(intercept)
-                                double hess_fk_intercept = modHess[k * nDimModHess + nfac];
+                                // Cross-terms with the type intercepts of the other choice blocks (same type)
+                                for (int c2 = c + 1; c2 < n_type_blocks_hess; c2++) {
+                                    int idx2 = firstpar + GetTypeInterceptIndex(ityp - 1, imod, c2);
+                                    int pc2 = nfac + c2 * nparamchoice_h;
+                                    hess_this_type[type_intercept_idx * nparam + idx2] += modHess[pc * nDimModHess + pc2];
+                                }
 
-                                // Use pre-computed df_dsigma2[k] = x_node / (2*sigma)
-                                // Hessian cross-term: d²L/d(factor_var_k)d(type_intercept)
-                                int full_idx = k * nparam + type_intercept_idx;
-                                hess_this_type[full_idx] += hess_fk_intercept * df_dsigma2[k];
-                            }
+                                // Cross-terms with factor variances: d²L/d(type_intercept_c)d(factor_var_k),
+                                // using the pre-computed df_dsigma2[k] = x_node / (2*sigma)
+                                for (int k = 0; k < nfac; k++) {
+                                    hess_this_type[k * nparam + type_intercept_idx] += modHess[k * nDimModHess + pc] * df_dsigma2[k];
+                                }
 
-                            // Cross-terms with base model parameters
-                            for (int iparam = 0; iparam < base_param_count_hess; iparam++) {
-                                int param_idx = firstpar + iparam;
-                                // modHess[(nfac + iparam) * nDimModHess + nfac] = d²L/d(param_iparam)d(intercept)
-                                // Note: Hessian is symmetric, upper triangular stored
-                                int mh_row = nfac;  // intercept row
-                                int mh_col = nfac + iparam;  // param column
-                                if (mh_row > mh_col) std::swap(mh_row, mh_col);
-                                double hess_param_intercept = modHess[mh_row * nDimModHess + mh_col];
-
-                                // Add to cross-term (type_intercept, param)
-                                int full_i = std::min(type_intercept_idx, param_idx);
-                                int full_j = std::max(type_intercept_idx, param_idx);
-                                hess_this_type[full_i * nparam + full_j] += hess_param_intercept;
+                                // Cross-terms with base model parameters (modHess upper triangle)
+                                for (int iparam = 0; iparam < base_param_count_hess; iparam++) {
+                                    int param_idx = firstpar + iparam;
+                                    int mh_row = pc, mh_col = nfac + iparam;
+                                    if (mh_row > mh_col) std::swap(mh_row, mh_col);
+                                    double hess_param_intercept = modHess[mh_row * nDimModHess + mh_col];
+                                    int full_i = std::min(type_intercept_idx, param_idx);
+                                    int full_j = std::max(type_intercept_idx, param_idx);
+                                    hess_this_type[full_i * nparam + full_j] += hess_param_intercept;
+                                }
                             }
                         }
                     }
@@ -3596,7 +3605,7 @@ void FactorModel::CalcLkhdSingleObs(int iobs,
         // Pass iflag to get gradients/Hessians w.r.t. factors
         // No free indices needed here since we only use factor-factor part of Hessian
         models[imod]->Eval(iobs_offset, data, param, firstpar, factor_values,
-                          modEval, modHess, iflag, 0.0, nullptr);
+                          modEval, modHess, iflag, nullptr, nullptr);   // factor scores: no type intercepts
 
         // Get model likelihood
         double Lm = modEval[0];
@@ -3716,25 +3725,27 @@ int FactorModel::GetTypeLoadingIndex(int ityp, int ifac)
     return type_param_start + n_typeprob_intercepts + ityp * nfac + ifac;
 }
 
-int FactorModel::GetTypeInterceptIndex(int ityp, int model_idx)
+int FactorModel::TypeInterceptBlocks(int model_idx)
 {
-    // Type-specific intercepts are stored in each model's parameter block
-    // They come after the model's base parameters
-    // ityp: 0-based type index (0 = type 2 since type 1 is reference)
-    // model_idx: 0-based model index
-    //
-    // Note: The actual implementation depends on how model parameters are organized
-    // This returns the index within the model's parameter block
-    // The caller needs to add param_model_start[model_idx] to get the full index
+    // One block of (ntyp - 1) type intercepts per non-reference choice of a multinomial logit, one otherwise
+    if (models[model_idx]->GetType() == ModelType::LOGIT && models[model_idx]->GetNumChoice() > 2) {
+        return models[model_idx]->GetNumChoice() - 1;
+    }
+    return 1;
+}
+
+int FactorModel::GetTypeInterceptIndex(int ityp, int model_idx, int choice_block)
+{
+    // Type-specific intercepts sit after the model's base parameters, choice-major:
+    //   base + choice_block * (ntyp - 1) + ityp
+    // ityp: 0-based type index (0 = type 2 since type 1 is reference); model_idx: 0-based model index;
+    // choice_block: 0-based non-reference choice of a multinomial logit, 0 for every other model.
+    // Returns the index within the model's parameter block; add param_model_start[model_idx] for the full index.
     if (ntyp <= 1) {
         return -1;  // No type-specific intercepts
     }
-    // Type intercepts come after base model parameters
-    // Each model has (ntyp - 1) type-specific intercepts
-    // param_model_count[model_idx] includes these, so we need to find the offset
-    // Base parameters for model = param_model_count[model_idx] - (ntyp - 1)
-    int base_params = param_model_count[model_idx] - (ntyp - 1);
-    return base_params + ityp;
+    int base_params = param_model_count[model_idx] - TypeInterceptBlocks(model_idx) * (ntyp - 1);
+    return base_params + choice_block * (ntyp - 1) + ityp;
 }
 
 void FactorModel::ComputeTypeProbabilities(const std::vector<double>& fac, std::vector<double>& probs)

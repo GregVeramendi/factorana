@@ -233,6 +233,11 @@ public:
 
     // Per-observation score output (for sandwich / cluster-robust SEs).
     void SetComputeObsScores(bool b) { compute_obs_scores = b; }
+
+    // Public accessors for the type-model parameter layout (used by the R interface when it decides
+    // which factor-level parameters a previous stage fixes)
+    int TypeProbInterceptIndex(int ityp) { return GetTypeProbInterceptIndex(ityp); }
+    int TypeLoadingIndex(int ityp, int ifac) { return GetTypeLoadingIndex(ityp, ifac); }
     const std::vector<double>& GetObsScores() const { return obs_scores; }
 
 private:
@@ -292,10 +297,15 @@ private:
     // ifac: 0-based factor index
     int GetTypeLoadingIndex(int ityp, int ifac);
 
-    // Helper: Get type-specific intercept index for a given model
+    // Helper: number of type-intercept blocks of a model: one per non-reference choice for a
+    // multinomial logit (num_choices - 1), one otherwise. A model with use_types carries
+    // blocks * (ntyp - 1) type intercepts after its base parameters, choice-major.
+    int TypeInterceptBlocks(int model_idx);
+
+    // Helper: Get type-specific intercept index (within the model's parameter block) for a given model
     // ityp: 0-based type index (0 = type 2 since type 1 is reference)
-    // model_idx: 0-based model index
-    int GetTypeInterceptIndex(int ityp, int model_idx);
+    // model_idx: 0-based model index; choice_block: 0-based non-reference choice (0 unless multinomial logit)
+    int GetTypeInterceptIndex(int ityp, int model_idx, int choice_block = 0);
 
     // Helper: Compute type probability from multinomial logit
     // Fills pre-allocated probs vector with probabilities for each type given factor values

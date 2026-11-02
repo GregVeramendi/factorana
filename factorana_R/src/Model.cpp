@@ -56,7 +56,7 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
                  std::vector<double>& modEval,
                  std::vector<double>& hess,
                  int flag,
-                 double type_intercept,
+                 const double* type_intercepts,
                  const std::vector<int>* model_free_indices)
 {
     // Count free factor loadings FIRST (needed for gradient vector sizing)
@@ -195,10 +195,12 @@ void Model::Eval(int iobs_offset, const std::vector<double>& data,
         }
     }
 
-    // Add type-specific intercept to linear predictor(s)
-    // For models with multiple types, this shifts the index function
-    for (int ichoice = 0; ichoice < numlogitchoice - 1; ichoice++) {
-        expres[ichoice] += type_intercept;
+    // Add the type-specific intercepts to the linear predictor(s): one per non-reference choice for a
+    // multinomial logit (choice-specific, as in the legacy TModel), one otherwise.
+    if (type_intercepts) {
+        for (int ichoice = 0; ichoice < numlogitchoice - 1; ichoice++) {
+            expres[ichoice] += type_intercepts[ichoice];
+        }
     }
 
     // Dispatch to model-specific evaluation

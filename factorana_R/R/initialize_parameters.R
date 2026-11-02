@@ -214,6 +214,24 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
         names(init_params)
       }
       if (is.null(param_names)) param_names <- character(0)
+
+      # Type-model parameters. A previous stage without typed components carries none, but when a
+      # component of this stage uses types the C++ layout (and build_parameter_metadata()) has
+      # (n_types - 1) typeprob intercepts and (n_types - 1) * n_factors type loadings right after the
+      # factor-level block (factor_var*, se_*, chol_*), before factor_mean_* and the component
+      # parameters. Without them the vector is short, estimate_model_rcpp() reconciles by name, and
+      # the multinomial logit parameters (named differently by the two paths) lose their values.
+      .nt <- model_system$factor$n_types; .nf <- model_system$factor$n_factors
+      .uses_types <- any(vapply(model_system$components, function(c) isTRUE(c$use_types), logical(1)))
+      .fs <- model_system$factor$factor_structure
+      if (!is.null(.fs) && .fs %in% c("SE_linear", "SE_quadratic", "SE_interactions", "SE_full") && !is.null(.nt) && .nt > 1L) .uses_types <- TRUE
+      if (!is.null(.nt) && .nt > 1L && .uses_types && !any(grepl("^typeprob_", param_names))) {
+        tp_names <- paste0("typeprob_", 2:.nt, "_intercept")
+        for (t in 2:.nt) for (k in seq_len(.nf)) tp_names <- c(tp_names, paste0("type_", t, "_loading_", k))
+        pos <- max(grep("^(factor_var|se_|chol_)", param_names))
+        init_params <- append(init_params, setNames(rep(0.0, length(tp_names)), tp_names), after = pos)
+        param_names <- append(param_names, tp_names, after = pos)
+      }
     }
 
     if (verbose) {
@@ -966,15 +984,15 @@ initialize_parameters <- function(model_system, data, factor_scores = NULL, verb
 
         # Add type-specific intercepts if component uses types and n_types > 1
         # For multinomial logit, each non-reference choice gets type-specific intercepts
+        # A fixed intercept keeps its slot (value 0), as for the other model types and as the C++ layout expects.
         if (isTRUE(comp$use_types) && n_types > 1L) {
           for (choice in seq_len(comp$num_choices - 1)) {
-            type_intercepts <- numeric(0)
-            type_intercept_names <- character(0)
+            type_intercepts <- numeric(n_types - 1L)
+            type_intercept_names <- character(n_types - 1L)
             for (t in 2:n_types) {
-              if (!is_type_intercept_fixed(comp, t, choice = choice)) {
-                type_intercepts <- c(type_intercepts, 0.1 * (t - 1L))  # 0.1, 0.2, 0.3, ...
-                type_intercept_names <- c(type_intercept_names, paste0(comp$name, "_c", choice, "_type_", t, "_intercept"))
-              }
+              idx <- t - 1L
+              type_intercept_names[idx] <- paste0(comp$name, "_c", choice, "_type_", t, "_intercept")
+              type_intercepts[idx] <- if (is_type_intercept_fixed(comp, t, choice = choice)) 0.0 else 0.1 * (t - 1L)
             }
             comp_params <- c(comp_params, type_intercepts)
             comp_param_names <- c(comp_param_names, type_intercept_names)

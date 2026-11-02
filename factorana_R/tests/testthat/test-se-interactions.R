@@ -79,6 +79,29 @@ HESS_TOL <- 1e-3
   define_model_system(components = list(mc1, mc2, mc3, mc4, mc5, mc6), factor = fm)
 }
 
+# True values of every FREE parameter, matching the DGP in .build_se_inter_data()
+# and the system in .build_se_inter_system(): two unit-variance input factors,
+# linear measurements with loadings (m2 = 0.8 on f1, m4 = 0.9 on f2, m6 = 0.9 on
+# f3) and sigma = 0.5, zero measurement intercepts (m5/m6 fixed at 0), and the
+# structural-equation coefficients. Defaults mirror .build_se_inter_data(); pass
+# the same DGP arguments here so truth and data stay in lock-step.
+.se_inter_truth <- function(structure, a0 = 0.2, a1 = 0.5, a2 = 0.4,
+                            aq1 = 0.15, aq2 = 0.10, a12 = 0.25,
+                            res_sd = sqrt(0.5)) {
+  tr <- c(factor_var_1 = 1, factor_var_2 = 1,
+          se_intercept = a0, se_linear_1 = a1, se_linear_2 = a2,
+          se_interaction_1_2 = a12, se_residual_var = res_sd^2,
+          m1_intercept = 0, m1_sigma = 0.5,
+          m2_intercept = 0, m2_loading_1 = 0.8, m2_sigma = 0.5,
+          m3_intercept = 0, m3_sigma = 0.5,
+          m4_intercept = 0, m4_loading_2 = 0.9, m4_sigma = 0.5,
+          m5_sigma = 0.5, m6_loading_3 = 0.9, m6_sigma = 0.5)
+  if (structure == "SE_full") {
+    tr <- c(tr, se_quadratic_1 = aq1, se_quadratic_2 = aq2)
+  }
+  tr
+}
+
 test_that("SE_interactions gradient matches finite differences", {
   skip_on_cran()
   dat <- .build_se_inter_data(300, "SE_interactions", seed = 701)
@@ -172,14 +195,17 @@ test_that("SE_full Hessian matches finite differences", {
                              res$max_error))
 })
 
-test_that("SE_full recovers the cross-product coefficient", {
+test_that("SE_full recovers the full parameter vector", {
   skip_on_cran()
   # Larger sample for parameter recovery.
   a12_true <- 0.30
+  aq_true  <- 0.10
   dat <- .build_se_inter_data(3000, "SE_full", seed = 705,
-                              a1 = 0.5, a2 = 0.4, aq1 = 0.10, aq2 = 0.10,
+                              a1 = 0.5, a2 = 0.4, aq1 = aq_true, aq2 = aq_true,
                               a12 = a12_true)
   ms <- .build_se_inter_system(dat, "SE_full")
+  truth <- .se_inter_truth("SE_full", a1 = 0.5, a2 = 0.4,
+                           aq1 = aq_true, aq2 = aq_true, a12 = a12_true)
   ctrl <- define_estimation_control(n_quad_points = 12, num_cores = 1)
 
   result <- estimate_model_rcpp(ms, dat, control = ctrl, parallel = FALSE,
@@ -190,19 +216,64 @@ test_that("SE_full recovers the cross-product coefficient", {
 
   est <- result$estimates
   se  <- result$std_errors
-  expect_true("se_interaction_1_2" %in% names(est))
+  # Every free parameter must be present, so no truth value is silently skipped.
+  expect_true(all(names(truth) %in% names(est)),
+              info = paste("missing:", paste(setdiff(names(truth), names(est)),
+                                             collapse = ", ")))
+  se_t <- se[names(truth)]
+  # Standard errors must be sane before any "within k SE" check.
+  expect_true(all(is.finite(se_t) & se_t < 5),
+              info = sprintf("implausible SE at %s",
+                             names(truth)[which(!is.finite(se_t) | se_t >= 5)][1]))
 
-  # Standard errors should be sane before doing a "within 2 SE" check.
-  expect_true(is.finite(se["se_interaction_1_2"]) && se["se_interaction_1_2"] < 10,
-              info = sprintf("se_interaction_1_2 SE looks wrong: %.4g",
-                             se["se_interaction_1_2"]))
+  # Full-vector recovery: the 3.5 SE bound matches test-simulate-factor-model.R.
+  z <- (est[names(truth)] - truth) / se_t
+  expect_true(all(abs(z) < 3.5),
+              info = sprintf("max |z| = %.2f at %s",
+                             max(abs(z)), names(truth)[which.max(abs(z))]))
 
-  # Cross-product coefficient recovered within ~2.5 SE of truth.
+  # Focused check retained: the cross-product coefficient within ~2.5 SE of truth.
   expect_lt(abs(est["se_interaction_1_2"] - a12_true),
             2.5 * se["se_interaction_1_2"])
+})
 
-  # Residual variance is less precisely estimated; allow a wider band there.
-  expect_true(est["se_residual_var"] > 0)
+test_that("SE_interactions recovers the full parameter vector", {
+  skip_on_cran()
+  a12_true <- 0.30
+  dat <- .build_se_inter_data(3000, "SE_interactions", seed = 708,
+                              a1 = 0.5, a2 = 0.4, a12 = a12_true)
+  ms <- .build_se_inter_system(dat, "SE_interactions")
+  truth <- .se_inter_truth("SE_interactions", a1 = 0.5, a2 = 0.4, a12 = a12_true)
+  ctrl <- define_estimation_control(n_quad_points = 12, num_cores = 1)
+
+  result <- estimate_model_rcpp(ms, dat, control = ctrl, parallel = FALSE,
+                                optimizer = "nlminb", verbose = FALSE)
+
+  expect_equal(result$convergence, 0,
+               info = sprintf("SE_interactions did not converge, code: %d",
+                              result$convergence))
+
+  est <- result$estimates
+  se  <- result$std_errors
+  # No quadratic self-terms here; the interaction term is the only second-order one.
+  expect_true(all(names(truth) %in% names(est)),
+              info = paste("missing:", paste(setdiff(names(truth), names(est)),
+                                             collapse = ", ")))
+  expect_false(any(grepl("^se_quadratic_", names(est))))
+  se_t <- se[names(truth)]
+  expect_true(all(is.finite(se_t) & se_t < 5),
+              info = sprintf("implausible SE at %s",
+                             names(truth)[which(!is.finite(se_t) | se_t >= 5)][1]))
+
+  # Full-vector recovery: the 3.5 SE bound matches test-simulate-factor-model.R.
+  z <- (est[names(truth)] - truth) / se_t
+  expect_true(all(abs(z) < 3.5),
+              info = sprintf("max |z| = %.2f at %s",
+                             max(abs(z)), names(truth)[which.max(abs(z))]))
+
+  # Focused check: the cross-product coefficient within ~2.5 SE of truth.
+  expect_lt(abs(est["se_interaction_1_2"] - a12_true),
+            2.5 * se["se_interaction_1_2"])
 })
 
 test_that("fix_factor_param fixes se_interaction_1_2 at 0", {

@@ -29,15 +29,24 @@ RESULTS_DIR <- "/home/Projects/MajorChoice/intdata/MajorChoice"
 # =============================================================================
 # ADAPTIVE QUADRATURE OPTIONS (for Stages 3 and 4 only)
 # =============================================================================
-# Adaptive quadrature uses factor scores from Stage 2 to reduce
-# integration points for observations where factors are well-identified.
-# This can dramatically speed up estimation without loss of accuracy.
+# Adaptive quadrature uses the Stage 2 factor scores and their SEs to set the
+# number of integration points per person and factor:
+#   n_quad = 1 + 2 * floor(factor_se / factor_sd / threshold), capped at ADAPTIVE_MAX_QUAD,
+# with the points centered at the score and spread by the SE (importance weights
+# correct for the recentering). Settings below follow the November 2026 validation
+# against the legacy C++ code (validation/hjv_mini/REPORT.md, T6 and T8):
+#   - posterior-mode scores with the POSTERIOR SE (include_prior = TRUE in Stage 2):
+#     the SE is then bounded by the prior SD, no fallback rule is needed, and a person
+#     without measurements gets a standard quadrature at the prior automatically;
+#   - threshold 0.5 and 8 points: about 8 integration points per person on the
+#     simulated model, 4.5 percent of the full-quadrature time, estimates 0.14 SE
+#     from full quadrature on average (threshold 0.3 reproduces full quadrature at
+#     about four times the cost; threshold 1.0 is one point per person).
+# Requires factorana >= 1.8.0 and an optimized build (R CMD INSTALL, not load_all()).
 
-USE_ADAPTIVE_QUADRATURE <- FALSE  # Set to TRUE to enable for stages 3 and 4
-ADAPTIVE_THRESHOLD <- 0.5         # Threshold for determining n_quad per obs (smaller = more points)
-                                  # Formula: n_quad = 1 + 2*floor(factor_se/factor_var/threshold)
-                                  # Legacy default is 0.5
-ADAPTIVE_MAX_QUAD <- 16           # Maximum quadrature points per factor
+USE_ADAPTIVE_QUADRATURE <- TRUE   # Adaptive integration for stages 3 and 4
+ADAPTIVE_THRESHOLD <- 0.5         # Smaller = more points; 0.3 matches full quadrature at ~4x the cost
+ADAPTIVE_MAX_QUAD <- 8            # Maximum quadrature points per factor (8 as in the legacy runs)
 
 # File paths for each stage's results
 stage_result_files <- list(
@@ -391,13 +400,20 @@ cat("Loading Stage 1 results from:", stage1_file, "\n")
 stage1_result <- readRDS(stage1_file)
 cat("Loaded", length(stage1_result$estimates), "parameters from Stage 1\n\n")
 
-# Use high quadrature for accurate factor scores
-cat("Computing factor scores with 16 quadrature points...\n")
+# Use high quadrature for accurate factor scores.
+# include_prior = TRUE: the SE is the posterior SE (observation Hessian plus the prior),
+# bounded above by the prior SD. The adaptive integration in Stages 3 and 4 uses this SE
+# to set the number of points per person; the observation-only SE (the default) needs a
+# fallback rule for poorly measured people and gave worse accuracy per point in the
+# validation (validation/hjv_mini/REPORT.md, T8). The scores themselves (posterior modes)
+# do not depend on this flag.
+cat("Computing factor scores with 16 quadrature points (posterior SEs)...\n")
 fscore_control <- define_estimation_control(n_quad_points = 16)
 fscores <- estimate_factorscores_rcpp(
   result = stage1_result,
   data = dat,
   control = fscore_control,
+  include_prior = TRUE,
   verbose = TRUE
 )
 
@@ -614,7 +630,7 @@ for (imaj in 2:13) {
 }
 
 switchmaj_gpa <- character(0)
-for (imaj in 2:12) {
+for (imaj in 3:13) {  # Choice 2 uses maj3, ..., Choice 12 uses maj13
   for (ibin in 1:4) {
     switchmaj_gpa <- c(switchmaj_gpa, paste0("gpahs_maj", imaj, "_", ibin))
   }
@@ -725,10 +741,11 @@ components$educDSwitchtoMajor <- define_model_component(
 )
 
 # Apply GPA coefficient constraints for educDSwitchtoMajor
-# Note: GPA vars are for majors 2-12 only (maj1 omitted), bins 1-4
+# Note: Choice 2 uses maj3, Choice 3 uses maj4, ..., Choice 12 uses maj13
+# GPA vars are gpahs_maj3 through gpahs_maj13, bins 1-4
 for (ichoice in 2:12) {
-  for (imaj in 2:12) {
-    if (ichoice != imaj) {
+  for (imaj in 3:13) {
+    if (ichoice + 1 != imaj) {  # Keep when ichoice + 1 == imaj (e.g., choice 2 keeps maj3)
       for (ibin in 1:4) {
         gpavar <- paste0("gpahs_maj", imaj, "_", ibin)
         components$educDSwitchtoMajor <- fix_coefficient(

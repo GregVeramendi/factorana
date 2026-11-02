@@ -169,6 +169,95 @@
   apply(prob, 1, function(p) sample.int(ntyp, 1, prob = p))
 }
 
+# ---- endogenous-regressor resolution -------------------------------------
+
+# Resolve the declared endogenous-regressor links among the model components.
+# A component's `endogenous` field names OTHER components' outcomes whose
+# simulated values feed this component's covariates during simulation. Returns:
+#   deps   : list; deps[[i]] = integer vector of producer indices component i needs
+#   writes : named list keyed by PRODUCER OUTCOME name; each element is the
+#            character vector of columns to (re)write into the data after that
+#            producer runs -- the raw outcome name and/or its one-hot dummies that
+#            are actually used as covariates downstream.
+# Errors on a declared name that matches no component outcome, a self-loop, or a
+# declared name that drives none of the consumer's covariates.
+.sim_resolve_endogenous <- function(components) {
+  n <- length(components)
+  deps <- vector("list", n)
+
+  # map each single-column outcome name -> producing component index
+  outcome_to_index <- list()
+  for (i in seq_len(n)) {
+    oc <- components[[i]]$outcome
+    if (length(oc) == 1L) outcome_to_index[[oc]] <- i
+  }
+
+  writes <- list()
+  for (i in seq_len(n)) {
+    endo <- components[[i]]$endogenous
+    if (is.null(endo) || length(endo) == 0L) next
+    cov_i <- components[[i]]$covariates
+    for (nm in unique(endo)) {
+      p <- outcome_to_index[[nm]]
+      if (is.null(p)) {
+        stop(sprintf(paste0("simulate_factor_model: component '%s' declares endogenous ",
+                            "regressor '%s', but no component produces an outcome named '%s'."),
+                     components[[i]]$name, nm, nm))
+      }
+      if (p == i) {
+        stop(sprintf("simulate_factor_model: component '%s' cannot be endogenous on its own outcome '%s'.",
+                     components[[i]]$name, nm))
+      }
+      P <- components[[p]]
+      if (P$model_type %in% c("linear", "probit")) {
+        # continuous / binary producer: substitute the raw value into covariate `nm`
+        needed <- intersect(nm, cov_i)
+      } else {
+        # discrete producer (logit / oprobit): one-hot dummies nm1..nmK, or raw `nm`
+        K <- P$num_choices
+        needed <- intersect(c(nm, paste0(nm, seq_len(K))), cov_i)
+      }
+      if (length(needed) == 0L) {
+        stop(sprintf(paste0("simulate_factor_model: component '%s' declares endogenous ",
+                            "regressor '%s' (produced by '%s'), but none of its covariates ",
+                            "match '%s' or its dummies '%s1', '%s2', ..."),
+                     components[[i]]$name, nm, P$name, nm, nm, nm))
+      }
+      deps[[i]] <- unique(c(deps[[i]], p))
+      writes[[nm]] <- union(writes[[nm]], needed)
+    }
+  }
+  list(deps = deps, writes = writes)
+}
+
+# Topologically order component indices so every producer precedes its consumers.
+# `deps[[i]]` lists the producer indices that component i depends on (edges p -> i).
+# Returns an integer permutation of 1:n; when there are no endogenous links this is
+# the identity 1:n (preserving the current behavior). Errors on a cyclic dependency.
+.sim_topo_order <- function(n, deps) {
+  if (n == 0L) return(integer(0))
+  indeg <- vapply(seq_len(n), function(i) length(deps[[i]]), integer(1))
+  done <- logical(n)
+  ord <- integer(0)
+  repeat {
+    ready <- which(indeg == 0L & !done)
+    if (length(ready) == 0L) break
+    v <- ready[1L]            # smallest index -> stable, respects listing order
+    done[v] <- TRUE
+    ord <- c(ord, v)
+    for (i in seq_len(n)) {
+      if (!done[i] && (v %in% deps[[i]])) indeg[i] <- indeg[i] - 1L
+    }
+  }
+  if (length(ord) < n) {
+    cyc <- which(!done)
+    stop("simulate_factor_model: endogenous regressors form a cyclic dependency among ",
+         "components ", paste(cyc, collapse = ", "),
+         ". A component's covariate cannot (directly or transitively) depend on its own outcome.")
+  }
+  ord
+}
+
 #' Simulate data from a factorana model
 #'
 #' Generates a simulated data set from a fitted or fully specified factorana
@@ -235,18 +324,42 @@ simulate_factor_model <- function(object, data, n = NULL, params = NULL,
   fmat <- .sim_draw_factors(fm, params, n)
   types <- .sim_draw_types(fm, params, fmat, n)
 
+  # ---- resolve endogenous-regressor links and order producers before consumers ----
+  endo <- .sim_resolve_endogenous(ms$components)
+  sim_order <- .sim_topo_order(length(ms$components), endo$deps)
+
   out <- data.frame(xid = base_idx)
-  # carry covariates actually used by any component
+  # carry covariates actually used by any component (endogenous dummy columns may
+  # be absent from `data` -- they are materialized when their producer is simulated)
   used_cov <- unique(unlist(lapply(ms$components, function(c) c$covariates)))
-  for (cov in used_cov) out[[cov]] <- base[[cov]]
+  for (cov in used_cov) if (cov %in% names(base)) out[[cov]] <- base[[cov]]
   if (nfac > 0) for (k in seq_len(nfac)) out[[sprintf("factor_%d", k)]] <- fmat[, k]
   if (!is.null(fm$n_types) && fm$n_types > 1) out[["type"]] <- types
   if (!is.null(attr(fmat, "mixture"))) out[["mixture"]] <- attr(fmat, "mixture")
 
-  # ---- simulate each component ----
-  for (comp in ms$components) {
+  # ---- simulate each component (producers before consumers) ----
+  for (ci in sim_order) {
+    comp <- ms$components[[ci]]
     sim <- .simulate_component(comp, params, base, fmat, types, detail)
     for (nm in names(sim)) out[[nm]] <- sim[[nm]]
+
+    # Feed this component's simulated outcome forward into the covariate frame so
+    # any downstream consumer that declared it endogenous reads the simulated value.
+    # Write into `base` (read by later components) and `out` (the returned frame).
+    oc <- comp$outcome
+    if (length(oc) == 1L && !is.null(endo$writes[[oc]])) {
+      y <- sim[[oc]]
+      for (col in endo$writes[[oc]]) {
+        if (identical(col, oc)) {
+          val <- y                                   # raw value (continuous/binary/category)
+        } else {
+          j <- as.integer(substring(col, nchar(oc) + 1L))
+          val <- as.integer(y == j)                  # one-hot dummy for category j
+        }
+        base[[col]] <- val
+        out[[col]]  <- val
+      }
+    }
   }
   out
 }

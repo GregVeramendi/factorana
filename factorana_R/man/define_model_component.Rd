@@ -21,6 +21,7 @@ define_model_component(
   factor_index = NULL,
   factor_spec = c("linear", "quadratic", "interactions", "full"),
   use_types = FALSE,
+  endogenous = NULL,
   skip_collinearity_check = FALSE
 )
 }
@@ -91,6 +92,18 @@ when n_types > 1 in the factor model. Default FALSE. When TRUE and n_types > 1,
 the component will have (n_types - 1) type-specific intercept parameters that
 shift the linear predictor for each non-reference type. This allows types to
 affect outcome models while keeping measurement models type-invariant.}
+
+\item{endogenous}{Character vector (optional). Names of other components'
+outcomes whose simulated values supply covariates of this component in
+\code{\link[=simulate_factor_model]{simulate_factor_model()}}. A linear or probit producer named \code{nm} fills a
+covariate named \code{nm}. A discrete producer (multinomial logit or ordered probit)
+named \code{nm} with \code{K} categories fills the one-hot dummies \code{nm1}, ..., \code{nmK}.
+Each dummy equals 1 when the simulated category equals its index. A bare \code{nm}
+covariate receives the integer category. Components are simulated in dependency
+order, so the listing order in \code{define_model_system()} does not matter. A cyclic
+dependency is an error. Estimation treats the regressor as an observed column.
+With linear indicators and no excluded covariates, a consumer that loads on its
+producer's factor needs at least four indicators on that factor. Default \code{NULL}.}
 
 \item{skip_collinearity_check}{Logical. If TRUE, skip the multicollinearity check
 on the design matrix. Useful when many coefficients will be fixed via fix_coefficient()

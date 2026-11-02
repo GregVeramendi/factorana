@@ -47,6 +47,17 @@
 #'   the component will have (n_types - 1) type-specific intercept parameters that
 #'   shift the linear predictor for each non-reference type. This allows types to
 #'   affect outcome models while keeping measurement models type-invariant.
+#' @param endogenous Character vector (optional). Names of other components'
+#'   outcomes whose simulated values supply covariates of this component in
+#'   [simulate_factor_model()]. A linear or probit producer named `nm` fills a
+#'   covariate named `nm`. A discrete producer (multinomial logit or ordered probit)
+#'   named `nm` with `K` categories fills the one-hot dummies `nm1`, ..., `nmK`.
+#'   Each dummy equals 1 when the simulated category equals its index. A bare `nm`
+#'   covariate receives the integer category. Components are simulated in dependency
+#'   order, so the listing order in `define_model_system()` does not matter. A cyclic
+#'   dependency is an error. Estimation treats the regressor as an observed column.
+#'   With linear indicators and no excluded covariates, a consumer that loads on its
+#'   producer's factor needs at least four indicators on that factor. Default `NULL`.
 #' @param skip_collinearity_check Logical. If TRUE, skip the multicollinearity check
 #'   on the design matrix. Useful when many coefficients will be fixed via fix_coefficient()
 #'   after component creation, which resolves the collinearity. Default FALSE.
@@ -86,6 +97,7 @@ define_model_component <- function(name,
                                    factor_index = NULL,
                                    factor_spec = c("linear", "quadratic", "interactions", "full"),
                                    use_types = FALSE,
+                                   endogenous = NULL,
                                    skip_collinearity_check = FALSE) {
   # ---- 1. Basic argument checks ----
   # Confirm data types and presence of required columns/objects
@@ -182,6 +194,36 @@ define_model_component <- function(name,
   } else {
     # NULL covariates: set to empty character vector for consistency
     covariates <- character(0)
+  }
+
+  # ---- 4b. Validate endogenous-regressor declarations ----
+  # `endogenous` names OTHER components' outcomes that feed this component's
+  # covariates during simulation (see simulate_factor_model). Full resolution
+  # against the producing component happens at simulation time; here we only
+  # check the shape and that each declared name drives at least one covariate
+  # of THIS component (the bare name `nm`, or a one-hot dummy `nm<digits>`),
+  # which catches typos early.
+  if (!is.null(endogenous)) {
+    if (!is.character(endogenous) || length(endogenous) < 1L) {
+      stop("`endogenous` must be NULL or a non-empty character vector of outcome names.")
+    }
+    if (anyNA(endogenous) || any(!nzchar(endogenous))) {
+      stop("`endogenous` must not contain NA or empty strings.")
+    }
+    endogenous <- unique(endogenous)
+    for (nm in endogenous) {
+      # covariate matches the producer if it is the bare name or name + digits
+      drives <- covariates == nm |
+        (startsWith(covariates, nm) &
+           grepl("^[0-9]+$", substring(covariates, nchar(nm) + 1L)))
+      if (!any(drives)) {
+        stop(sprintf(paste0("Component '%s': endogenous outcome '%s' is declared but ",
+                            "drives none of this component's covariates. Expected a ",
+                            "covariate named '%s' (linear/probit producer) or one-hot ",
+                            "dummies '%s1', '%s2', ... (discrete producer)."),
+                     name, nm, nm, nm, nm))
+      }
+    }
   }
 
   # ---- 5. Validate model configuration arguments ----
@@ -671,6 +713,7 @@ define_model_component <- function(name,
     n_interaction_loadings = n_interaction_loadings,
     use_types = use_types,
     n_type_intercepts = n_type_intercepts,
+    endogenous = endogenous,  # producer outcome names feeding covariates in simulation
     fixed_coefficients = list()  # List of fixed coefficient constraints
   )
 
@@ -751,6 +794,10 @@ print.model_component <- function(x, ...) {
     cat("Covariates:              ", paste(x$covariates, collapse = ", "), "\n")
   } else {
     cat("Covariates:               (none - factor-only model)\n")
+  }
+  if (!is.null(x$endogenous) && length(x$endogenous) > 0) {
+    cat("Endogenous regressors:   ", paste(x$endogenous, collapse = ", "),
+        " (simulated outcomes)\n", sep = "")
   }
 
   cat("Observations:            ", x$n_obs, "\n")

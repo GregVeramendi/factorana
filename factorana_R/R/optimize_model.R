@@ -348,6 +348,9 @@ build_parameter_metadata <- function(model_system) {
     # Parameters are organized per choice (except reference choice 0)
     if (comp$model_type == "logit" && !is.null(comp$num_choices) && comp$num_choices > 2) {
       n_alternatives <- comp$num_choices - 1  # Exclude reference category
+      # Names follow the user-facing convention of initialize_parameters(): <comp>_c<k>_<covariate>,
+      # <comp>_c<k>_loading_<j>, ... for non-reference alternative k. The two paths must agree so that
+      # the by-name reconciliation in estimate_model_rcpp() never drops multinomial logit values.
 
       # Check if intercept is already in covariates (as "intercept" or "constant")
       has_intercept_in_covariates <- !is.null(comp$covariates) &&
@@ -357,7 +360,7 @@ build_parameter_metadata <- function(model_system) {
         # Intercept for this alternative - only add if not already in covariates
         # C++ counts all covariates including "intercept"/"constant" as regressors
         if (comp$intercept && !has_intercept_in_covariates) {
-          param_names <- c(param_names, sprintf("%s_intercept_alt%d", comp_name, alt))
+          param_names <- c(param_names, sprintf("%s_c%d_intercept", comp_name, alt))
           param_types <- c(param_types, "intercept")
           component_id <- c(component_id, i)
         }
@@ -367,7 +370,7 @@ build_parameter_metadata <- function(model_system) {
         # Note: "intercept" and "constant" are counted as regular betas to match C++
         if (!is.null(comp$covariates) && length(comp$covariates) > 0) {
           for (cov in comp$covariates) {
-            param_names <- c(param_names, sprintf("%s_beta_%s_alt%d", comp_name, cov, alt))
+            param_names <- c(param_names, sprintf("%s_c%d_%s", comp_name, alt, cov))
             param_types <- c(param_types, "beta")
             component_id <- c(component_id, i)
           }
@@ -376,7 +379,7 @@ build_parameter_metadata <- function(model_system) {
         # Factor loadings for this alternative
         if (is.null(comp$loading_normalization)) {
           for (k in seq_len(n_factors)) {
-            param_names <- c(param_names, sprintf("%s_loading_%d_alt%d", comp_name, k, alt))
+            param_names <- c(param_names, sprintf("%s_c%d_loading_%d", comp_name, alt, k))
             param_types <- c(param_types, "loading")
             component_id <- c(component_id, i)
           }
@@ -384,7 +387,7 @@ build_parameter_metadata <- function(model_system) {
           for (k in seq_len(n_factors)) {
             if (is.na(comp$loading_normalization[k]) ||
                 abs(comp$loading_normalization[k]) < 1e-10) {
-              param_names <- c(param_names, sprintf("%s_loading_%d_alt%d", comp_name, k, alt))
+              param_names <- c(param_names, sprintf("%s_c%d_loading_%d", comp_name, alt, k))
               param_types <- c(param_types, "loading")
               component_id <- c(component_id, i)
             }
@@ -394,7 +397,7 @@ build_parameter_metadata <- function(model_system) {
         # Quadratic factor loadings for this alternative (if factor_spec includes quadratic)
         if (!is.null(comp$factor_spec) && comp$factor_spec %in% c("quadratic", "full")) {
           for (k in seq_len(n_factors)) {
-            param_names <- c(param_names, sprintf("%s_loading_quad_%d_alt%d", comp_name, k, alt))
+            param_names <- c(param_names, sprintf("%s_c%d_loading_quad_%d", comp_name, alt, k))
             param_types <- c(param_types, "loading_quad")
             component_id <- c(component_id, i)
           }
@@ -404,7 +407,7 @@ build_parameter_metadata <- function(model_system) {
         if (!is.null(comp$factor_spec) && comp$factor_spec %in% c("interactions", "full") && n_factors >= 2) {
           for (j in seq_len(n_factors - 1)) {
             for (kk in (j + 1):n_factors) {
-              param_names <- c(param_names, sprintf("%s_loading_inter_%d_%d_alt%d", comp_name, j, kk, alt))
+              param_names <- c(param_names, sprintf("%s_c%d_loading_inter_%d_%d", comp_name, alt, j, kk))
               param_types <- c(param_types, "loading_inter")
               component_id <- c(component_id, i)
             }
@@ -760,12 +763,19 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
     if (param_type == "type_intercept") {
       comp <- model_system$components[[comp_id]]
       if (!is.null(comp) && !is.null(comp$fixed_type_intercepts) && length(comp$fixed_type_intercepts) > 0) {
-        # Extract type number from parameter name (e.g., "Y_type_2_intercept" -> 2)
+        # Extract the type number from the parameter name (e.g., "Y_type_2_intercept" -> 2) and, for a
+        # multinomial logit, the choice ("Y_c3_type_2_intercept" -> 3): fix_type_intercepts() stores one
+        # constraint per choice x type for those models.
         param_name <- param_metadata$names[i]
         type_match <- regmatches(param_name, regexec("_type_([0-9]+)_intercept$", param_name))[[1]]
         if (length(type_match) >= 2) {
           type_num <- as.integer(type_match[2])
-          if (is_type_intercept_fixed(comp, type_num, choice = NULL)) {
+          choice_num <- NULL
+          if (comp$model_type == "logit" && !is.null(comp$num_choices) && comp$num_choices > 2) {
+            choice_match <- regmatches(param_name, regexec("_c([0-9]+)_type_[0-9]+_intercept$", param_name))[[1]]
+            if (length(choice_match) >= 2) choice_num <- as.integer(choice_match[2])
+          }
+          if (is_type_intercept_fixed(comp, type_num, choice = choice_num)) {
             param_fixed[i] <- TRUE
             lower_bounds[i] <- 0.0
             upper_bounds[i] <- 0.0
@@ -786,29 +796,19 @@ setup_parameter_constraints <- function(model_system, init_params, param_metadat
 
         # Parse covariate name from parameter name
         # For standard models: compname_covariate (e.g., "Y_x1")
-        # For multinomial logit: compname_beta_covariate_altN (e.g., "Y_beta_x1_alt1")
+        # For multinomial logit: compname_cK_covariate (e.g., "Y_c1_x1"), K the non-reference alternative,
+        # the same convention initialize_parameters() uses
         comp_name <- comp$name
         covariate <- NULL
         choice <- NULL
 
         if (comp$model_type == "logit" && !is.null(comp$num_choices) && comp$num_choices > 2) {
-          # Multinomial logit: parse "compname_beta_covariate_altN" or "compname_intercept_altN"
-          if (param_type == "intercept") {
-            # Format: compname_intercept_altN
-            pattern <- sprintf("^%s_intercept_alt([0-9]+)$", comp_name)
-            match <- regmatches(param_name, regexec(pattern, param_name))[[1]]
-            if (length(match) >= 2) {
-              covariate <- "intercept"
-              choice <- as.integer(match[2])
-            }
-          } else {
-            # Format: compname_beta_covariate_altN
-            pattern <- sprintf("^%s_beta_(.+)_alt([0-9]+)$", comp_name)
-            match <- regmatches(param_name, regexec(pattern, param_name))[[1]]
-            if (length(match) >= 3) {
-              covariate <- match[2]
-              choice <- as.integer(match[3])
-            }
+          # Multinomial logit: parse "compname_cK_covariate" (the separate intercept slot is "compname_cK_intercept")
+          pattern <- sprintf("^%s_c([0-9]+)_(.+)$", comp_name)
+          match <- regmatches(param_name, regexec(pattern, param_name))[[1]]
+          if (length(match) >= 3) {
+            choice <- as.integer(match[2])
+            covariate <- match[3]
           }
         } else {
           # Standard model: parse "compname_covariate"

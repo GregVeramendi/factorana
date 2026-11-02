@@ -69,7 +69,9 @@ public:
     //   modEval - Output: [likelihood, gradient components]
     //   hess - Output: Hessian matrix (upper triangle)
     //   flag - 1=likelihood only, 2=+gradient, 3=+Hessian
-    //   type_intercept - Type-specific intercept to add to linear predictor (default 0)
+    //   type_intercepts - Type-specific intercepts added to the linear predictor(s): one value per
+    //                     non-reference choice for a multinomial logit (type intercepts are choice
+    //                     specific, as in the legacy TModel), one value otherwise; nullptr = none
     //   model_free_indices - Optional pointer to vector of free model parameter indices
     //                        (0-indexed, relative to model params not including factors).
     //                        If nullptr, compute full Hessian (backward compatible).
@@ -81,7 +83,7 @@ public:
               std::vector<double>& modEval,
               std::vector<double>& hess,
               int flag,
-              double type_intercept = 0.0,
+              const double* type_intercepts = nullptr,
               const std::vector<int>* model_free_indices = nullptr);
 
     // Accessors

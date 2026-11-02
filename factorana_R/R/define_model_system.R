@@ -163,7 +163,11 @@ define_model_system <- function(components, factor, previous_stage = NULL, weigh
     se_structures <- c("SE_linear", "SE_quadratic", "SE_interactions", "SE_full")
     allow_different_structure <- FALSE
 
-    if (!identical(prev_ms$factor, factor)) {
+    # Compare the factor specification only. define_model_system() adds bookkeeping
+    # fields (variance_fixed, variance_value, ...) to the factor it stores, so a fit
+    # from a previous_stage call carries them while a fresh factor model does not.
+    # Comparing the raw lists made a third stage fail against a second-stage fit.
+    if (!identical(.factor_spec(prev_ms$factor), .factor_spec(factor))) {
       # Check if this is an SE model with matching n_factors
       if (factor$factor_structure %in% se_structures &&
           prev_ms$factor$n_factors == factor$n_factors) {
@@ -277,9 +281,9 @@ define_model_system <- function(components, factor, previous_stage = NULL, weigh
       free_var_params <- intersect(var_param_names, free_params)
 
       if (length(free_var_params) == 0) {
-        # All factor variances are fixed
+        # All factor variances are fixed (one value per factor)
         factor$variance_fixed <- TRUE
-        factor$variance_value <- previous_stage$estimates[var_param_names[1]]
+        factor$variance_value <- previous_stage$estimates[var_param_names]
       } else if (length(free_var_params) < length(var_param_names)) {
         # Some variances fixed, some free - complex case
         # For now, mark which specific variances are fixed
@@ -340,3 +344,9 @@ print.model_system <- function(x, ...) {
   invisible(x) #if 0 components, stop printing and return x invisibly
 }
 
+# Factor-model fields added by define_model_system() when a previous_stage is used.
+# They record which variances a later stage fixes and are not part of the model
+# the user specified, so they are dropped when two factor models are compared.
+.factor_bookkeeping_fields <- c("variance_fixed", "variance_value", "variance_partially_fixed",
+                                "fixed_variance_params", "fixed_variance_values")
+.factor_spec <- function(factor) factor[setdiff(names(factor), .factor_bookkeeping_fields)]
