@@ -37,6 +37,12 @@ STAGE_TO_RUN <- 1
 N_TYPES <- 8
 USE_TYPES <- (STAGE_TO_RUN == 5 && N_TYPES > 1)   # type intercepts in the outcome models (Stage 5 only)
 
+# Warm start for Stage 5: when the single-type Stage 3 and Stage 4 results exist, their estimates
+# initialize every shared parameter of the joint typed model (type intercepts and the type
+# probability model keep the package defaults). This is the legacy practice of seeding the typed
+# run with the sequential estimates. Set to FALSE to start Stage 5 from the package defaults.
+WARM_START_STAGE5 <- TRUE
+
 # Directory for saving/loading results
 RESULTS_DIR <- "/home/Projects/MajorChoice/intdata/MajorChoice"
 
@@ -132,10 +138,13 @@ norm_factors12 <- c(NA_real_, NA_real_, 0)
 # Define Estimation Control
 # =============================================================================
 
+# Adaptive integration applies to the stages that take the Stage 2 factor scores (3, 4, 5);
+# Stages 1 and 2 always use full quadrature.
+ADAPTIVE_THIS_STAGE <- USE_ADAPTIVE_QUADRATURE && STAGE_TO_RUN >= 3
 control <- define_estimation_control(
-  n_quad_points = if (USE_ADAPTIVE_QUADRATURE) ADAPTIVE_MAX_QUAD else 8,  # Use max_quad for adaptive
-  num_cores = 32,                                                          # Adjust based on available cores
-  adaptive_integration = USE_ADAPTIVE_QUADRATURE,
+  n_quad_points = if (ADAPTIVE_THIS_STAGE) ADAPTIVE_MAX_QUAD else 8,  # Use max_quad for adaptive
+  num_cores = 32,                                                      # Adjust based on available cores
+  adaptive_integration = ADAPTIVE_THIS_STAGE,
   adapt_int_thresh = ADAPTIVE_THRESHOLD
 )
 
@@ -1002,6 +1011,20 @@ ms <- define_model_system(
   previous_stage = stage1_result
 )
 
+# Starting values from the sequential single-type fits, when available
+stage5_init_params <- NULL
+if (WARM_START_STAGE5 && file.exists(stage_result_files$stage3) && file.exists(stage_result_files$stage4)) {
+  seq_est <- c(readRDS(stage_result_files$stage3)$estimates, readRDS(stage_result_files$stage4)$estimates)
+  seq_est <- seq_est[!duplicated(names(seq_est))]
+  stage5_init_params <- initialize_parameters(ms, dat, verbose = FALSE)$init_params
+  shared <- intersect(names(stage5_init_params), names(seq_est))
+  stage5_init_params[shared] <- seq_est[shared]
+  cat("Warm start: ", length(shared), "of", length(stage5_init_params), "parameters taken from the Stage 3 and 4 estimates;",
+      sum(grepl("type", names(stage5_init_params))), "type parameters start at the package defaults\n")
+} else if (WARM_START_STAGE5) {
+  cat("Warm start requested but Stage 3 and 4 results are not both present; Stage 5 starts from the package defaults\n")
+}
+
 } # End of Stage 5 definition
 
 # =============================================================================
@@ -1026,7 +1049,7 @@ cat(rep("=", 70), "\n\n", sep = "")
 # Estimate using nlminb optimizer (uses analytical gradient + Hessian)
 # For Stages 3 and 4, use factor scores for initialization and optionally for adaptive quadrature
 if (STAGE_TO_RUN > 2 && !is.null(factor_scores_s1)) {
-  if (USE_ADAPTIVE_QUADRATURE) {
+  if (ADAPTIVE_THIS_STAGE) {
     # Use factor scores for BOTH initialization AND adaptive quadrature
     result <- estimate_model_rcpp(
       model_system = ms,
@@ -1038,7 +1061,8 @@ if (STAGE_TO_RUN > 2 && !is.null(factor_scores_s1)) {
       factor_scores = factor_scores_s1,
       factor_ses = factor_ses_s1,
       factor_vars = factor_vars_s1,
-      init_factor_scores = factor_scores_s1  # Use factor scores for loading initialization
+      init_factor_scores = factor_scores_s1,  # Use factor scores for loading initialization
+      init_params = if (STAGE_TO_RUN == 5) stage5_init_params else NULL
     )
   } else {
     # Use factor scores only for initialization (not adaptive quadrature)
@@ -1049,7 +1073,8 @@ if (STAGE_TO_RUN > 2 && !is.null(factor_scores_s1)) {
       optimizer = "nlminb",
       parallel = TRUE,
       verbose = TRUE,
-      init_factor_scores = factor_scores_s1  # Use factor scores for loading initialization
+      init_factor_scores = factor_scores_s1,  # Use factor scores for loading initialization
+      init_params = if (STAGE_TO_RUN == 5) stage5_init_params else NULL
     )
   }
 } else {
