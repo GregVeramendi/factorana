@@ -455,3 +455,21 @@ N = 2,001 for one point), and the recommended setting runs at parity with legacy
 floor is still 1.7 times legacy (2.0 against 1.1 s) because per-iteration overhead remains visible when the compute per
 iteration is about a second; it is irrelevant at the stage level. Compute per iteration scales with N times the points
 per person (times components and types), the overhead with the number of iterations and the parameter count squared.
+
+## Communication cost: doParallel (PSOCK) against Open MPI (November 2)
+Micro-benchmark on this Mac, 8 workers / ranks, one optimizer call = send the parameter vector, return log-likelihood,
+gradient and packed upper-triangle Hessian from every worker (R: `clusterCall` / `foreach`, R serialization over
+sockets; MPI: `MPI_Bcast` + `MPI_Reduce`, shared memory).
+
+| Payload | PSOCK round trip | Open MPI round trip | Ratio |
+|---|---|---|---|
+| 176 parameters (education stage): 8 x 125 KB | 6 to 8 ms (0.6 ms with a scalar return) | 0.083 ms | about 90x |
+| 1,253 parameters (HJV): 8 x 6.3 MB | 99 ms (gradient-only call 0.9 ms) | 3.3 ms | about 30x |
+
+- The package evaluates on workers with `clusterEvalQ` after shipping the parameters, so an nlminb iteration costs
+  about ten round trips (objective and gradient evaluations in the line search plus one Hessian), about 0.1 s at
+  176 parameters. That matches the per-iteration overhead measured at N = 2,001 (0.14 s per iteration on 8 workers
+  against 0.12 s of single-core compute).
+- At HJV size the Hessian transfer alone is about 0.1 s per iteration, against Hessian evaluations that take minutes
+  for N in the hundreds of thousands with 8 types; a few tenths of a second per iteration is negligible there, and the
+  gradient/objective round trips stay near a millisecond because their payload is small.
