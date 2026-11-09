@@ -509,3 +509,42 @@ sockets; MPI: `MPI_Bcast` + `MPI_Reduce`, shared memory).
   the legacy start values (`TMinLkhd.cc:3770`). That is 3329.4 below R's converged value. If the legacy start was a
   previously converged `meas_par.txt`, the two codes differ by a constant on this data, consistent with the February
   2026 agreement of the estimates to 3e-6; the legacy run's final objective decides it.
+
+### T7c addendum (November 9, 2026): the per-observation Hessian buffer, 1.8.0 against 1.8.1
+- Why: on the server the Stage 4 Hessian (3,553 parameters, 704 free, 105,913 observations, 32 workers) took
+  452.06 s against 0.099 s for the likelihood, a ratio of about 4,600, while Stage 1 (307 parameters, 304 free) had a
+  ratio of 67. The likelihood and gradient cost scale with the free parameters, the Hessian with the total count.
+- Cause: `FactorModel::CalcLkhd()` declared `mixhess` (nparam x nparam doubles) and `mixgrad` (nparam) inside the
+  observation and mixture loops, so every observation allocated and zero-filled a full-size buffer: 101 MB per
+  observation in Stage 4, about 10.7 TB of zero-fill per Hessian. 1.8.1 (`442995c`) allocates both once per call
+  next to `totalhess` and resets only the free and tied entries, as the `totalhess` zeroing already did.
+- Correctness (`t7c_mixhess_timing.R <lib> <label> correctness`, `t7c_mixhess_compare.R`): 1.8.0 and 1.8.1 built at
+  -O2 into scratch libraries, log-likelihood, gradient and packed Hessian compared element by element at the same
+  parameters in ten scenarios (fixed-heavy `previous_stage` with total = 5.3 x free, all free, equality constraints,
+  adaptive quadrature, `n_types = 2`, `nmix = 2`, and combinations). All ten are bitwise identical, `identical()` TRUE,
+  largest absolute difference 0. Test suite on the edited source: 1320 passed, 0 failed, 2 pre-existing skips.
+- Timing (single core, -O2, medians of 3 for L and G and 2 for H, two passes for the first three models):
+
+| Model | nparam / nfree | L 1.8.0 / 1.8.1 | G 1.8.0 / 1.8.1 | H 1.8.0 / 1.8.1 | H/L |
+|---|---|---|---|---|---|
+| fixed-heavy, N = 5,000, 120 indicators | 672 / 15 | 1.14, 1.12 / 1.15, 1.14 s | 1.38, 1.36 / 1.39, 1.39 s | 4.36, 4.42 / 3.32, 3.23 s | 3.9 to 2.9 |
+| fixed-heavy, N = 2,000, 40 indicators | 245 / 15 | 0.175, 0.173 / 0.175, 0.172 s | 0.217, 0.212 / 0.220, 0.216 s | 0.521, 0.512 / 0.514, 0.503 s | 3.0 to 2.9 |
+| all free, N = 2,000 | 245 / 240 | 0.178, 0.171 / 0.259, 0.176 s | 0.348, 0.339 / 0.346, 0.341 s | 4.68, 4.58 / 4.71, 4.59 s | 26.5 to 26.1 |
+| fixed-heavy, N = 1,000, 60 indicators x 56 covariates | 3,519 / 15 | 0.303 / 0.296 s | 0.465 / 0.449 s | 10.17 / 2.99 s | 33.6 to 10.1 |
+
+- The 0.259 s likelihood in the all-free pass 1 is on a code path the change does not touch (iflag 1 allocates
+  neither buffer) and pass 2 gives 0.176 s, so it is noise. Likelihood and gradient are unchanged within noise
+  everywhere. The Hessian saving scales with nparam^2 x nobs: about 1.0 s per Hessian at nparam 672 and N = 5,000,
+  7.2 s at nparam 3,519 and N = 1,000, nothing measurable at nparam 245.
+- Process totals for the 3,519-parameter model (`/usr/bin/time -l`, 4 L + 3 G + 2 H): 1.8.0 24.01 s real, 17.42 user,
+  6.38 sys, max RSS 601 MB; 1.8.1 9.55 s real, 9.16 user, 0.20 sys, max RSS 686 MB. The system time was the kernel
+  zero-filling and reclaiming the per-observation buffer. The 85 MB RSS increase is the one persistent buffer that
+  replaces the transient one. Page reclaims did not grow with the allocations (89,790 against 95,900), so the macOS
+  allocator recycled the same pages.
+- Not measured, Linux: glibc serves requests above its 32 MB threshold cap with a fresh `mmap` and `munmap`, so on
+  the server each observation also paid about 25,000 page faults. The Mac numbers therefore understate the server
+  saving. At 50 to 100 GB/s of aggregate bandwidth the 10.7 TB zero-fill alone is 100 to 200 s of the 452 s Stage 4
+  Hessian. The first Stage 4 run under 1.8.1 on the server gives the measured number and belongs in this section.
+- Storing the working Hessians by free position (five persistent nparam^2 buffers, 100 MB each in Stage 4, against
+  704^2 doubles or 4 MB) would cut per-worker memory but not time on this evidence, since the churn and not the
+  persistent buffers was the cost. Not implemented.
