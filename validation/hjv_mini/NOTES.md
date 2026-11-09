@@ -473,3 +473,39 @@ sockets; MPI: `MPI_Bcast` + `MPI_Reduce`, shared memory).
 - At HJV size the Hessian transfer alone is about 0.1 s per iteration, against Hessian evaluations that take minutes
   for N in the hundreds of thousands with 8 types; a few tenths of a second per iteration is negligible there, and the
   gradient/objective round trips stay near a millisecond because their payload is small.
+
+## T7c (November 9, 2026): 0.2.56 against 1.8.0 at the same point, and the first production-scale timings
+- Why: on the server, the verbose benchmark block of 1.8.0 timed one parallel gradient evaluation of the v14f
+  measurement system at 6.4 s against 4.4 s for 0.2.56, while the likelihood (3.0 against 3.1 s) and the Hessian
+  (199 against 204 s) were unchanged.
+- Setup (`t7c_version_timing.R`): both versions built from git at -O2 into scratch libraries (`git archive dcb2858`
+  for 0.2.56, `ade1dde` for 1.8.0), mini measurement system at N = 20,000 (99 parameters, 96 free), every parameter
+  set to the converged estimates in `results/r_s1_20000.rds`, single core, medians of 3 (Hessian once). For 0.2.56
+  the script drops the `use_types` argument and skips `fix_factor_param()`, which that version lacks; with every
+  loading free the identification rule fixes the variances at 1 in both versions, so the parameter vectors match.
+
+| Evaluation, single core, N = 20,000 | 0.2.56 | 1.8.0 |
+|---|---|---|
+| Likelihood | 3.90 s | 3.92 s |
+| Likelihood + gradient | 7.97 s | 7.84 s |
+| Likelihood + gradient + Hessian (one run) | 64.5 s | 66.7 s |
+
+- Both versions return the log-likelihood -336690.91807404 at that point. The evaluation kernel has no version
+  regression: the gradient is 2 percent faster in 1.8.0 and the Hessian 3 percent slower, within the spread of
+  single runs. The 1.7.1 in this Mac's default library (build flags unknown) gave 4.10, 8.17 and 66.3 s.
+- Reading of the server gap: each server line is one parallel evaluation on 32 workers, so it carries one PSOCK
+  round trip and single-measurement noise of the order of a second. The ratio of gradient to likelihood time is
+  2.0 for both versions on the Mac, 2.15 for 1.8.0 on v14f and 2.0 on v16 on the server, but 1.43 for the 0.2.56
+  server run, so the old server measurement is the outlier. Different compile flags between the two server installs
+  would give the same pattern and cannot be excluded from here. The gradient is about 1 percent of an nlminb
+  iteration, so nothing follows for the production runs.
+- Production Stage 1 on the server (as reported from the runs, 32 cores, v14f data): legacy C++ 4332.56 s to
+  convergence; factorana 0.2.56 3454.4 s and 1.8.0 3391.8 s, both to log-likelihood -1925381.1750, both from the
+  initial log-likelihood -2144940.9523. Per-evaluation lines from the same runs (likelihood, gradient, Hessian):
+  legacy 2.20, 4.93, 264.06 s; 0.2.56 3.08, 4.39, 203.94 s; 1.8.0 2.98, 6.45, 199.44 s. On the v16 data (25 percent
+  more observations) 1.8.0 gives 3.77, 7.48, 278.47 s from the initial log-likelihood -2772135.4520, which is the
+  scaling the sample size predicts.
+- Open item: the legacy benchmark printed "Likelihood at initial par=1922051.8140", the negative log-likelihood at
+  the legacy start values (`TMinLkhd.cc:3770`). That is 3329.4 below R's converged value. If the legacy start was a
+  previously converged `meas_par.txt`, the two codes differ by a constant on this data, consistent with the February
+  2026 agreement of the estimates to 3e-6; the legacy run's final objective decides it.
