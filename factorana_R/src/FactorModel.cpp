@@ -833,6 +833,16 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
     std::vector<double> totalgrad(nparam, 0.0);
     std::vector<double> totalhess;
     if (iflag == 3) totalhess.resize(nparam * nparam, 0.0);
+    // Per-mixture-component accumulators, allocated once per call. They used
+    // to be declared inside the mixture loop, so every observation (and every
+    // mixture component) allocated and zero-filled a fresh nparam x nparam
+    // array; that cost grows with the square of the TOTAL parameter count,
+    // fixed parameters included. The accumulation loops write only gradparlist
+    // entries (free + tied), so the per-component reset inside the loop zeroes
+    // only those; every other entry keeps the zero it is given here.
+    std::vector<double> mixgrad(nparam, 0.0);
+    std::vector<double> mixhess;
+    if (iflag == 3) mixhess.resize(nparam * nparam, 0.0);
 
     // Pre-allocate working vectors outside the loops for performance
     // These are reused across observations and integration points
@@ -1104,11 +1114,27 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
             }
         }
 
-        // Accumulators for this mixture component
+        // Accumulators for this mixture component. mixgrad and mixhess are
+        // allocated once per CalcLkhd call (next to totalhess). Reset only the
+        // entries the accumulation loops write, as the totalhess zeroing above
+        // does. Entries outside gradparlist are never written and stay zero
+        // from the allocation, so the reads of mixgrad at fixed positions
+        // (mix_dL_dsigma, mix_dL_dbeta below) see the same zeros as before.
         double mixprob = 0.0;
-        std::vector<double> mixgrad(nparam, 0.0);
-        std::vector<double> mixhess;
-        if (iflag == 3) mixhess.resize(nparam * nparam, 0.0);
+        if (iflag >= 2) {
+            for (size_t gi = 0; gi < gradparlist.size(); gi++) {
+                mixgrad[gradparlist[gi]] = 0.0;
+            }
+        }
+        if (iflag == 3) {
+            for (size_t fi = 0; fi < gradparlist.size(); fi++) {
+                int i = gradparlist[fi];
+                for (size_t fj = fi; fj < gradparlist.size(); fj++) {
+                    int j = gradparlist[fj];
+                    mixhess[i * nparam + j] = 0.0;
+                }
+            }
+        }
 
         // For mixture mean gradients: accumulate dL_m/d(mean_k) = Σ w_q * L_q * d(log L_q)/df_k
         // This is the "raw" gradient w.r.t. factor mean (df/d(mean) = 1)

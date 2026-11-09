@@ -1,3 +1,23 @@
+# factorana 1.8.1
+
+## Performance
+
+* **No per-observation Hessian buffer in `FactorModel::CalcLkhd()`.** The
+  per-mixture-component accumulators `mixgrad` (nparam) and `mixhess`
+  (nparam x nparam) were declared inside the observation and mixture loops, so
+  every observation allocated and zero-filled a full-size Hessian buffer. The
+  cost grows with the square of the total parameter count, fixed parameters
+  included, and dominated second-stage Hessians with many fixed parameters
+  (HJV Stage 4: 3,553 parameters, 704 free, 101 MB per observation, about
+  10.7 TB of zero-fill per Hessian). Both buffers are now allocated once per
+  call next to `totalhess`, and the mixture loop resets only the free and
+  tied entries, as the `totalhess` zeroing already did. Results are bitwise
+  identical (log-likelihood, gradient and Hessian) across fixed-heavy,
+  all-free, equality-constrained, adaptive, typed and mixture models. On a
+  3,519-parameter model with 15 free parameters and 1,000 observations the
+  Hessian fell from 10.2 s to 3.0 s at -O2, and the Hessian-to-likelihood
+  ratio from 34 to 10. Smaller models are unchanged within timing noise.
+
 # factorana 1.8.0
 
 ## New features
