@@ -113,6 +113,25 @@ bkgnd1990 <- c(
 bkgnd1990_nocons <- setdiff(bkgnd1990, "constant")
 
 # =============================================================================
+# Endogenous Regressors (read by simulate_factor_model() only)
+# =============================================================================
+
+# Through `endogenous`, a component names the outcomes of other components whose
+# SIMULATED values replace its covariates in a simulation. The links below mirror
+# the LastModel_SetEndogenousReg() calls of bin/prob_hjv.cc, model by model.
+# Estimation does not use them. A covariate that the legacy file leaves undeclared
+# (gpahs2-4, the gpahs_maj and Denroll dummies, swesat_total) keeps its data value
+# in a simulation, as it does in the legacy code.
+#
+# A logit producer feeds its dummies (HS_track -> HS_track2, HS_track3, HS_track4).
+# The linear sgpa9 feeds the HS_track model through the bins sgpa92, sgpa93 and
+# sgpa94, so a simulation must pass the legacy thresholds:
+#   simulate_factor_model(..., endogenous_bins = list(sgpa9 = SGPA9_BIN_THRESHOLDS))
+endog_courses <- c("adveng", "advmath")                    # advanced course choices
+endog_courses_track <- c("adveng", "advmath", "HS_track")  # plus the high school track
+SGPA9_BIN_THRESHOLDS <- c(0.0, 0.5, 1.0)                   # gpa9thresh in bin/prob_hjv.cc
+
+# =============================================================================
 # Define Factor Model
 # =============================================================================
 
@@ -167,6 +186,7 @@ components <- list()
 # seng9: 9th Grade English Grade
 components$seng9 <- define_model_component(
   name = "seng9",
+  endogenous = "adveng",
   data = dat,
   outcome = "seng9",
   factor = fm,
@@ -179,6 +199,7 @@ components$seng9 <- define_model_component(
 # smath9: 9th Grade Math Grade
 components$smath9 <- define_model_component(
   name = "smath9",
+  endogenous = "advmath",
   data = dat,
   outcome = "smath9",
   factor = fm,
@@ -215,6 +236,7 @@ components$sswe9 <- define_model_component(
 # sgpa9: 9th Grade GPA (includes other 9th grade scores as covariates)
 components$sgpa9 <- define_model_component(
   name = "sgpa9",
+  endogenous = c("smath9", "seng9", "ssports9", "sswe9"),
   data = dat,
   outcome = "sgpa9",
   factor = fm,
@@ -234,6 +256,7 @@ components$sgpa9 <- define_model_component(
 # ssports10: 10th Grade Sports Grade
 components$ssports10 <- define_model_component(
   name = "ssports10",
+  endogenous = "HS_track",
   data = dat,
   outcome = "ssports10",
   factor = fm,
@@ -246,6 +269,7 @@ components$ssports10 <- define_model_component(
 # smath10: HS Math Grade
 components$smath10 <- define_model_component(
   name = "smath10",
+  endogenous = c("advmath", "HS_track"),
   data = dat,
   outcome = "smath10",
   factor = fm,
@@ -258,6 +282,7 @@ components$smath10 <- define_model_component(
 # sgpahs_voc: HS GPA (Vocational track)
 components$sgpahs_voc <- define_model_component(
   name = "sgpahs_voc",
+  endogenous = c(endog_courses, "ssports10", "smath10"),
   data = dat,
   outcome = "gpahs",
   factor = fm,
@@ -273,6 +298,7 @@ components$sgpahs_voc <- define_model_component(
 # sgpahs_aca: HS GPA (Academic track)
 components$sgpahs_aca <- define_model_component(
   name = "sgpahs_aca",
+  endogenous = c(endog_courses, "ssports10", "smath10", "HS_track"),
   data = dat,
   outcome = "gpahs",
   factor = fm,
@@ -293,6 +319,7 @@ components$sgpahs_aca <- define_model_component(
 # cog1: Cognitive measure 1
 components$cog1 <- define_model_component(
   name = "cog1",
+  endogenous = endog_courses_track,
   data = dat,
   outcome = "cog1",
   factor = fm,
@@ -307,6 +334,7 @@ components$cog1 <- define_model_component(
 # cog2: Cognitive measure 2
 components$cog2 <- define_model_component(
   name = "cog2",
+  endogenous = endog_courses_track,
   data = dat,
   outcome = "cog2",
   factor = fm,
@@ -321,6 +349,7 @@ components$cog2 <- define_model_component(
 # cog3: Cognitive measure 3
 components$cog3 <- define_model_component(
   name = "cog3",
+  endogenous = endog_courses_track,
   data = dat,
   outcome = "cog3",
   factor = fm,
@@ -335,6 +364,7 @@ components$cog3 <- define_model_component(
 # cog4: Cognitive measure 4
 components$cog4 <- define_model_component(
   name = "cog4",
+  endogenous = endog_courses_track,
   data = dat,
   outcome = "cog4",
   factor = fm,
@@ -353,6 +383,7 @@ components$cog4 <- define_model_component(
 # misslead: Probability of missing leadership measure (probit)
 components$misslead <- define_model_component(
   name = "misslead",
+  endogenous = endog_courses_track,
   data = dat,
   outcome = "miss_lead",
   factor = fm,
@@ -371,6 +402,7 @@ components$misslead <- define_model_component(
 # stresstol: Emotional Stability (measured by pf)
 components$stresstol <- define_model_component(
   name = "stresstol",
+  endogenous = endog_courses_track,
   data = dat,
   outcome = "pf",
   factor = fm,
@@ -385,6 +417,7 @@ components$stresstol <- define_model_component(
 # lead: Leadership
 components$lead <- define_model_component(
   name = "lead",
+  endogenous = endog_courses_track,
   data = dat,
   outcome = "lead",
   factor = fm,
@@ -558,6 +591,7 @@ components$adveng <- define_model_component(
 components$HS_track <- define_model_component(
   use_types = USE_TYPES,
   name = "HS_track",
+  endogenous = c(endog_courses, "sgpa9"),
   data = dat,
   outcome = "HS_track",
   factor = fm,
@@ -596,6 +630,7 @@ components$HS_track <- fix_coefficient(components$HS_track, "hstrk2IV", 0.0, cho
 components$educDapply <- define_model_component(
   use_types = USE_TYPES,
   name = "educDapply",
+  endogenous = endog_courses_track,
   data = dat,
   outcome = "applyCollege",
   factor = fm,
@@ -615,6 +650,7 @@ components$educDapply <- define_model_component(
 components$Dswesat <- define_model_component(
   use_types = USE_TYPES,
   name = "Dswesat",
+  endogenous = endog_courses_track,
   data = dat,
   outcome = "Dswesat",
   factor = fm,
@@ -634,6 +670,7 @@ components$Dswesat <- define_model_component(
 components$swesat <- define_model_component(
   use_types = USE_TYPES,
   name = "swesat",
+  endogenous = endog_courses_track,
   data = dat,
   outcome = "swesat_total",
   factor = fm,
@@ -680,6 +717,7 @@ major_apply_outcomes <- paste0("major_apply", 1:13)
 components$educDapplication <- define_model_component(
   use_types = USE_TYPES,
   name = "educDapplication",
+  endogenous = endog_courses_track,
   data = dat,
   outcome = major_apply_outcomes,
   factor = fm,
@@ -739,6 +777,7 @@ for (ichoice in 2:13) {
 components$educDadmitenroll <- define_model_component(
   use_types = USE_TYPES,
   name = "educDadmitenroll",
+  endogenous = endog_courses_track,
   data = dat,
   outcome = "enroll",
   factor = fm,
@@ -757,6 +796,7 @@ components$educDadmitenroll <- define_model_component(
 components$educDSwitchtoMajor <- define_model_component(
   use_types = USE_TYPES,
   name = "educDSwitchtoMajor",
+  endogenous = endog_courses_track,
   data = dat,
   outcome = "DSwitchMajor",
   factor = fm,
@@ -862,6 +902,7 @@ for (imajor in 1:12) {
   components[[comp_name]] <- define_model_component(
     use_types = USE_TYPES,
     name = comp_name,
+    endogenous = endog_courses_track,
     data = dat,
     outcome = outcome_var,
     factor = fm,
@@ -941,11 +982,12 @@ for (imeas in 1:2) {
   cat("\n--- Adding", income_meas[imeas], "models ---\n")
 
   # Loop over education categories
+  # ieduc is the 0-based index of bin/prob_hjv.cc, so the name is education[ieduc + 1].
   # Skip ieduc=1 (HSpDO) and ieduc=8 (CollGrad)
   for (ieduc in 2:20) {
 
-    # Skip CollGrad (legacy ieduc=8, R index 9)
-    if (ieduc == 9) next
+    # Skip CollGrad (ieduc = 8, education[9] in R)
+    if (ieduc == 8) next
 
     # Component naming (matching legacy)
     educ_name <- education[ieduc + 1]  # R is 1-indexed
@@ -965,6 +1007,7 @@ for (imeas in 1:2) {
     components[[comp_name]] <- define_model_component(
       use_types = USE_TYPES,
       name = comp_name,
+      endogenous = if (ieduc > 5) endog_courses_track else endog_courses,
       data = dat,
       outcome = outcome_var,
       factor = fm,
