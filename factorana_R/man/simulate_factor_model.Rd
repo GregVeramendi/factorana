@@ -11,7 +11,16 @@ simulate_factor_model(
   params = NULL,
   weights = NULL,
   seed = NULL,
-  detail = TRUE
+  detail = TRUE,
+  fill_ranks = c("base", "all", "first"),
+  layout = c("standard", "legacy"),
+  simulate_unevaluated = NULL,
+  component_order = NULL,
+  endogenous_bins = NULL,
+  index_var = NULL,
+  type_model_name = "TypeProb",
+  csv_file = NULL,
+  rds_file = NULL
 )
 }
 \arguments{
@@ -30,15 +39,77 @@ numeric vector of length \code{nrow(data)}.}
 
 \item{seed}{Optional integer seed.}
 
-\item{detail}{If \code{TRUE} (default), include per-component linear predictor
-(\code{Vobs}), factor contributions (\verb{Vfac<k>}), shock (\code{eps}), and choice
-probabilities, like the legacy detailed output.}
+\item{detail}{\code{TRUE} (default), \code{FALSE}, or a character vector of component
+names. Covered components include their detail columns. In the standard
+layout these are the linear predictor (\verb{<comp>_Vobs}, covariates plus
+factor and type terms), the shock (\verb{<comp>_eps}), and the choice
+probabilities. A ranked logit component adds per rank \code{r} the columns
+\verb{<comp>_r<r>_Vobs_alt<a>} (the utility of non-reference alternative \code{a} at
+that rank, rank-share correction included) and \verb{<comp>_r<r>_prob_C<j>}
+(the probability of alternative \code{j} over the alternatives available at
+that rank, 0 for an alternative excluded by an earlier rank). In the
+legacy layout the detail columns are those of the section on that layout,
+and \code{type_model_name} may be listed to cover the type-probability model.}
+
+\item{fill_ranks}{For ranked (exploded) logit components, which rank columns
+a simulated unit fills. \code{"base"} (default) fills the ranks in which the
+resampled base row holds a valid choice (a value in \verb{1..num_choices}), so
+the simulated data keep the observed distribution of the number of ranked
+alternatives. \code{"all"} fills every rank. \code{"first"} fills rank 1 only, as the
+legacy \code{TModel::Sim()} does. An unfilled rank is \code{NA}, which the
+likelihood skips. The legacy layout uses \code{"first"}.}
+
+\item{layout}{\code{"standard"} (default) returns the resampled covariates and
+the simulated outcomes under the outcome variable names, ready for
+re-estimation. \code{"legacy"} returns the column layout of the legacy C++
+\code{simulation_data.csv}.}
+
+\item{simulate_unevaluated}{If \code{FALSE}, the outcome of a component is \code{NA}
+for a unit whose base row does not evaluate it (its
+\code{evaluation_indicator} is off). If \code{TRUE}, the outcome is simulated for
+every unit with complete covariates, as the legacy C++ code does, and
+\verb{<comp>_miss} takes the values 0, 1 and 2 described in the section on the
+legacy layout. Defaults to \code{FALSE} in the standard layout and \code{TRUE} in
+the legacy layout.}
+
+\item{component_order}{Optional character vector of component names. The
+named components are simulated first, in that order, and the others
+follow in their listing order, as with the legacy \code{SetSimModelOrder()}.
+A component that is not named still waits for the producers of its
+endogenous regressors, and a named component cannot precede one of its
+producers. Without this argument the components run in listing order,
+with producers moved ahead of their consumers. The order is also the
+order of the component blocks in the legacy layout.}
+
+\item{endogenous_bins}{Optional named list of increasing threshold vectors,
+named by the outcome of a linear producer component. Consumers that
+declare that outcome as endogenous then read the bin dummies
+\verb{<outcome>1}, ..., \verb{<outcome>K} for \code{K = length(thresholds) + 1} bins,
+where the bin of a unit is 1 plus the number of thresholds strictly below
+its simulated outcome. This is the legacy \code{LastModel_SetXtileThresh()}. A
+covariate named \verb{<outcome>} still reads the simulated value itself.}
+
+\item{index_var}{Legacy layout only: name of a column of \code{data} that
+identifies the base row (the C++ index variable). It becomes the first
+column of the table, under its own name.}
+
+\item{type_model_name}{Legacy layout only: name under which the
+type-probability model is written. The C++ code names it \code{"TypeProb"}.}
+
+\item{csv_file}{Legacy layout only: path of a CSV file to write in the
+format of the C++ \code{simulation_data.csv}. See
+\code{\link[=write_legacy_simulation_csv]{write_legacy_simulation_csv()}}.}
+
+\item{rds_file}{Path of a compressed R file (\code{\link[=saveRDS]{saveRDS()}}) holding the
+returned table, in either layout. Read it back with \code{\link[=readRDS]{readRDS()}}.}
 }
 \value{
-A data frame with one row per simulated unit: an \code{xid}, the resampled
-covariates, the drawn latent factor(s) (\verb{factor_<k>}), and per component the
-simulated outcome (named after the component) plus, when \code{detail = TRUE},
-the diagnostic columns.
+Standard layout: a data frame with one row per simulated unit: an
+\code{xid}, the resampled covariates (and, for a ranked logit component with
+\code{rankshare_var}, its rank-share block), the drawn latent factor(s)
+(\verb{factor_<k>}), and per component the simulated outcome (named after the
+component's outcome variable) plus the detail columns. Legacy layout: the
+table described in the section on that layout.
 }
 \description{
 Generates a simulated data set from a fitted or fully specified factorana
@@ -49,12 +120,102 @@ each component's outcome is drawn from its model (linear, probit, logit, or
 ordered probit) given the covariates and factors.
 }
 \details{
-Supports all four model types (linear, probit, logit including multinomial,
-ordered probit), latent types, mixtures of normals, and the independent,
-correlated, and structural-equation (\verb{SE_*}) factor structures. The simulated
-outcome column is named after each component's outcome variable, so the
-returned data frame can be re-estimated with the same model system.
+Supports all four model types (linear, probit, logit including multinomial
+and ranked (exploded) logit, ordered probit), latent types, mixtures of
+normals, and the independent, correlated, and structural-equation (\verb{SE_*})
+factor structures. The simulated outcome column is named after each
+component's outcome variable, so the returned data frame can be re-estimated
+with the same model system.
 }
+\section{Ranked (exploded) logit}{
+
+A component with a multi-column \code{outcome} is simulated rank by rank, as the
+likelihood evaluates it. The utility of a non-reference alternative is
+\verb{X beta_a + lambda_a f} plus any type intercept, and at rank \code{r} the
+rank-share correction for that rank and alternative is added when
+\code{rankshare_var} is set. One alternative is drawn from those available and
+written to the rank's outcome column. With \code{exclude_chosen = TRUE} the drawn
+alternative leaves the choice set for later ranks, and with
+\code{exclude_chosen = FALSE} every alternative stays available. The rank-share
+block, the \code{(num_choices - 1) * nrank} columns that follow \code{rankshare_var}
+in \code{data}, is read by column position, as the likelihood reads it, with
+\code{NA} treated as 0. The block is copied into the
+simulated data in the same order, so the data can be re-estimated with the
+same model system. A rank column cannot be an endogenous regressor of
+another component.
+
+\code{fill_ranks = "first"} reproduces the legacy \code{TModel::Sim()}, which has no
+rank loop: one multinomial draw over all alternatives, written to the first
+outcome column, with the other rank columns left \code{NA} so that a
+re-estimation uses rank 1 only. The utilities follow the likelihood at rank
+1, so a rank-share correction for rank 1 is applied when \code{rankshare_var} is
+set, whereas the legacy simulation ignores it.
+}
+
+\section{Endogenous regressors}{
+
+A covariate reads a simulated value only in the components that declare its
+producer through the \code{endogenous} argument of \code{\link[=define_model_component]{define_model_component()}}.
+Every other component reads the resampled data value, as in the legacy
+\code{TModel::SetEndogenousRegs()}. The returned standard-layout data frame holds
+the simulated value in the column.
+}
+
+\section{Legacy layout}{
+
+\code{layout = "legacy"} returns the table that the legacy C++
+\code{TMinLkhd::Simulate()} wrote to \code{simulation_data.csv}, so that code written
+for that file runs on the returned object. The table is a \code{data.table} when
+the data.table package is installed and a data frame otherwise. Missing
+values are \code{NA}, in memory and in the file written by \code{csv_file}, where the
+C++ file has \code{-9999}.
+Columns, in order:
+\itemize{
+\item the index: \code{index_var} when given, otherwise \code{xid}, the row number of
+the resampled base row.
+\item when the model has latent types, the type-probability model under
+the name \code{type_model_name}, laid out as a multinomial logit component.
+\item one block per component, in simulation order (see
+\code{component_order}). A block holds
+\verb{sim_<name>_miss}, the detail columns when \code{detail} covers the component,
+the choice probabilities of a discrete component, and the simulated
+outcome \verb{sim_<name>}.
+\item the drawn factors \code{sim_fac0}, \code{sim_fac1}, ..., the type indicators
+\code{sim_type1}, ... for the non-reference types, and \code{sim_flag} (always 1).
+}
+The detail columns split the index of the outcome equation as the C++ code
+does: \verb{_Vobs} (covariates that are not endogenous), \verb{_Vend} (endogenous
+covariates, present only when the component declares some), \verb{_Vfac<k>} (the
+loading times factor \code{k}, numbered from 0), \verb{_Vtyp<t>} (the type intercept
+of non-reference type \code{t + 2} times its indicator, numbered from 0, present
+whenever the model has types), and \verb{_eps} (the shock). The outcome can be
+rebuilt from these pieces. A multinomial logit with more than two
+alternatives repeats each piece with the suffix \verb{_C<j>} for alternatives
+\verb{j = 2, ..., K}, and its \verb{_eps_C<j>} is the difference between the
+extreme-value shocks of alternative \code{j} and alternative 1. Three conventions
+of the C++ file are kept: \verb{_prob} of a probit is the probability of 1,
+\verb{_prob_C<j>} of a logit is the probability of alternative \code{j}, and the
+\code{K - 1} columns \verb{_prob_C2}, ..., \verb{_prob_CK} of an ordered probit hold the
+probabilities of categories \verb{1, ..., K - 1}.
+
+The legacy layout simulates every component for every unit
+(\code{simulate_unevaluated = TRUE}), as the C++ code does. \verb{sim_<name>_miss} is
+0 for a unit whose base row evaluates the component, 1 for a unit whose base
+row does not (the outcome is simulated all the same), and 2 for a unit with
+a missing covariate (\code{NA}) or a missing endogenous producer, whose block is
+missing. The package reads only \code{NA} as missing: a covariate that still holds
+the code -9999 of the legacy data files stops the simulation with a request
+to recode it. A ranked logit component is simulated as
+the C++ code simulates it, with one draw over all alternatives
+(\code{fill_ranks = "first"}). A covariate named \verb{<outcome>_miss} of a declared
+producer is set to 0, as in the C++ simulation.
+
+With the same \code{seed}, the legacy layout and the standard layout hold the
+same draws. The extreme-value shocks of the type-probability model are drawn
+last, conditional on the drawn type.
+}
+
 \seealso{
-\code{\link[=estimate_model_rcpp]{estimate_model_rcpp()}}
+\code{\link[=estimate_model_rcpp]{estimate_model_rcpp()}}, \code{\link[=write_legacy_simulation_csv]{write_legacy_simulation_csv()}},
+\code{\link[=legacy_param_table]{legacy_param_table()}}
 }

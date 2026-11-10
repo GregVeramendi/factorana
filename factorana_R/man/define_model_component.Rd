@@ -55,7 +55,9 @@ where the same nest can be chosen multiple times.}
 \item{rankshare_var}{Character (optional). Column name (or prefix) for rank-share
 correction variables. These provide rank-and-choice-specific adjustments to the
 linear predictor. Data layout: (num_choices-1) * nrank columns, accessed as
-rankshare_var + (num_choices-1)*irank + icat for irank=0..nrank-1, icat=0..num_choices-2.}
+rankshare_var + (num_choices-1)*irank + icat for irank=0..nrank-1, icat=0..num_choices-2.
+A missing correction is \code{NA} and counts as 0. The value -9999 of the legacy
+data files is not read as missing, and a block that holds it is rejected.}
 
 \item{loading_normalization}{Numeric vector of length \code{n_factors}. This is how
 an item is assigned to factor(s): one entry per factor, with the convention

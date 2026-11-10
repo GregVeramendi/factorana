@@ -19,6 +19,8 @@
 #'   correction variables. These provide rank-and-choice-specific adjustments to the
 #'   linear predictor. Data layout: (num_choices-1) * nrank columns, accessed as
 #'   rankshare_var + (num_choices-1)*irank + icat for irank=0..nrank-1, icat=0..num_choices-2.
+#'   A missing correction is `NA` and counts as 0. The value -9999 of the legacy
+#'   data files is not read as missing, and a block that holds it is rejected.
 #' @param loading_normalization Numeric vector of length `n_factors`. This is how
 #'   an item is assigned to factor(s): one entry per factor, with the convention
 #'   - `0`  --> item does not load on that factor (off-factor),
@@ -365,6 +367,19 @@ define_model_component <- function(name,
     }
     if (model_type != "logit") {
       stop("`rankshare_var` is only supported for model_type='logit'.")
+    }
+    # A missing correction is NA. The value -9999 of the legacy data files is an
+    # ordinary number here, so a block that still holds it is rejected.
+    j0 <- match(rankshare_var, names(data))
+    nblock <- suppressWarnings((as.integer(num_choices) - 1L) * nrank)
+    if (length(nblock) == 1L && !is.na(nblock) && nblock >= 1L && j0 + nblock - 1L <= ncol(data)) {
+      block <- as.list(data)[j0 + seq_len(nblock) - 1L]
+      legacy_code <- vapply(block, function(v) is.numeric(v) && any(v <= -9998, na.rm = TRUE), logical(1))
+      if (any(legacy_code)) {
+        stop("Rank-share column(s) ", paste(sQuote(names(block)[legacy_code]), collapse = ", "),
+             " hold values at or below -9998. A missing correction must be NA: the package ",
+             "does not read -9999 as missing. Recode those values to NA.")
+      }
     }
   }
 

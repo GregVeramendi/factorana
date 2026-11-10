@@ -1,3 +1,142 @@
+# factorana 1.8.2
+
+## New features
+
+* **Ranked (exploded) multinomial logit in simulation.** `simulate_factor_model()`
+  now simulates a component with a multi-column `outcome`, which previously stopped
+  with "not yet supported". The draw mirrors the rank loop of `Model::EvalLogit()`
+  in `src/Model.cpp`. At each rank the utility of a non-reference alternative is
+  `X beta_a + lambda_a f` plus any type intercept and any rank-share correction,
+  one alternative is drawn from those available and written to that rank's outcome
+  column, and with `exclude_chosen = TRUE` the drawn alternative leaves the choice
+  set for later ranks (with `exclude_chosen = FALSE` the set is the same at every
+  rank). Rank-share corrections are read from the `(num_choices - 1) * nrank`
+  columns that follow `rankshare_var` in `data`, by column position as the
+  likelihood reads them, with `NA` treated as 0. The
+  block is copied into the simulated data in the same order, so the data can be
+  re-estimated with the same model system.
+
+  The new argument `fill_ranks` decides which rank columns a simulated unit fills.
+  The default `"base"` fills the ranks in which the resampled base row holds a
+  valid choice, so the simulated data keep the observed distribution of the number
+  of ranked alternatives, and `"all"` fills every rank. An unfilled rank is `NA`,
+  which the likelihood skips. With `detail = TRUE` each rank adds
+  `<comp>_r<r>_Vobs_alt<a>` (the utility of alternative `a`, correction included)
+  and `<comp>_r<r>_prob_C<j>` (the probability of alternative `j` over the
+  alternatives available at that rank, 0 for an excluded alternative).
+
+  `fill_ranks = "first"` reproduces the legacy `TModel::Sim()`, which has no rank
+  loop: one multinomial draw over all alternatives goes to the first outcome
+  column and the other rank columns stay `NA`, so a re-estimation on the simulated
+  data uses rank 1 only. The utilities follow the likelihood at rank 1, so a
+  rank-1 rank-share correction is applied when `rankshare_var` is set. The legacy
+  simulation ignores that correction, and the HJV application model has none, so
+  the two agree there.
+
+  A rank column cannot be an endogenous regressor. A component whose `endogenous`
+  argument names a rank column of a ranked component now stops with a message
+  saying so. Tests in `tests/testthat/test-simulate-exploded.R` recover the
+  parameters of a five-alternative, three-rank model with `exclude_chosen = TRUE`,
+  with `exclude_chosen = FALSE` and with a rank-share block, each within 3.5
+  standard errors under strict `nlminb` convergence at 48 quadrature nodes, and
+  check that the first-choice draws match the logit probabilities at the true
+  parameters.
+
+* **Legacy layout for simulated data.** `simulate_factor_model(layout = "legacy")`
+  returns the table that the legacy C++ `TMinLkhd::Simulate()` wrote to
+  `simulation_data.csv`, so that code written for that file runs on the returned
+  object in place of `fread("simulation_data.csv")`. The table is a `data.table`
+  when that package is installed. Its columns are the index (`index_var`, or
+  `xid`), the type-probability model under the name `TypeProb`, one block per
+  component (`sim_<name>_miss`, the detail columns `_Vobs`, `_Vend`, `_Vfac<k>`,
+  `_Vtyp<t>` and `_eps`, the choice probabilities, and the outcome `sim_<name>`),
+  the factors `sim_fac<k>`, the type indicators `sim_type<t>` and `sim_flag`. The
+  outcome of every component can be rebuilt from its detail columns. `detail` now
+  also accepts a character vector of component names, the counterpart of the
+  per-model `LastModel_Detailsim()`, and the new `component_order` is the
+  counterpart of `SetSimModelOrder()`.
+
+  Two options save the table. `csv_file` writes it in the format of the C++ file
+  through the new `write_legacy_simulation_csv()`: names separated by a comma and
+  a space, `%10d` for integer columns, `%10.5f` for the others, and a trailing
+  space on each data line. A missing value is written as `NA`, where the C++
+  file has `-9999`. `rds_file` writes a compressed R file with `saveRDS()` and
+  also works for the standard layout. The
+  new `legacy_param_table()` returns the parameters under the model and variable
+  names of `fullmodel_par_varlist.txt`, which is the table that post-processing
+  code for the C++ output builds by merging that file with `fullmodel_par.txt`.
+
+  The legacy layout follows three rules of the C++ simulation that the standard
+  layout does not. First, every component is simulated for every unit
+  (`simulate_unevaluated = TRUE`). `sim_<name>_miss` is 1 for a unit whose base
+  row does not evaluate the component, and the outcome is simulated all the same.
+  A unit with a missing covariate (`NA`) or a missing producer has code 2 and a
+  missing block. Second, a covariate named
+  `<outcome>_miss` of a declared endogenous producer is set to 0. Third, a ranked
+  logit component is simulated with one draw over all alternatives
+  (`fill_ranks = "first"`). `simulate_unevaluated = TRUE` is also available in
+  the standard layout.
+
+  The new argument `endogenous_bins` ports the legacy `LastModel_SetXtileThresh()`.
+  It gives thresholds for the simulated outcome of a linear producer, and the
+  consumers that declare that outcome read the bin dummies `<outcome>1`, ...,
+  `<outcome>K`, where the bin is 1 plus the number of thresholds strictly below
+  the simulated value. It works in both layouts.
+
+  We checked the layout against the C++ program on the mini-HJV model of
+  `validation/hjv_mini` with three types (28 components, 344 parameters, the same
+  parameters and 100,000 simulated units in each code). The header of the R file
+  equals the header of the C++ file, all 363 columns have the same field format,
+  each of the 344 parameters maps between `legacy_param_table()` and the C++
+  `fullmodel_par_varlist.txt`, and the largest difference between column means is
+  2.3 standard errors. With the same `seed`, the legacy layout and the standard
+  layout hold the same draws. The C++ comparison did not cover `endogenous_bins`,
+  an ordered probit component or a missing covariate, which rest on the C++
+  source and on the tests in `tests/testthat/test-simulate-legacy.R`.
+
+## Changes
+
+* **`NA` is the only missing value.** The package no longer reads -9999, the
+  missing code of the legacy C++ data files, as missing. A missing rank-share
+  correction is `NA` and counts as 0 in the likelihood, where a value at or
+  below -9998 used to count as 0. `define_model_component()` stops when the
+  rank-share block of a component still holds such a value, and
+  `simulate_factor_model(simulate_unevaluated = TRUE)` stops when a covariate
+  does, since the value would enter the index as a number. Recode -9999 to `NA`
+  in the data. Unused ranks of a ranked logit are unaffected: any value outside
+  `1..num_choices` skips the rank, as before.
+
+## Bug fixes
+
+* `simulate_factor_model()` stopped with "parameter '<comp>_type_2_intercept' not
+  found" for a multinomial logit component with `use_types = TRUE` and more than
+  two alternatives. The type intercepts of such a component are per alternative
+  (`<comp>_c<a>_type_<t>_intercept`, since 1.8.0), and the simulation looked up
+  the single-index name before it reached the logit branch.
+
+* An endogenous covariate is now replaced by its simulated value only in the
+  components that declare its producer through `endogenous`. A component that
+  used the covariate without declaring it also read the simulated value when it
+  ran after the producer. The legacy `SetEndogenousRegs()` substitutes only in
+  the declaring models.
+
+* When several components share an outcome variable, the first one listed is
+  the producer of an endogenous regressor with that name, as in the legacy
+  code, and only its simulated outcome is fed forward. The last one listed
+  used to win.
+
+* A model declared with `n_types > 1` in which no component uses types is
+  simulated without types, as it is estimated since 1.8.0. The simulation
+  stopped for a missing `typeprob_2_intercept`.
+
+## Performance
+
+* `simulate_factor_model()` computes the index of linear, probit and ordered
+  probit components for all units at once, where it looped over units, and it
+  resamples only the columns of `data` that the simulation reads. On the
+  28-component mini-HJV model a standard-layout simulation of 20,000 units took
+  84.4 s before and 0.15 s after, with identical output for the same seed.
+
 # factorana 1.8.1
 
 ## Performance

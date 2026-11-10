@@ -1052,7 +1052,8 @@ void Model::EvalLogit(const std::vector<double>& expres, double outcome,
             for (int icat = 0; icat < numchoice - 1; icat++) {
                 int idx = ranksharevar_idx + (numchoice - 1) * irank + icat;
                 double corr_val = data[iobs_offset + idx];
-                if (corr_val > -9998.0) {
+                // a missing correction is NA (NaN here) and counts as 0
+                if (!std::isnan(corr_val)) {
                     rankedChoiceCorr[icat] = corr_val;
                 }
             }

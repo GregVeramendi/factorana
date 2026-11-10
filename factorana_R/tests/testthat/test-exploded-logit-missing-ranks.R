@@ -1,5 +1,5 @@
 # A rank that holds no valid choice is skipped (src/Model.cpp, the rank loop).
-# Coding an unused rank as NA, -9999, 0 or an out-of-range number must give the
+# Coding an unused rank as NA, 0, a negative number or an out-of-range number must give the
 # same likelihood and gradient.
 
 test_that("unused ranks give the same likelihood whatever their code", {
@@ -45,7 +45,7 @@ test_that("unused ranks give the same likelihood whatever their code", {
   }
   ref <- eval_at(b0)
   expect_true(is.finite(ref$logLikelihood))
-  for (code in list(NA_real_, -9999, 1e10)) {
+  for (code in list(NA_real_, -1, 1e10)) {
     res <- eval_at(build(code))
     expect_identical(res$logLikelihood, ref$logLikelihood)
     expect_identical(res$gradient, ref$gradient)
