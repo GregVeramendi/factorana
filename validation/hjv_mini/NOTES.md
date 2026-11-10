@@ -548,3 +548,49 @@ sockets; MPI: `MPI_Bcast` + `MPI_Reduce`, shared memory).
 - Storing the working Hessians by free position (five persistent nparam^2 buffers, 100 MB each in Stage 4, against
   704^2 doubles or 4 MB) would cut per-worker memory but not time on this evidence, since the churn and not the
   persistent buffers was the cost. Not implemented.
+
+## T10 (November 10, 2026): the simulation stage, legacy `Simulate()` against `simulate_factor_model(layout = "legacy")`
+- Why: the HJV post-processing (`mc_simulation_bootstrap_processing_v4.R`) reads the C++ `simulation_data.csv` by column
+  name and rebuilds choices from its detail columns (`_Vobs`, `_Vend`, `_Vfac<k>`, `_Vtyp<t>`, `_eps`). factorana 1.8.2
+  adds `layout = "legacy"`, which returns that table in memory (a data.table) and writes the same file format, except
+  that a missing value is `NA` where the C++ file has -9999. The R package reads and writes only `NA` as missing.
+- Setup (`run_t10.sh`, `t10_sim_compare.R`): mini model with 3 types, N = 2000 base rows, the legacy typed estimates of
+  T9 run A as parameters (`results/legacy_s2t3A_2000/fullmodel_par.txt`, 344 parameters), 100,000 simulated units in
+  each code. The C++ problem file is generated from `prob_hjv_mini.cc` (stage 4) with `AllModel_Detailsim()`, the
+  endogenous regressors declared as in `bin/prob_hjv.cc` (advmath, adveng and the HS_track dummies, in 15 models) and
+  `SetSimModelOrder({advmath, adveng, HS_track})`. The R run declares the same links through the `endogenous` field
+  and passes `component_order = c("advmath", "adveng", "HS_track")` and `index_var = "id"`.
+
+| Check | Result |
+|---|---|
+| Legacy parameters mapped to R parameters by (model, variable) through `legacy_param_table()` | 344 of 344, none left over on either side |
+| Header line of the two files | identical (363 columns) |
+| Field format per column, first 2,000 lines | identical: 44 columns `%10d`, 319 columns `%10.5f`, every line 4,355 characters with the trailing space |
+| Column means, largest difference in standard errors | 2.29, no column above 3 (0.27 percent of 363 is 1 column by chance) |
+| Column standard deviations, ratio R to C++ | 0.9905 to 1.0085 |
+| Missing values | none in either file (the C++ code writes -9999, the R writer `NA`) |
+| Kolmogorov-Smirnov on the 214 continuous columns | smallest p-value 0.036, none below 0.01 |
+
+- Legacy rules that the run confirms and the R legacy layout follows. Every model is simulated for every unit: `_miss`
+  is 1 when the base row's indicator is off, and the outcome is simulated all the same (shares of code 1 agree, for
+  example `swesat` 42,402 in C++ against 42,644 in R of 100,000). The ranked `application` model is one multinomial draw
+  over the 5 alternatives, since `TModel::Sim()` has no rank loop. The type model is written first as `sim_TypeProb_*`.
+  `fullmodel_par_varlist.txt` uses `<model>_ch<j>` only for logits with more than three alternatives: the 3-type
+  `TypeProb` repeats the plain name for both non-reference types.
+- Not covered by this run: an ordered probit component, threshold bins of a linear producer (`LastModel_SetXtileThresh`,
+  R `endogenous_bins`), a missing covariate (code 2) and rank-share corrections. The mini model has none of them. They
+  rest on the C++ source and on `tests/testthat/test-simulate-legacy.R`.
+- Speed, single core, 100,000 units. The C++ program takes 5.7 s for 100,000 units and 0.6 s for 1,000, so about 5.1 s
+  for the simulation and the 436 MB file together (it formats each value as it draws it, and the two were not timed
+  apart). R takes 1.3 s to simulate the table in memory, 13.0 s to write the CSV and 5.4 s to write the compressed
+  `.rds` (144 MB). For the same file the C++ code is about 2.5 times faster. The R figure that matters for the HJV
+  post-processing is the 1.3 s, since that script can take the table from memory. Before 1.8.2 the R simulator looped
+  over units for linear and probit components and needed 84.4 s for 20,000 units of the untyped 28-component system,
+  against 0.15 s now.
+- Found on the way, fixed in 1.8.2: a multinomial logit with type intercepts could not be simulated (the simulator looked
+  up `<comp>_type_<t>_intercept` where the parameters are per alternative), and an endogenous covariate was replaced by
+  its simulated value in every later component, where the legacy code replaces it only in the declaring models.
+- For the HJV run itself: `bin/estimate_hjv.R` now declares the `LastModel_SetEndogenousReg` links of
+  `bin/prob_hjv.cc` and defines the `sgpa9` thresholds {0, 0.5, 1.0} for `endogenous_bins`. The simulation call still
+  needs the `Detailsim` list and the `SetSimModelOrder` list of that file, `index_var = "lopnr"`, a model system built
+  from components defined after the declarations were added, and data with -9999 recoded to `NA`.
