@@ -44,6 +44,7 @@ private:
     bool is_dynamic;          // True for dynamic factor model (outcome is a factor)
     int outcome_factor_idx;   // 0-based index of outcome factor (-1 if not dynamic)
     bool use_types;           // If true, use type-specific intercepts for this model
+    int type_intercept_reg;   // Position among the regressors of the one that equals 1 (see below)
 
 public:
     // Constructor
@@ -103,6 +104,11 @@ public:
     bool GetIsDynamic() const { return is_dynamic; }
     int GetOutcomeFactorIdx() const { return outcome_factor_idx; }
     bool GetUseTypes() const { return use_types; }
+    // A type intercept shifts the linear predictor as the coefficient of a regressor equal to 1 does,
+    // so FactorModel takes its gradient and Hessian from that regressor's slots. This is the position
+    // of that regressor among the model's regressors (define_model_component() finds it in the data).
+    int GetTypeInterceptRegressor() const { return type_intercept_reg; }
+    void SetTypeInterceptRegressor(int ireg) { type_intercept_reg = ireg; }
 
 private:
     // Helper to get regressor value (handles special marker -3 for intercept)

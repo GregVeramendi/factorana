@@ -632,6 +632,35 @@ SEXP initialize_factor_model_cpp(List model_system, SEXP data, int n_quad = 8,
             exclude_chosen, ranksharevar_idx, comp_use_types
         );
 
+        // A type intercept takes its derivatives from the regressor that equals 1 (FactorModel.cpp, STEPs 8
+        // and 9b). define_model_component() finds that covariate on the full data and names it in
+        // type_intercept_covariate. A component defined before that field existed carries no name: its
+        // derivatives are not needed when all of its parameters are fixed, and otherwise it has to be
+        // defined again, because the first covariate was assumed and that is wrong unless it is the constant.
+        if (comp_use_types && n_types > 1 && mtype != ModelType::OPROBIT) {
+            int treg = -1;
+            if (comp.containsElementNamed("type_intercept_covariate") &&
+                !Rf_isNull(comp["type_intercept_covariate"])) {
+                std::string tname = as<std::string>(comp["type_intercept_covariate"]);
+                for (size_t j = 0; j < covariate_names.size(); j++) {
+                    if (covariate_names[j] == tname) {
+                        treg = static_cast<int>(j);
+                        break;
+                    }
+                }
+            }
+            if (treg < 0) {
+                if (!all_params_fixed) {
+                    std::string cname = comp.containsElementNamed("name") ? as<std::string>(comp["name"]) : "?";
+                    Rcpp::stop("Component '" + cname + "' uses types but does not name its constant covariate "
+                               "(type_intercept_covariate). Define it again with define_model_component() "
+                               "of this version of factorana.");
+                }
+                treg = 0;
+            }
+            model->SetTypeInterceptRegressor(treg);
+        }
+
         // Calculate number of parameters for this model
         int n_free_loadings = 0;
         for (const auto& norm : facnorm) {

@@ -1554,12 +1554,14 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
                         // Gradient w.r.t. this type's intercepts (types > 1, model uses types): one per choice
                         // block. It equals dL/d(linear predictor of that block), which is the gradient of the
-                        // block's first regressor coefficient when that regressor is the intercept (= 1).
+                        // coefficient of the block's regressor that equals 1. That regressor can sit anywhere
+                        // in the covariate list: its position comes from the model.
                         if (ntyp > 1 && ityp > 0 && model_uses_types) {
                             int nparamchoice = base_param_count / n_type_blocks;
+                            int treg = models[imod]->GetTypeInterceptRegressor();
                             for (int c = 0; c < n_type_blocks; c++) {
                                 int type_intercept_idx = firstpar + GetTypeInterceptIndex(ityp - 1, imod, c);
-                                grad_this_type[type_intercept_idx] += modEval[1 + nfac + c * nparamchoice + 0];
+                                grad_this_type[type_intercept_idx] += modEval[1 + nfac + c * nparamchoice + treg];
                             }
                         }
                     }
@@ -2262,14 +2264,16 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
 
                         // ===== STEP 9b: Add Hessian terms for type-specific intercepts =====
                         // A type intercept has the derivative structure of its choice block's intercept
-                        // regressor (the block's first regressor, = 1), at position pc = nfac + c * nparamchoice
-                        // in modHess. Blocks of the same type interact through the logit denominator; blocks of
-                        // different types never do (only one type is active per evaluation).
+                        // regressor (the block's regressor that equals 1, at position treg in the covariate
+                        // list), at position pc = nfac + c * nparamchoice + treg in modHess. Blocks of the same
+                        // type interact through the logit denominator; blocks of different types never do
+                        // (only one type is active per evaluation).
                         if (ntyp > 1 && ityp > 0 && model_uses_types_hess) {
                             int nparamchoice_h = base_param_count_hess / n_type_blocks_hess;
+                            int treg = models[imod]->GetTypeInterceptRegressor();
                             for (int c = 0; c < n_type_blocks_hess; c++) {
                                 int type_intercept_idx = firstpar + GetTypeInterceptIndex(ityp - 1, imod, c);
-                                int pc = nfac + c * nparamchoice_h;
+                                int pc = nfac + c * nparamchoice_h + treg;
 
                                 // Diagonal term: d²L/d(type_intercept_c)² = d²L/d(intercept_c)²
                                 hess_this_type[type_intercept_idx * nparam + type_intercept_idx] += modHess[pc * nDimModHess + pc];
@@ -2277,7 +2281,7 @@ void FactorModel::CalcLkhd(const std::vector<double>& free_params,
                                 // Cross-terms with the type intercepts of the other choice blocks (same type)
                                 for (int c2 = c + 1; c2 < n_type_blocks_hess; c2++) {
                                     int idx2 = firstpar + GetTypeInterceptIndex(ityp - 1, imod, c2);
-                                    int pc2 = nfac + c2 * nparamchoice_h;
+                                    int pc2 = nfac + c2 * nparamchoice_h + treg;
                                     hess_this_type[type_intercept_idx * nparam + idx2] += modHess[pc * nDimModHess + pc2];
                                 }
 

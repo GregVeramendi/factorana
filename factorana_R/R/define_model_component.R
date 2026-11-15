@@ -556,6 +556,24 @@ define_model_component <- function(name,
   }
 
 
+  # ---- 8c. Type intercepts need a constant covariate ----
+  # A type intercept is a deviation from the coefficient of the component's constant. The
+  # C++ takes its gradient and Hessian from the slots of that coefficient, so it has to
+  # know which covariate equals 1 in every row the component uses. The constant can sit
+  # anywhere in `covariates`. An ordered probit has no constant (its thresholds absorb it).
+  type_intercept_covariate <- NULL
+  if (use_types && n_types > 1L && model_type != "oprobit") {
+    is_constant <- vapply(covariates, function(v) all(data[[v]][idx] == 1), logical(1))
+    if (!any(is_constant)) {
+      stop(sprintf(paste0(
+        "Component '%s' uses types but has no constant among its covariates. A type ",
+        "intercept is a deviation from the coefficient of a covariate that equals 1 in ",
+        "every row the component uses. Add one (e.g. data$intercept <- 1, and ",
+        "'intercept' in `covariates`)."), name))
+    }
+    type_intercept_covariate <- covariates[which(is_constant)[1]]
+  }
+
   # ---- 9. Model-type specific validity checks ----
   # For single outcome, extract the column. For multiple outcomes (exploded logit), use first column for probit check
   y <- if (length(outcome) == 1) data[[outcome]] else data[[outcome[1]]]
@@ -728,6 +746,7 @@ define_model_component <- function(name,
     n_interaction_loadings = n_interaction_loadings,
     use_types = use_types,
     n_type_intercepts = n_type_intercepts,
+    type_intercept_covariate = type_intercept_covariate,  # the constant the type intercepts deviate from
     endogenous = endogenous,  # producer outcome names feeding covariates in simulation
     fixed_coefficients = list()  # List of fixed coefficient constraints
   )

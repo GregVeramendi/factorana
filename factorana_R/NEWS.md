@@ -1,3 +1,44 @@
+# factorana 1.8.3
+
+## Bug fixes
+
+* **Type intercepts took their derivatives from the first covariate.** A type
+  intercept shifts the linear predictor of its component as the coefficient of
+  the component's constant does, and `FactorModel.cpp` takes its gradient and
+  Hessian from the slots of that coefficient. It read the slots of the first
+  covariate, which is the constant only when the constant is listed first. For
+  a typed component that lists another covariate first, the likelihood was
+  right and the gradient and Hessian elements of every type intercept were
+  wrong, in linear, probit and multinomial logit components, in one stage or
+  with `previous_stage`, and with full or adaptive quadrature. An optimizer
+  that uses these derivatives can stop without converging, as `nlminb` did on
+  the education stage of the HJV model. On a four-equation
+  example with covariates `c("x1", "intercept")` the type-intercept gradient
+  differed from central differences by up to 9.5 and the Hessian by up to 171,
+  against 1e-7 for every other parameter. Every earlier typed test, and the
+  `validation/hjv_mini` model, listed the constant first.
+
+  `define_model_component()` now finds the covariate that equals 1 in every
+  row the component uses and stores its name in `type_intercept_covariate`,
+  and the C++ reads the position from it. The constant can sit anywhere in
+  `covariates`. A typed component without a constant is an error at
+  definition. A typed component defined with an earlier version carries no
+  name: it is accepted when all of its parameters are fixed (a
+  `previous_stage`), and otherwise the C++ stops and asks for it to be defined
+  again. Typed fits from 1.8.2 or earlier in which a typed component does not
+  list its constant first should be estimated again.
+
+  `tests/testthat/test-type-intercept-constant-position.R` covers the constant
+  in second position (gradient and Hessian against finite differences, and
+  equality of the likelihood and its derivatives across covariate orders).
+
+## Known issues
+
+* **Typed ordered probit.** An ordered probit has no constant among its
+  covariates (the thresholds absorb it), so its type intercept still takes its
+  derivatives from the first covariate, and they differ from finite
+  differences. The likelihood is right. This version does not change it.
+
 # factorana 1.8.2
 
 ## New features

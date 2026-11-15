@@ -21,7 +21,7 @@ Model::Model(ModelType type, int outcome, int missing,
       ignore(false), all_params_fixed(params_fixed),
       factor_spec(fspec),
       is_dynamic(dynamic), outcome_factor_idx(outcome_fac_idx),
-      use_types(uses_types)
+      use_types(uses_types), type_intercept_reg(0)
 {
     nregressors = regressors.size();
 
