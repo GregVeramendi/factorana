@@ -39,7 +39,9 @@ estimate_model_rcpp(
 
 \item{parallel}{Whether to use parallel computation (default TRUE)}
 
-\item{verbose}{Whether to print progress (default TRUE)}
+\item{verbose}{Whether to print progress (default TRUE). With
+\code{optimizer = "nlminb"} the log has one line per iteration with the
+log-likelihood and the largest absolute gradient.}
 
 \item{max_restarts}{Maximum number of eigenvector-based restarts for escaping
 saddle points (default 5). Set to 0 to disable.}
@@ -63,7 +65,10 @@ scores can improve Stage 2 initialization. (default NULL)}
 optimization. When specified, parameters are saved each time the Hessian is
 evaluated at a point with improved likelihood. Useful for long-running
 estimations that may need to be restarted. The file contains parameter names
-and values as CSV with metadata headers. (default NULL = no checkpointing)}
+and values as CSV with metadata headers, and it is replaced in one step, so
+a run stopped while saving leaves the previous checkpoint. Read it with
+\code{\link[=read_checkpoint]{read_checkpoint()}} and pass its parameters as \code{init_params} to
+restart. (default NULL = no checkpointing)}
 }
 \value{
 List with parameter estimates, standard errors, log-likelihood, etc.

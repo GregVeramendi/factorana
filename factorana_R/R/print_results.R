@@ -24,6 +24,7 @@ print.factorana_result <- function(x, digits = 4, ...) {
   cat("Optimizer:   ", x$optimizer, "\n")
   cat("Log-lik:     ", format(round(x$loglik, digits), nsmall = digits), "\n")
   cat("Parameters:  ", length(x$estimates), "\n")
+  if (!is.null(x$quadrature)) cat("Quadrature:  ", .quadrature_label(x$quadrature), "\n")
 
   # Optimization time if available
   if (!is.null(x$optimization_time)) {
@@ -130,7 +131,8 @@ summary.factorana_result <- function(object, ...) {
     loglik = object$loglik,
     convergence = object$convergence,
     optimizer = object$optimizer,
-    n_params = length(object$estimates)
+    n_params = length(object$estimates),
+    quadrature = object$quadrature
   )
   class(result) <- "summary.factorana_result"
   result
@@ -155,7 +157,9 @@ print.summary.factorana_result <- function(x, digits = 4, ...) {
   cat("Convergence: ", if (x$convergence == 0) "Yes" else "No", "\n")
   cat("Optimizer:   ", x$optimizer, "\n")
   cat("Log-lik:     ", format(round(x$loglik, digits), nsmall = digits), "\n")
-  cat("Parameters:  ", x$n_params, "\n\n")
+  cat("Parameters:  ", x$n_params, "\n")
+  if (!is.null(x$quadrature)) cat("Quadrature:  ", .quadrature_label(x$quadrature), "\n")
+  cat("\n")
 
   # Print coefficient table
   coef_df <- x$coefficients
@@ -1267,4 +1271,17 @@ components_to_latex <- function(result, digits = 3, file = NULL, caption = NULL,
     se = std_errors,
     stringsAsFactors = FALSE
   )
+}
+
+
+# One line on the integration of a fit, for the estimation log and the printed results.
+# `quadrature` is the element of that name in a factorana_result: n_points (per factor),
+# adaptive, and threshold (adapt_int_thresh, NA without adaptive quadrature).
+.quadrature_label <- function(quadrature) {
+  if (isTRUE(quadrature$adaptive)) {
+    sprintf("adaptive, at most %d points per factor (threshold %s)",
+            quadrature$n_points, format(quadrature$threshold))
+  } else {
+    sprintf("%d points per factor", quadrature$n_points)
+  }
 }

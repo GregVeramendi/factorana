@@ -1,3 +1,37 @@
+# factorana 1.8.4
+
+## Changes
+
+* **The output of an estimation states its quadrature.**
+  `estimate_model_rcpp()` prints the number of quadrature points per factor in
+  its log, above the benchmark of the evaluation times, and stores it in the
+  result as `quadrature` (a list with `n_points`, `adaptive` and `threshold`).
+  `print()` and `summary()` of a result show the same line. With adaptive
+  quadrature (the factor scores of an earlier stage are passed) the line gives
+  the most points an observation can get per factor and the threshold. A result
+  saved by an earlier version has no `quadrature` element and prints without
+  the line.
+
+* **`nlminb` logs one line per iteration.** With `verbose = TRUE`,
+  `estimate_model_rcpp()` prints the iteration number, the log-likelihood, the
+  largest absolute gradient and the minutes since the optimization started,
+  once at the starting point and once at each point `nlminb` moves to. The
+  line comes from the gradient evaluation, which returns the log-likelihood of
+  its point. The trace of `nlminb` itself, which printed every parameter value
+  at each iteration, is off.
+
+* **`read_checkpoint()` restarts an estimation from its checkpoint.** It reads
+  the file that `estimate_model_rcpp()` writes to `checkpoint_file` each time
+  the Hessian is evaluated at the best point so far, and returns the
+  parameters to pass as `init_params`, with the log-likelihood and the time of
+  the save. Given the model system of the restart, it stops unless the
+  parameter names are those of the model and the parameters held fixed from a
+  previous stage have the values of that stage, because fixed parameters take
+  their values from `init_params`. The checkpoint is now written to a
+  temporary file and renamed, so a run stopped during the save leaves the
+  previous checkpoint, and the third line of its header is labeled
+  `Checkpoint` (the count of saves) in place of `Iteration`.
+
 # factorana 1.8.3
 
 ## Bug fixes

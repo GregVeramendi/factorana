@@ -1147,7 +1147,9 @@ print_adaptive_quadrature_summary <- function(factor_ses, factor_vars, threshold
 #'     \item \code{"trust"} - Trust region method with analytical Hessian (requires trustOptim package)
 #'   }
 #' @param parallel Whether to use parallel computation (default TRUE)
-#' @param verbose Whether to print progress (default TRUE)
+#' @param verbose Whether to print progress (default TRUE). With
+#'   \code{optimizer = "nlminb"} the log has one line per iteration with the
+#'   log-likelihood and the largest absolute gradient.
 #' @param max_restarts Maximum number of eigenvector-based restarts for escaping
 #'   saddle points (default 5). Set to 0 to disable.
 #' @param factor_scores Matrix (n_obs x n_factors) of factor score estimates from
@@ -1165,7 +1167,10 @@ print_adaptive_quadrature_summary <- function(factor_ses, factor_vars, threshold
 #'   optimization. When specified, parameters are saved each time the Hessian is
 #'   evaluated at a point with improved likelihood. Useful for long-running
 #'   estimations that may need to be restarted. The file contains parameter names
-#'   and values as CSV with metadata headers. (default NULL = no checkpointing)
+#'   and values as CSV with metadata headers, and it is replaced in one step, so
+#'   a run stopped while saving leaves the previous checkpoint. Read it with
+#'   [read_checkpoint()] and pass its parameters as \code{init_params} to
+#'   restart. (default NULL = no checkpointing)
 #'
 #' @details
 #' For maximum efficiency, use \code{optimizer = "nlminb"} or \code{optimizer = "trust"}
@@ -1400,6 +1405,14 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   # Get n_quad from control
   n_quad <- control$n_quad_points
 
+  # The integration this fit uses, for the log and the result. Quadrature is adaptive when
+  # the factor scores of an earlier stage are passed, and n_quad is then the most points
+  # an observation can get per factor.
+  adaptive_used <- !is.null(factor_scores) && !is.null(factor_ses) && !is.null(factor_vars)
+  quadrature <- list(n_points = as.integer(n_quad),
+                     adaptive = adaptive_used,
+                     threshold = if (adaptive_used) control$adapt_int_thresh else NA_real_)
+
   if (!is.null(cl)) {
     # Check if this is a FORK cluster
     is_fork <- inherits(cl[[1]], "forknode")
@@ -1572,6 +1585,7 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   if (verbose) {
     message(sprintf("Total parameters: %d", n_params_total))
     message(sprintf("Free parameters: %d", n_params_free))
+    message("Quadrature: ", .quadrature_label(quadrature))
     if (any(param_constraints$param_fixed)) {
       fixed_names <- param_metadata$names[param_constraints$param_fixed]
       message(sprintf("Fixed parameters (%d): %s",
@@ -1659,6 +1673,8 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
   checkpoint_env$best_loglik <- -Inf
   checkpoint_env$best_params_free <- NULL
   checkpoint_env$n_checkpoints <- 0
+  # Iteration log: gradient evaluations since the optimizer started
+  checkpoint_env$iteration <- 0L
 
   # Define objective function (operates on free parameters only)
   objective_fn <- function(params_free) {
@@ -1699,15 +1715,27 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
         result <- evaluate_likelihood_cpp(.fm_ptr, params_free,
                                          compute_gradient = TRUE,
                                          compute_hessian = FALSE)
-        result$gradient
+        list(loglik = result$logLikelihood, gradient = result$gradient)
       })
-      grad_free <- Reduce(`+`, grad_parts)
+      grad_free <- Reduce(`+`, lapply(grad_parts, `[[`, "gradient"))
+      loglik_here <- sum(vapply(grad_parts, `[[`, numeric(1), "loglik"))
     } else {
       result <- evaluate_likelihood_cpp(fm_ptrs[[1]], params_free,
                                        compute_gradient = TRUE,
                                        compute_hessian = FALSE)
       grad_free <- result$gradient
+      loglik_here <- result$logLikelihood
     }
+
+    # Iteration log. nlminb takes the gradient at its starting point and at each point it
+    # moves to, so its gradient evaluations count its iterations, and the evaluation
+    # returns the log-likelihood of that point.
+    if (verbose && optimizer == "nlminb") {
+      message(sprintf("  Iteration %d: loglik = %.4f, max |gradient| = %.3e, %.1f min",
+                      checkpoint_env$iteration, loglik_here, max(abs(grad_free)),
+                      as.numeric(difftime(Sys.time(), optimization_start_time, units = "mins"))))
+    }
+    checkpoint_env$iteration <- checkpoint_env$iteration + 1L
 
     # C++ returns gradient for free parameters only, already extracted
     # Return negative for minimization
@@ -1794,18 +1822,23 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
 
         # Add metadata
         checkpoint_header <- sprintf(
-          "# Checkpoint saved: %s\n# Log-likelihood: %.8f\n# Iteration: %d\n",
+          "# Checkpoint saved: %s\n# Log-likelihood: %.8f\n# Checkpoint: %d\n",
           format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
           checkpoint_env$best_loglik,
           checkpoint_env$n_checkpoints + 1
         )
 
-        # Write to file
+        # Write to a temporary file and rename it, so that a run stopped during the
+        # write leaves the previous checkpoint in place
         tryCatch({
-          con <- file(checkpoint_file, "w")
+          checkpoint_tmp <- paste0(checkpoint_file, ".tmp")
+          con <- file(checkpoint_tmp, "w")
           writeLines(checkpoint_header, con)
           utils::write.csv(checkpoint_data, con, row.names = FALSE)
           close(con)
+          if (!file.rename(checkpoint_tmp, checkpoint_file)) {
+            stop("could not rename ", checkpoint_tmp)
+          }
           checkpoint_env$n_checkpoints <- checkpoint_env$n_checkpoints + 1
           if (verbose) {
             message(sprintf("  [Checkpoint %d saved: LL=%.4f]",
@@ -1836,6 +1869,7 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
 
   # Helper function to run one optimization attempt
   run_one_optimization <- function(start_params, verbose_opt) {
+    checkpoint_env$iteration <- 0L
     if (optimizer == "nloptr") {
       if (!requireNamespace("nloptr", quietly = TRUE)) {
         stop("nloptr package required but not installed")
@@ -1886,8 +1920,10 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
         hessian = hessian_fn,
         lower = param_constraints$lower_bounds_free,
         upper = param_constraints$upper_bounds_free,
+        # trace = 0: nlminb's own trace prints every parameter at each iteration, and the
+        # gradient function prints the iteration line
         control = list(
-          trace = if (verbose_opt) 1 else 0,
+          trace = 0,
           eval.max = 5000,
           iter.max = 10000
         )
@@ -2246,6 +2282,8 @@ estimate_model_rcpp <- function(model_system, data, init_params = NULL,
     free_idx = param_constraints$free_idx,
     estimates_free = estimates_free,
     n_quad = n_quad,
+    # The integration of this fit: points per factor, whether adaptive, and the threshold
+    quadrature = quadrature,
     # Fingerprint of the model-relevant columns, so post-hoc tools
     # (vcov_factorana) can verify they were handed the same data (same rows,
     # same order) the model was fit on.
